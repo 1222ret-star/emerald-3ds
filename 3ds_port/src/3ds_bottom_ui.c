@@ -2920,7 +2920,7 @@ static void FastForward(void)
  */
 bool8 CtrBattleMenu_Active(void)
 {
-    return sRes.ready && !(gBattleTypeFlags & (BATTLE_TYPE_LINK | BATTLE_TYPE_RECORDED | BATTLE_TYPE_WALLY_TUTORIAL));
+    return sRes.ready && !(gBattleTypeFlags & (BATTLE_TYPE_LINK | BATTLE_TYPE_RECORDED));
 }
 
 void CtrBattleMenu_Begin(void)
@@ -2951,6 +2951,25 @@ void CtrBattleMenu_ShowPrompt(void)
         prompt[i] = gDisplayedStringBattle[i];
     prompt[i] = EOS;
     BattlePutTextOnWindow(prompt, B_WIN_MSG);
+}
+
+/* Wally's controller picks by itself: the menu is shown, a tap is dropped. */
+static void ShowBattleAsk(u8 kind)
+{
+    sBattleTap = HIT_NONE;
+    sQuickBallFocus = FALSE;
+    sAsk.kind = kind;
+    sAsk.battler = gActiveBattler;
+}
+
+void CtrBattleMenu_ShowAction(void)
+{
+    ShowBattleAsk(ASK_ACTION);
+}
+
+void CtrBattleMenu_ShowMove(void)
+{
+    ShowBattleAsk(ASK_MOVE);
 }
 
 static u8 TakeBattleTap(u8 kind)

@@ -32,10 +32,10 @@ index 8585415b74cdf21f373dc90b5ac5d8b142bc3d79..855f085de0cbf919eee51071f6e2e296
  extern struct BattleResults gBattleResults;
  extern u8 gLeveledUpInBattle;
 diff --git a/include/battle_controllers.h b/include/battle_controllers.h
-index e4b368b89eba66f253522fd36b519c37f3a2ddb8..c92efe5e0d8dd1bda81ec827f64fc15ec04a7005 100644
+index e4b368b89eba66f253522fd36b519c37f3a2ddb8..cfc4689232b974ad6f9cbd6fb506b70e7b8e6004 100644
 --- a/include/battle_controllers.h
 +++ b/include/battle_controllers.h
-@@ -334,4 +334,16 @@ void SetControllerToLinkOpponent(void);
+@@ -334,4 +334,20 @@ void SetControllerToLinkOpponent(void);
  // link partner
  void SetControllerToLinkPartner(void);
  
@@ -45,6 +45,10 @@ index e4b368b89eba66f253522fd36b519c37f3a2ddb8..c92efe5e0d8dd1bda81ec827f64fc15e
 +// bottom screen's taps and its own button order into the keys they read.
 +bool8 CtrBattleMenu_Active(void);
 +void CtrBattleMenu_Begin(void);
++// A menu the controller answers by itself (Wally's catching lesson): shown
++// on the bottom screen every frame it waits, taking no input.
++void CtrBattleMenu_ShowAction(void);
++void CtrBattleMenu_ShowMove(void);
 +void CtrBattleMenu_ActionInput(u8 *cursor, bool8 safari);
 +void CtrBattleMenu_MoveInput(u8 *cursor, const u16 *moves);
 +void CtrBattleMenu_TargetInput(void);
@@ -1036,6 +1040,105 @@ index c432fcbb649e711895ac02eec65bb2837d2aa163..18c5a5cab7e6cfc98ff294fa23f1d128
      BattlePutTextOnWindow(gText_SafariZoneMenu, B_WIN_ACTION_MENU);
  
      for (i = 0; i < 4; i++)
+diff --git a/src/battle_controller_wally.c b/src/battle_controller_wally.c
+index 11d7a851f4e4e83c1f90f88f6d5bf1a5e52e47d8..3ac24d6d8a9bf35682673658781b519c01e9ef5d 100644
+--- a/src/battle_controller_wally.c
++++ b/src/battle_controller_wally.c
+@@ -187,6 +187,11 @@ static void WallyBufferRunCommand(void)
+ 
+ static void WallyHandleActions(void)
+ {
++#ifdef PLATFORM_3DS
++    // The menu is on the bottom screen: shown there while Wally picks.
++    if (CtrBattleMenu_Active())
++        CtrBattleMenu_ShowAction();
++#endif
+     switch (gBattleStruct->wallyBattleState)
+     {
+     case 0:
+@@ -228,8 +233,15 @@ static void WallyHandleActions(void)
+         if (--gBattleStruct->wallyWaitFrames == 0)
+         {
+             PlaySE(SE_SELECT);
+-            ActionSelectionDestroyCursorAt(0);
+-            ActionSelectionCreateCursorAt(1, 0);
++#ifdef PLATFORM_3DS
++            if (CtrBattleMenu_Active())
++                gActionSelectionCursor[gActiveBattler] = 1;
++            else
++#endif
++            {
++                ActionSelectionDestroyCursorAt(0);
++                ActionSelectionCreateCursorAt(1, 0);
++            }
+             gBattleStruct->wallyWaitFrames = B_WAIT_TIME_LONG;
+             gBattleStruct->wallyBattleState++;
+         }
+@@ -1196,6 +1208,11 @@ static void HandleChooseActionAfterDma3(void)
+     {
+         gBattle_BG0_X = 0;
+         gBattle_BG0_Y = DISPLAY_HEIGHT;
++#ifdef PLATFORM_3DS
++        // The menu is on the bottom screen: the top keeps the message box.
++        if (CtrBattleMenu_Active())
++            gBattle_BG0_Y = 0;
++#endif
+         gBattlerControllerFuncs[gActiveBattler] = WallyHandleActions;
+     }
+ }
+@@ -1205,6 +1222,16 @@ static void WallyHandleChooseAction(void)
+     s32 i;
+ 
+     gBattlerControllerFuncs[gActiveBattler] = HandleChooseActionAfterDma3;
++#ifdef PLATFORM_3DS
++    if (CtrBattleMenu_Active())
++    {
++        CtrBattleMenu_Begin();
++        gActionSelectionCursor[gActiveBattler] = 0;
++        BattleStringExpandPlaceholdersToDisplayedString(gText_WhatWillWallyDo);
++        CtrBattleMenu_ShowPrompt();
++        return;
++    }
++#endif
+     BattlePutTextOnWindow(gText_BattleMenu, B_WIN_ACTION_MENU);
+ 
+     for (i = 0; i < 4; i++)
+@@ -1222,9 +1249,24 @@ static void WallyHandleYesNoBox(void)
+ 
+ static void WallyHandleChooseMove(void)
+ {
++#ifdef PLATFORM_3DS
++    // The move menu is on the bottom screen, its first move the one chosen.
++    if (CtrBattleMenu_Active())
++    {
++        if (gBattleStruct->wallyMovesState == 0)
++        {
++            CtrBattleMenu_Begin();
++            gMoveSelectionCursor[gActiveBattler] = 0;
++        }
++        CtrBattleMenu_ShowMove();
++    }
++#endif
+     switch (gBattleStruct->wallyMovesState)
+     {
+     case 0:
++#ifdef PLATFORM_3DS
++        if (!CtrBattleMenu_Active())
++#endif
+         InitMoveSelectionsVarsAndStrings();
+         gBattleStruct->wallyMovesState++;
+         gBattleStruct->wallyMoveFrames = 80;
+@@ -1234,6 +1276,10 @@ static void WallyHandleChooseMove(void)
+         {
+             gBattle_BG0_X = 0;
+             gBattle_BG0_Y = DISPLAY_HEIGHT * 2;
++#ifdef PLATFORM_3DS
++            if (CtrBattleMenu_Active())
++                gBattle_BG0_Y = 0;
++#endif
+             gBattleStruct->wallyMovesState++;
+         }
+         break;
 diff --git a/src/battle_controllers.c b/src/battle_controllers.c
 index f7e9fef40609fbb3a6c5437daa01effa94cecdc6..602a289b64b79b8afd1da3c7d05b6a34f38c387c 100644
 --- a/src/battle_controllers.c
