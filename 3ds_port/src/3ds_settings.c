@@ -73,6 +73,57 @@ static int Find(const int *values, int count, int value, int fallback)
     return fallback;
 }
 
+/*
+ * Every setting as a new card has it, the extras included. A measured
+ * scenario starts from here: its meta.txt holds what the recording's card
+ * had, and a key that card never had is at its default there - not at
+ * whatever this card says (an EXP Share on here made the same battle 437
+ * frames longer than on the console it was recorded on).
+ */
+void CtrSettings_Defaults(void)
+{
+    sVoxel = false;
+    sPitch = 2;
+    sZoom = 1;
+    sVoxelBlur = true;
+    sVoxelBattle = false;
+    sShowFps = false;
+    sRunAlways = false;
+    sSpeed = 0;
+    sExtraCount = 0;
+}
+
+/* One "key=value" line, from settings.txt or a measured scenario. */
+void CtrSettings_ApplyLine(const char *line)
+{
+    int value;
+
+    if (strncmp(line, "voxel=", 6) == 0)
+        sVoxel = line[6] == '1';
+    else if (sscanf(line, "voxel_pitch=%d", &value) == 1)
+        sPitch = Find(sPitches, COUNT(sPitches), value, sPitch);
+    else if (sscanf(line, "voxel_zoom=%d", &value) == 1)
+        sZoom = Find(sZooms, COUNT(sZooms), value, sZoom);
+    else if (strncmp(line, "voxel_blur=", 11) == 0)
+        sVoxelBlur = line[11] != '0';
+    else if (strncmp(line, "voxel_battle=", 13) == 0)
+        sVoxelBattle = line[13] == '1';
+    else if (strncmp(line, "fps=", 4) == 0)
+        sShowFps = line[4] == '1';
+    else if (strncmp(line, "run=", 4) == 0)
+        sRunAlways = line[4] == '1';
+    else if (sscanf(line, "speed=%d", &value) == 1)
+        sSpeed = Find(sSpeeds, COUNT(sSpeeds), value, sSpeed);
+    else
+    {
+        char key[sizeof(sExtra[0].key)];
+        int index;
+
+        if (sscanf(line, "%23[a-z0-9_]=%d", key, &value) == 2 && (index = ExtraIndex(key, true)) >= 0)
+            sExtra[index].value = value;
+    }
+}
+
 void CtrSettings_Load(void)
 {
     FILE *file = CtrFs_OpenData(SETTINGS_FILE, "r");
@@ -84,34 +135,7 @@ void CtrSettings_Load(void)
         return;
     }
     while (fgets(line, sizeof(line), file))
-    {
-        int value;
-
-        if (strncmp(line, "voxel=", 6) == 0)
-            sVoxel = line[6] == '1';
-        else if (sscanf(line, "voxel_pitch=%d", &value) == 1)
-            sPitch = Find(sPitches, COUNT(sPitches), value, sPitch);
-        else if (sscanf(line, "voxel_zoom=%d", &value) == 1)
-            sZoom = Find(sZooms, COUNT(sZooms), value, sZoom);
-        else if (strncmp(line, "voxel_blur=", 11) == 0)
-            sVoxelBlur = line[11] != '0';
-        else if (strncmp(line, "voxel_battle=", 13) == 0)
-            sVoxelBattle = line[13] == '1';
-        else if (strncmp(line, "fps=", 4) == 0)
-            sShowFps = line[4] == '1';
-        else if (strncmp(line, "run=", 4) == 0)
-            sRunAlways = line[4] == '1';
-        else if (sscanf(line, "speed=%d", &value) == 1)
-            sSpeed = Find(sSpeeds, COUNT(sSpeeds), value, sSpeed);
-        else
-        {
-            char key[sizeof(sExtra[0].key)];
-            int index;
-
-            if (sscanf(line, "%23[a-z0-9_]=%d", key, &value) == 2 && (index = ExtraIndex(key, true)) >= 0)
-                sExtra[index].value = value;
-        }
-    }
+        CtrSettings_ApplyLine(line);
     fclose(file);
     CtrLog_Write(CTR_LOG_FS, "settings: voxel=%d pitch=%d zoom=%d blur=%d battle=%d fps=%d run=%d speed=%d",
                  sVoxel ? 1 : 0, sPitches[sPitch], sZooms[sZoom], sVoxelBlur ? 1 : 0,
@@ -170,25 +194,34 @@ static void Saver(void *arg)
     }
 }
 
+/* A measured scenario's settings are for its session alone. */
+static bool sFrozen;
+
+void CtrSettings_Freeze(void)
+{
+    sFrozen = true;
+}
+
+int CtrSettings_Text(char *text, unsigned size)
+{
+    int used = snprintf(text, size,
+             "voxel=%d\nvoxel_pitch=%d\nvoxel_zoom=%d\nvoxel_blur=%d\nvoxel_battle=%d\nfps=%d\nrun=%d\n"
+             "speed=%d\n",
+             sVoxel ? 1 : 0, sPitches[sPitch], sZooms[sZoom], sVoxelBlur ? 1 : 0, sVoxelBattle ? 1 : 0,
+             sShowFps ? 1 : 0, sRunAlways ? 1 : 0, sSpeeds[sSpeed]);
+    for (int i = 0; i < sExtraCount && used >= 0 && used < (int)size; ++i)
+        used += snprintf(text + used, size - used, "%s=%d\n", sExtra[i].key, sExtra[i].value);
+    return used;
+}
+
 static void Save(void)
 {
     char text[sizeof(sSaveText)] = {0};
 
     /* Settings and shutdown are submitted by the game thread. */
-    if (sSaveQuit)
+    if (sSaveQuit || sFrozen)
         return;
-
-    snprintf(text, sizeof(text),
-             "voxel=%d\nvoxel_pitch=%d\nvoxel_zoom=%d\nvoxel_blur=%d\nvoxel_battle=%d\nfps=%d\nrun=%d\n"
-             "speed=%d\n",
-             sVoxel ? 1 : 0, sPitches[sPitch], sZooms[sZoom], sVoxelBlur ? 1 : 0, sVoxelBattle ? 1 : 0,
-             sShowFps ? 1 : 0, sRunAlways ? 1 : 0, sSpeeds[sSpeed]);
-    for (int i = 0; i < sExtraCount; ++i)
-    {
-        size_t used = strlen(text);
-
-        snprintf(text + used, sizeof(text) - used, "%s=%d\n", sExtra[i].key, sExtra[i].value);
-    }
+    CtrSettings_Text(text, sizeof(text));
     if (sSaver == NULL)
     {
         s32 priority = 0x30;

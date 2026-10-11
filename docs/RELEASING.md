@@ -28,8 +28,10 @@ release after v0.1.2 every release must follow this list; skipping a step
 leaves the site without a web builder or without Quick Update for that
 version.
 
-1. **Code and version.** The release is made from `main` with the web-payload
-   tooling merged (`builder/emerald3ds_builder/web.py`, `webmanifest.py`,
+1. **Code and version.** `main` holds the last release and `dev` the work
+   since: merge `dev` into `main` for a release (a hotfix is made on `main`
+   and merged back into `dev`). The release is made from `main` with the
+   web-payload tooling merged (`builder/emerald3ds_builder/web.py`, `webmanifest.py`,
    `tools/build_web_payload.py`). Set the version in
    `builder/emerald3ds_builder/__init__.py` (`__version__`),
    `builder/pyproject.toml` and the placeholder of

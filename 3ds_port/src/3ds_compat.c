@@ -330,12 +330,15 @@ void Port_SaveInit(void)
     FILE *file;
     long size, flashBytes;
     bool loaded;
+    /* A measured scenario plays from the save it was recorded with. */
+    const char *path = CtrScenario_SavePath() ? CtrScenario_SavePath() : CTR_SAVE_PATH;
 
     memset(FLASH_BASE, 0xFF, sizeof(FLASH_BASE));
     sSaveAvailable = false;
 
-    MigrateOldSave();
-    file = fopen(CTR_SAVE_PATH, "rb");
+    if (!CtrScenario_SavePath())
+        MigrateOldSave();
+    file = fopen(path, "rb");
     if (file == NULL)
     {
         /* Created by the first real save, not while starting a new game. */
@@ -343,7 +346,7 @@ void Port_SaveInit(void)
         CtrLog_Write(sSaveAvailable ? CTR_LOG_FS : CTR_LOG_ERROR,
                      "save %s: %s (errno=%d)",
                      sSaveAvailable ? "will be created" : "unavailable",
-                     CTR_SAVE_PATH, errno);
+                     path, errno);
         return;
     }
 
@@ -356,7 +359,7 @@ void Port_SaveInit(void)
     {
         fclose(file);
         CtrLog_Write(CTR_LOG_ERROR, "save refused: %s is %ld bytes, not a 128 KiB flash image",
-                     CTR_SAVE_PATH, size);
+                     path, size);
         return;
     }
     /* A save from a cartridge dump or another emulator can carry more than
@@ -371,13 +374,13 @@ void Port_SaveInit(void)
     if (!loaded)
     {
         memset(FLASH_BASE, 0xFF, sizeof(FLASH_BASE));
-        CtrLog_Write(CTR_LOG_ERROR, "save read failed: %s (size=%ld)", CTR_SAVE_PATH, size);
+        CtrLog_Write(CTR_LOG_ERROR, "save read failed: %s (size=%ld)", path, size);
         return;
     }
 
     /* A short file still holds whole sectors; Emerald recovers the older slot. */
     sSaveAvailable = true;
-    CtrLog_Write(CTR_LOG_FS, "save loaded: %s (%ld bytes)", CTR_SAVE_PATH, size);
+    CtrLog_Write(CTR_LOG_FS, "save loaded: %s (%ld bytes)", path, size);
     if (size > flashBytes)
         CtrLog_Write(CTR_LOG_FS, "save: %ld bytes after the flash image kept as they are",
                      size - flashBytes);
@@ -397,6 +400,12 @@ u16 Port_WriteFlash(u32 offset, const void *data, u32 size)
     if (!sSaveAvailable || data == NULL || offset > sizeof(FLASH_BASE)
      || size > sizeof(FLASH_BASE) - offset)
         return 1;
+    /* A scenario being played saves into memory only. */
+    if (!CtrScenario_SaveWrites())
+    {
+        memmove(FLASH_BASE + offset, data, size);
+        return 0;
+    }
 
     file = fopen(CTR_SAVE_PATH, "r+b");
     if (file == NULL && errno == ENOENT)

@@ -81,6 +81,8 @@ bool CtrPlatform_Init(void)
         return false;
     }
     CtrSettings_Load();
+    CtrScenario_Init();
+    CtrProf_LogIdentity();
     if (!CtrData_Init())
         CtrPlatform_ShowDataError(CtrData_ErrorTitle(), CtrData_ErrorDetail());
     if (!CtrVideo_Init())
@@ -331,12 +333,16 @@ void CtrPlatform_Shutdown(void)
     if (!sInitialized)
         return;
     sInitialized = false;
+    /* The last segment and what the GPU's memory holds, before it is freed. */
+    CtrProf_Close();
+    CtrAssets_StopWarmup();
     CtrSettings_Shutdown();
     if (sHooks.shutdown)
         sHooks.shutdown();
     CtrVideo_Shutdown();
     CtrAudio_Shutdown();
     CtrLog_Write(CTR_LOG_BOOT, "clean shutdown, platform frames=%llu", (unsigned long long)sFrames);
+    CtrScenario_Close();
     aptUnhook(&sAptHook);
     CtrFs_Shutdown();
     CtrLog_Close();

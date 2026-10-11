@@ -31,7 +31,7 @@ index 11095bc7ac57e3688f84e03f8e836897eb0e8e2a..26b61682d54d25c45113d91e3e89cf0e
  
  static void PlayerHandleGetMonData(void);
  static void PlayerHandleSetMonData(void);
-@@ -230,6 +234,108 @@ static void CompleteOnBankSpritePosX_0(void)
+@@ -230,6 +234,129 @@ static void CompleteOnBankSpritePosX_0(void)
          PlayerBufferExecCompleted();
  }
  
@@ -51,6 +51,27 @@ index 11095bc7ac57e3688f84e03f8e836897eb0e8e2a..26b61682d54d25c45113d91e3e89cf0e
 +    return item >= FIRST_BALL && item <= LAST_BALL;
 +}
 +
++/*
++ * Whether a caught mon would have nowhere to go. The bottom screen asks for
++ * the quick ball every frame, and the answer walks the boxes, decrypting up
++ * to 420 mons each time (5% of a 2D battle's CPU in a PC sampling). Nothing
++ * in a battle fills them but a catch, which ends it: asked again once a
++ * second, in frames, so a recorded session replays the same.
++ */
++static bool8 QuickBallNowhereToGo(void)
++{
++    static u32 sAskedAt;
++    static bool8 sAsked, sFull;
++
++    if (!sAsked || gMain.vblankCounter2 - sAskedAt >= 60)
++    {
++        sFull = IsPlayerPartyAndPokemonStorageFull();
++        sAskedAt = gMain.vblankCounter2;
++        sAsked = TRUE;
++    }
++    return sFull;
++}
++
 +/* The ball a quick throw would use now, or ITEM_NONE: the selected ball,
 + * else the last one used, then the first in the Poke Balls pocket. */
 +u16 CtrBattle_QuickBallItem(void)
@@ -63,7 +84,7 @@ index 11095bc7ac57e3688f84e03f8e836897eb0e8e2a..26b61682d54d25c45113d91e3e89cf0e
 +                          | BATTLE_TYPE_FRONTIER | BATTLE_TYPE_RECORDED | BATTLE_TYPE_RECORDED_LINK
 +                          | BATTLE_TYPE_TRAINER_HILL | BATTLE_TYPE_SECRET_BASE))
 +        return ITEM_NONE;
-+    if (IsPlayerPartyAndPokemonStorageFull())
++    if (QuickBallNowhereToGo())
 +        return ITEM_NONE;
 +    if (IsBall(sQuickBallSelected) && CheckBagHasItem(sQuickBallSelected, 1))
 +        return sQuickBallSelected;
@@ -140,7 +161,7 @@ index 11095bc7ac57e3688f84e03f8e836897eb0e8e2a..26b61682d54d25c45113d91e3e89cf0e
  static void HandleInputChooseAction(void)
  {
      u16 itemId = gBattleBufferA[gActiveBattler][2] | (gBattleBufferA[gActiveBattler][3] << 8);
-@@ -245,6 +315,10 @@ static void HandleInputChooseAction(void)
+@@ -245,6 +336,10 @@ static void HandleInputChooseAction(void)
  #ifdef PLATFORM_3DS
      if (CtrBattleMenu_Active())
          CtrBattleMenu_ActionInput(&gActionSelectionCursor[gActiveBattler], FALSE);
@@ -151,7 +172,7 @@ index 11095bc7ac57e3688f84e03f8e836897eb0e8e2a..26b61682d54d25c45113d91e3e89cf0e
  #endif
      if (JOY_NEW(A_BUTTON))
      {
-@@ -1399,6 +1473,12 @@ static void CompleteWhenChoseItem(void)
+@@ -1399,6 +1494,12 @@ static void CompleteWhenChoseItem(void)
  {
      if (gMain.callback2 == BattleMainCB2 && !gPaletteFade.active)
      {
@@ -164,7 +185,7 @@ index 11095bc7ac57e3688f84e03f8e836897eb0e8e2a..26b61682d54d25c45113d91e3e89cf0e
          BtlController_EmitOneReturnValue(B_COMM_TO_ENGINE, gSpecialVar_ItemId);
          PlayerBufferExecCompleted();
      }
-@@ -2595,6 +2673,9 @@ static void PlayerHandleChooseAction(void)
+@@ -2595,6 +2694,9 @@ static void PlayerHandleChooseAction(void)
  
      gBattlerControllerFuncs[gActiveBattler] = HandleChooseActionAfterDma3;
      BattleTv_ClearExplosionFaintCause();
@@ -174,7 +195,7 @@ index 11095bc7ac57e3688f84e03f8e836897eb0e8e2a..26b61682d54d25c45113d91e3e89cf0e
  #ifdef PLATFORM_3DS
      if (CtrBattleMenu_Active())
      {
-@@ -2700,6 +2781,27 @@ static void PlayerHandleChooseItem(void)
+@@ -2700,6 +2802,27 @@ static void PlayerHandleChooseItem(void)
  {
      s32 i;
  

@@ -28,6 +28,10 @@ enum
     PORT_PROF_LAYERS,     /* compositor: layer textures */
     PORT_PROF_DRAW,       /* compositor: geometry for the frame */
     PORT_PROF_FRAMEEND,   /* C3D_FrameEnd */
+    /* Inside draw, a battle over the voxel world (RenderBattleWorld): */
+    PORT_PROF_BW_WORLD,   /* the world's geometry (CtrVoxel_Draw) */
+    PORT_PROF_BW_POST,    /* the world to the screen: blur, glow, shadows, curtain */
+    PORT_PROF_BW_SCENE,   /* the battle's own picture: scene and layers over it */
     PORT_PROF_COUNT
 };
 

@@ -87,7 +87,16 @@ SOUND_WRAPPED := m4aSoundVSync m4aSoundMain m4aSoundInit m4aSoundMode m4aSoundVS
 	SetPokemonCryPanpot SetPokemonCryPitch SetPokemonCryLength SetPokemonCryRelease \
 	SetPokemonCryProgress SetPokemonCryChorus SetPokemonCryStereo SetPokemonCryPriority \
 	SetPokemonCryTone IsPokemonCryPlaying
-LDFLAGS += $(foreach f,$(PROF_WRAPPED) $(SOUND_WRAPPED),-Wl,--wrap=$(f))
+# The field map's changes, announced to the voxel world (src/3ds_map_events.c).
+BACKEND_SRCS += src/3ds_map_events.c
+# Sprites' identities, numbered by sprite.c and completed here.
+BACKEND_SRCS += src/3ds_sprite_ids.c
+# The scene cycling test of phase F2 (empty unless built with CTR_CYCLE_TEST).
+BACKEND_SRCS += src/3ds_cycle_test.c
+MAP_WRAPPED := MapGridSetMetatileIdAt MapGridSetMetatileEntryAt MapGridSetMetatileImpassabilityAt \
+	InitMap InitMapFromSavedGame SetCurrentMapLayout GenerateBattlePyramidFloorLayout \
+	GenerateTrainerHillFloorLayout CameraMove
+LDFLAGS += $(foreach f,$(PROF_WRAPPED) $(SOUND_WRAPPED) $(MAP_WRAPPED),-Wl,--wrap=$(f))
 BACKEND_OBJS := $(patsubst src/%.c,build/bridge/%.o,$(BACKEND_SRCS))
 
 # The voxel overworld is split along the same SDK boundary as the rest of the
@@ -573,3 +582,12 @@ verify-bottom-map:
 verify: verify-voxel-regions
 verify-voxel-regions: romfs/voxel/regions.bin
 	"$(PYTHON)" -B tests/voxel_regions_test.py --cc "$(HOSTCC)"
+
+# What the console builds of every map, checked by the engine's own code over
+# the shipped data (scripts/voxel_engine_view.py check, tests/voxel_scene_dump.c):
+# chunks that would refuse triangles, static models over their memory. A
+# warning for now - the report is build/voxel_check.report.
+all: build/voxel_check.report
+build/voxel_check.report: romfs/voxel/buildings.bin romfs/voxel/relief.bin romfs/voxel/regions.bin 		romfs/voxel/signposts.bin scripts/voxel_engine_view.py tests/voxel_scene_dump.c 		$(wildcard src/voxel/voxel_*.c) $(wildcard src/voxel/voxel_*.h)
+	@mkdir -p $(@D)
+	@"$(PYTHON)" scripts/voxel_engine_view.py check > $@ 2>&1 		&& echo "voxel check: ok" 		|| { echo "voxel check: WARNING, see $@"; grep -E "DROPS|OVER|failed" $@ || true; }

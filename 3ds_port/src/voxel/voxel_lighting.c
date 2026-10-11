@@ -711,7 +711,16 @@ void VoxelLighting_ModelTri(VoxelBuilder *builder, const VoxelVertex *a,
                             const VoxelVertex *b, const VoxelVertex *c, float drawnShade)
 {
     VoxelVertex plain[3] = {*a, *b, *c};
-    float face;
+    float face = VoxelLighting_ModelShade(a, b, c, drawnShade);
+
+    for (unsigned i = 0; i < 3; ++i)
+        plain[i].shade = face;
+    VoxelBuilder_Tri(builder, &plain[0], &plain[1], &plain[2]);
+}
+
+float VoxelLighting_ModelShade(const VoxelVertex *a, const VoxelVertex *b,
+                               const VoxelVertex *c, float drawnShade)
+{
     float ux = b->x - a->x, uy = b->y - a->y, uz = b->z - a->z;
     float vx = c->x - a->x, vy = c->y - a->y, vz = c->z - a->z;
     float nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
@@ -737,12 +746,10 @@ void VoxelLighting_ModelTri(VoxelBuilder *builder, const VoxelVertex *a,
      * The drawn shade gives way to the sun's facing, and that is all: no
      * cast shadow on a model, as there never was. A town's models are
      * thousands of triangles, and a ray from each put a Rustboro chunk at
-     * 40-80 ms on an Old 3DS.
+     * 40-80 ms on an Old 3DS. It depends on the triangle alone, so a
+     * static model's is worked out once (ctr_voxel.c StaticMesh).
      */
-    face = VoxelLighting_Face(nx, ny, nz);
-    for (unsigned i = 0; i < 3; ++i)
-        plain[i].shade = face;
-    VoxelBuilder_Tri(builder, &plain[0], &plain[1], &plain[2]);
+    return VoxelLighting_Face(nx, ny, nz);
 }
 
 /* Contact shadows are clipped to each receiving ground tile: no floating blob

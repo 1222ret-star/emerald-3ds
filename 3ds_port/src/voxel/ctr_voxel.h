@@ -130,6 +130,18 @@ const char *CtrVoxel_Status(void);
  */
 unsigned long CtrVoxel_ReleaseIdleVram(void);
 
+/*
+ * All the world's VRAM - arenas, chunks, building pages, atlases - given back
+ * while the world is off, and claimed again (false: no room yet, free other
+ * surfaces and retry). Parked, the world is unavailable; back, it is built
+ * again as a map just entered.
+ */
+bool CtrVoxel_HoldsVram(void);
+void CtrVoxel_ParkVram(void);
+bool CtrVoxel_UnparkVram(void);
+/* Bytes used and largest gap of the chunk and building-page arenas. */
+void CtrVoxel_ArenaUse(uint32_t *chunkUsed, uint32_t *chunkLargest, uint32_t *pageUsed, uint32_t *pageLargest);
+
 /* A map just entered by a cut is still being built (see VOXEL_WARMUP_MS). */
 bool CtrVoxel_IsWarmingUp(void);
 

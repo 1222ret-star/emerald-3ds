@@ -7,6 +7,8 @@
  *   u32 vertices, u16 variants, u16 0
  *   pages       x 8:  u16 w, h; u32 file offset of its RGBA5551 texels
  *   models      x 16: u8 w, h; u16 ground; u32 firstVertex, vertexCount, heights
+ *                     (vertexCount's top bit: a static model, drawn from its
+ *                     own mesh, never copied into a chunk)
  *   pageModels  x 8:  u16 model, page; i16 ox, oy (pixels)
  *   placements  x 16: u16 layout, pageModel, x, y, ground, extraCount;
  *                     u32 extraFirst (sorted by layout)
@@ -55,6 +57,8 @@ typedef struct
     uint8_t w, h;
     uint16_t ground;
     uint32_t firstVertex, vertexCount, heights;
+    bool isStatic;
+    float top;      /* its tallest cell, tiles */
 } BuildingModel;
 
 typedef struct
@@ -125,6 +129,8 @@ typedef struct
 } FrontCell;
 
 static FrontCell sFrontCells[FRONT_SETS];
+/* Said once: a chunk with more static models than its list holds. */
+static bool sStaticsFullLogged;
 
 static unsigned U16(const uint8_t *p) { return (unsigned)p[0] | ((unsigned)p[1] << 8); }
 static uint32_t U32(const uint8_t *p)
@@ -159,8 +165,10 @@ static bool TakeModel(unsigned i, const uint8_t *r)
     m->h = r[1];
     m->ground = (uint16_t)U16(r + 2);
     m->firstVertex = U32(r + 4);
-    m->vertexCount = U32(r + 8);
+    m->vertexCount = U32(r + 8) & 0x7FFFFFFFu;
+    m->isStatic = (U32(r + 8) & 0x80000000u) != 0;
     m->heights = U32(r + 12);
+    m->top = 0.0f;
     return m->firstVertex + m->vertexCount <= sVertexCount
         && m->heights + (unsigned)m->w * m->h <= sHeightBytes;
 }
@@ -259,6 +267,14 @@ bool VoxelBuildings_Init(void)
     for (unsigned i = 0; i < sHeightBytes; ++i)
         if (sHeights[i] != 0xFF && sHeights[i] / 16.0f > sMaxTop)
             sMaxTop = sHeights[i] / 16.0f;
+    for (unsigned i = 0; i < sModelCount; ++i)
+    {
+        BuildingModel *m = &sModels[i];
+
+        for (unsigned c = 0; c < (unsigned)m->w * m->h; ++c)
+            if (sHeights[m->heights + c] != 0xFF && sHeights[m->heights + c] / 16.0f > m->top)
+                m->top = sHeights[m->heights + c] / 16.0f;
+    }
     ok = true;
 
 done:
@@ -613,6 +629,27 @@ bool VoxelBuildings_FrontAt(const VoxelMapInstance *inst, int x, int y,
     return found;
 }
 
+bool VoxelBuildings_StaticModel(unsigned pageModel, const VoxelVertex **vertices,
+                                unsigned *count, float *ox, float *oy, float *su, float *sv)
+{
+    const BuildingPageModel *pm;
+    const BuildingModel *m;
+    const BuildingPage *page;
+
+    if (pageModel >= sPageModelCount)
+        return false;
+    pm = &sPageModels[pageModel];
+    m = &sModels[pm->model];
+    page = &sPages[pm->page];
+    *vertices = &sVertices[m->firstVertex];
+    *count = m->vertexCount;
+    *ox = (float)pm->ox;
+    *oy = (float)pm->oy;
+    *su = 1.0f / page->w;
+    *sv = 1.0f / page->h;
+    return true;
+}
+
 bool VoxelBuildings_DoorWall(const VoxelMapInstance *inst, int x, int y, float *z)
 {
     /* across the middle of the cell, half a tile up */
@@ -651,6 +688,32 @@ bool VoxelBuildings_EmitSome(VoxelBuilder *builder, const VoxelMapInstance *inst
                                              inst->originY + p[i].y + m->h - 1);
         builder->shift = VoxelRelief_CellShift(inst, inst->originX + p[i].x,
                                              inst->originY + p[i].y + m->h - 1);
+        /* A static model is drawn from its own mesh: the chunk only notes
+         * where (in its own frame, as VoxelBuilder_Tri would have put it). */
+        if (m->isStatic && builder->statics != NULL && cursor->part == 0)
+        {
+            if (cursor->vertex == 0 && builder->staticCount < builder->staticCapacity)
+            {
+                VoxelStaticDraw *s = &builder->statics[builder->staticCount++];
+
+                s->pageModel = p[i].pageModel;
+                s->lit = builder->lighting;
+                s->x = wx - builder->originX;
+                s->y = builder->lift + builder->base;
+                s->z = wz + builder->shift - builder->originZ;
+                s->w = (float)m->w;
+                s->d = (float)m->h;
+                s->top = m->top;
+            }
+            else if (cursor->vertex == 0 && !sStaticsFullLogged)
+            {
+                sStaticsFullLogged = true;
+                PORT_LOG("[VIDEO] VOXEL static models: a chunk holds more than %u\n",
+                         builder->staticCapacity);
+            }
+            cursor->part = 1;
+            cursor->vertex = 0;
+        }
         for (; cursor->part < 2; ++cursor->part, cursor->vertex = 0)
         {
             unsigned r = cursor->part;

@@ -4204,10 +4204,125 @@ static void DrawWindowFrame(u8 type, int x, int y, int wt, int ht, u16 fill)
  * name in the left half and the value between its arrows in the right.
  */
 /*
+ * A cell's picture, kept as a whole drawing of it left it: the OPTIONS page
+ * is twelve cells of text, 4 ms in Azahar and some 10 ms on an Old 3DS each
+ * time a page or a value changes. The key is all the cell is drawn from -
+ * its place, its strings, its state, the font and the backdrop its cut
+ * corners show - so a copy is what drawing it would give; a cell whose text
+ * would run out of it is not kept. CTR_BOTTOM_CACHE_AUDIT draws it anyway and
+ * logs a difference.
+ */
+#define CELL_PICS 24
+static struct
+{
+    bool8 valid;
+    u32 key, used;
+    u16 px[OPT_CELL_W * OPT_CELL_H];
+} sCellPics[CELL_PICS];
+static u32 sCellPicClock;
+
+static u32 Mix(u32 h, u32 v);
+
+static u32 MixStr(u32 h, const u8 *str)
+{
+    for (; *str != EOS; ++str)
+        h = Mix(h, *str);
+    return Mix(h, EOS);
+}
+
+static bool8 CellWhole(int x, int y)
+{
+    int sx = x + sOX;
+
+    return sDst == sCanvas && sx >= sClipX0 && y >= sClipY0 && sx + OPT_CELL_W <= sClipX1 && y + OPT_CELL_H <= sClipY1;
+}
+
+/* The kept picture of the cell, as much of it as the clip shows. */
+static bool8 CellPicDraw(u32 key, int x, int y)
+{
+    int sx = x + sOX;
+
+    if (sDst != sCanvas)
+        return FALSE;
+    for (int i = 0; i < CELL_PICS; ++i)
+        if (sCellPics[i].valid && sCellPics[i].key == key)
+        {
+            int x0 = sx > sClipX0 ? sx : sClipX0, x1 = sx + OPT_CELL_W < sClipX1 ? sx + OPT_CELL_W : sClipX1;
+            int y0 = y > sClipY0 ? y : sClipY0, y1 = y + OPT_CELL_H < sClipY1 ? y + OPT_CELL_H : sClipY1;
+
+            for (int cx = x0; cx < x1; ++cx)
+                memcpy(sCanvas + cx * H + (H - y1), sCellPics[i].px + (cx - sx) * OPT_CELL_H + (OPT_CELL_H - (y1 - y)),
+                       (size_t)(y1 - y0) * sizeof(u16));
+            sCellPics[i].used = ++sCellPicClock;
+            return TRUE;
+        }
+    return FALSE;
+}
+
+static void CellPicKeep(u32 key, int x, int y)
+{
+    int sx = x + sOX, oldest = 0;
+
+    /* The one least recently drawn makes room. */
+    for (int i = 1; i < CELL_PICS && sCellPics[oldest].valid; ++i)
+        if (!sCellPics[i].valid || sCellPics[i].used < sCellPics[oldest].used)
+            oldest = i;
+    for (int cx = 0; cx < OPT_CELL_W; ++cx)
+        memcpy(sCellPics[oldest].px + cx * OPT_CELL_H, sCanvas + (sx + cx) * H + (H - y - OPT_CELL_H),
+               OPT_CELL_H * sizeof(u16));
+    sCellPics[oldest].key = key;
+    sCellPics[oldest].used = ++sCellPicClock;
+    sCellPics[oldest].valid = TRUE;
+}
+
+static bool8 FitsCell(const u8 *str)
+{
+    int ix0, ix1;
+
+    InkColumns(&sSmall, str, &ix0, &ix1);
+    return ix1 - ix0 <= OPT_CELL_W - 2;
+}
+
+static void DrawCellPlateBody(int x, int y, const u8 *name, const u8 *value, bool8 live, bool8 on, bool8 arrows);
+
+/*
  * A cell's plate: the name on the first line and the value on the second,
  * both centred, the value between the arrows when it has them.
  */
 static void DrawCellPlate(int x, int y, const u8 *name, const u8 *value, bool8 live, bool8 on, bool8 arrows)
+{
+    u32 key = Mix(Mix(Mix(Mix(Mix(Mix(Mix(Mix(MixStr(MixStr(0x811C9DC5u, name), value), x), y), sOX), live), on),
+                          arrows), (u32)(uintptr_t)sSmall.glyphs), (u32)(uintptr_t)sCache[CACHE_MENU]);
+    bool8 keep = CellWhole(x, y) && sSmall.glyphs && FitsCell(name) && FitsCell(value);
+
+#ifdef CTR_BOTTOM_CACHE_AUDIT
+    for (int i = 0; keep && i < CELL_PICS; ++i)
+        if (sCellPics[i].valid && sCellPics[i].key == key)
+        {
+            static unsigned same;
+            int sx = x + sOX;
+            bool8 differs = FALSE;
+
+            DrawCellPlateBody(x, y, name, value, live, on, arrows);
+            for (int cx = 0; cx < OPT_CELL_W && !differs; ++cx)
+                differs = memcmp(sCellPics[i].px + cx * OPT_CELL_H, sCanvas + (sx + cx) * H + (H - y - OPT_CELL_H),
+                                 OPT_CELL_H * sizeof(u16)) != 0;
+            if (differs)
+                CtrLog_Write(CTR_LOG_ERROR, "CONTRACT bottom option cell picture differs from a redraw");
+            else if ((++same & 63) == 1)
+                CtrLog_Write(CTR_LOG_VIDEO, "bottom option cells: same as a redraw (%u)", same);
+            return;
+        }
+#else
+    if (keep && CellPicDraw(key, x, y))
+        return;
+#endif
+    DrawCellPlateBody(x, y, name, value, live, on, arrows);
+    if (keep)
+        CellPicKeep(key, x, y);
+}
+
+static void DrawCellPlateBody(int x, int y, const u8 *name, const u8 *value, bool8 live, bool8 on, bool8 arrows)
 {
     static const u8 left[] = {CHAR_LEFT_ARROW, EOS}, right[] = {CHAR_RIGHT_ARROW, EOS};
     u16 nameFg = !live ? sLook.offText : on ? TXT_WHITE : TXT_DARK;
@@ -4732,6 +4847,9 @@ static void CompCopy(const Comp *c)
 /* Every icon the snapshot needs is in (Prefetch loaded none this frame): a
  * plate drawn now is whole, and its picture may be kept. */
 static bool8 sIconsReady;
+/* Every icon the screen needs is loaded (this frame's sIconsReady stays FALSE
+ * on the frame they come in, for the captures' sake). */
+static bool8 sIconsIn;
 /* Plates kept on screen this frame: one. All of them in the redraw that opens
  * the action menu was 17-18 ms on an Old 3DS; the rest follow on the blinks. */
 static u8 sShowCaptures;
@@ -5062,6 +5180,9 @@ static void DrawBattleTarget(const ViewState *s)
  * it is first pressed.
  */
 static u32 sWarmKey = 0xFFFFFFFF;
+/* The menus the walk below is on, and how far it is: with the pictures freed
+ * it starts again, even for the same menus (the next battle, same moves). */
+static u32 sWarmIdxKey = 0xFFFFFFFF;
 static bool8 sWarmDone;
 #define WARM_SLICE_MS 1.5f
 /*
@@ -5167,13 +5288,12 @@ static void WarmBattleMenus(void)
      * DrawCached): moving the cursor onto a plate that was never lit built its
      * tint in the frame it was lit, and drawing one is still blending. */
     {
-        static u32 idxKey = 0xFFFFFFFF;
         static int idx;
         int nA = v.quickBall != ITEM_NONE ? 5 : 4, per = nA + MAX_MON_MOVES + 1, total = per * 3;
 
-        if (idxKey != key)
+        if (sWarmIdxKey != key)
         {
-            idxKey = key;
+            sWarmIdxKey = key;
             idx = 0;
             sCompFailed = 0;
         }
@@ -5303,9 +5423,96 @@ static void DrawTitleCredit(void)
     }
 }
 
+/*
+ * The column's own screens (map, card, save, options) drawn whole, kept with
+ * the state they were drawn from. Back from a battle - or from anything that
+ * leaves the screen as it was - it is put back instead of drawn again: 10-15 ms in one frame on an Old 3DS, a dropped frame
+ * at the end of every battle (F0). Only a screen with nothing animated, every
+ * label finished and every icon in, so the copy is what Render would draw;
+ * CTR_BOTTOM_CACHE_AUDIT draws it anyway and logs a difference.
+ *
+ * The copy is taken as a battle opens (MapCacheTake), not after each drawing:
+ * on an Old 3DS copying the whole screen at every redraw made the first visit
+ * to a screen 3 ms slower than it saved coming back.
+ */
+static struct
+{
+    bool8 valid;
+    ViewState state;
+    u16 canvas[W * H];
+    Hit hits[ARRAY_COUNT(sHits)];
+    u8 hitCount;
+} sMapCache;
+/* The canvas is a whole drawing of a cacheable screen, nothing animated, every
+ * label and icon in: set by the last whole Render, kept by the partial ones
+ * (they keep the canvas what a whole drawing of the new state would be). */
+static bool8 sMapShotOk;
+
+static bool8 MapCacheable(const ViewState *s)
+{
+    return s->mode == MODE_FIELD
+        && (s->screen == SCR_MAP || s->screen == SCR_CARD || s->screen == SCR_SAVE || s->screen == SCR_OPTION)
+        && !s->inBattle && s->bagView != BAG_VIEW_WHOLE
+        && !CtrVideo_BottomInUse() && !CtrVideo_BottomWhole() && ClipIsFull();
+}
+
+/* The screen on show, kept for when the battle that opens now is over. */
+static void MapCacheTake(void)
+{
+    if (!sMapShotOk || !MapCacheable(&sShown) || sAnimCount != 0 || sRefineLabels || sForceRedraw)
+        return;
+    sMapCache.state = sShown;
+    memcpy(sMapCache.canvas, sCanvas, sizeof(sCanvas));
+    memcpy(sMapCache.hits, sHits, sizeof(sHits));
+    sMapCache.hitCount = sHitCount;
+    sMapCache.valid = TRUE;
+}
+
+/*
+ * A whole redraw over CTR_RENDER_SLOW_MS, phase by phase, for the console's
+ * log: Azahar copies memory far faster than an Old 3DS, so where a 10 ms
+ * redraw goes can only be read there.
+ */
+#define CTR_RENDER_SLOW_MS 4.0f
+#define CTR_RENDER_SLOW_LINES 60
+
 static void Render(const ViewState *s)
 {
+    bool8 cacheable = MapCacheable(s);
+    uint64_t phase[6] = {CtrPlatform_Ticks()};
+
     ResolveFonts();
+    if (cacheable && sMapCache.valid && memcmp(&sMapCache.state, s, sizeof(*s)) == 0)
+    {
+#ifdef CTR_BOTTOM_CACHE_AUDIT
+        static u16 kept[W * H];
+        static Hit keptHits[ARRAY_COUNT(sHits)];
+        u8 keptCount = sMapCache.hitCount;
+        static unsigned hits;
+
+        memcpy(kept, sMapCache.canvas, sizeof(kept));
+        memcpy(keptHits, sMapCache.hits, sizeof(keptHits));
+        sMapCache.valid = FALSE;
+        Render(s);
+        if (memcmp(kept, sCanvas, sizeof(kept)) != 0 || sHitCount != keptCount
+            || memcmp(sHits, keptHits, sHitCount * sizeof(Hit)) != 0)
+            CtrLog_Write(CTR_LOG_ERROR, "CONTRACT bottom map cache differs from a redraw");
+        else
+            CtrLog_Write(CTR_LOG_VIDEO, "bottom map cache: same as a redraw (%u)", ++hits);
+        return;
+#else
+        memcpy(sCanvas, sMapCache.canvas, sizeof(sCanvas));
+        memcpy(sHits, sMapCache.hits, sizeof(sHits));
+        sHitCount = sMapCache.hitCount;
+        sAnimCount = 0;
+        sDst = sCanvas;
+        sOX = 0;
+        if (!sIntro.defer)
+            CtrBottom_Blit(sCanvas, 0, W);
+        sMapShotOk = TRUE;
+        return;
+#endif
+    }
     sHitCount = 0;
     sAnimCount = 0;
     sDst = sCanvas;
@@ -5341,6 +5548,7 @@ static void Render(const ViewState *s)
         }
         else
             CopyCache(column ? CACHE_MENU : CACHE_WIDE);
+        phase[1] = CtrPlatform_Ticks();
         sOX = column ? 0 : (W - CW) / 2;
         switch (s->screen)
         {
@@ -5358,18 +5566,40 @@ static void Render(const ViewState *s)
         case SCR_OPTION: DrawOptions(s); break;
         }
         sOX = 0;
+        phase[2] = CtrPlatform_Ticks();
         if (column)
             DrawColumn(s);
         else if (s->bagView == BAG_VIEW_WHOLE)
             memset(sCanvas, 0, sizeof(sCanvas));
     }
+    phase[3] = CtrPlatform_Ticks();
     DrawAnimIcons();
+    phase[4] = CtrPlatform_Ticks();
     /* Left of the column is the PokéNav's while the compositor draws it, and
      * the whole screen the boxes'. */
     if (!ClipIsFull())
         CtrBottom_BlitRect(sCanvas, sClipX0, sClipY0, sClipX1, sClipY1);
     else if (!CtrVideo_BottomWhole() && !sIntro.defer)
         CtrBottom_Blit(sCanvas, CtrVideo_BottomInUse() ? CW : 0, W);
+    if (ClipIsFull())
+    {
+        static unsigned lines;
+        float total;
+
+        sMapShotOk = cacheable && sAnimCount == 0 && !sRefineLabels && sIconsIn;
+        phase[5] = CtrPlatform_Ticks();
+        total = CtrPlatform_TickMs(phase[5] - phase[0]);
+        if (total > CTR_RENDER_SLOW_MS && lines < CTR_RENDER_SLOW_LINES && s->mode == MODE_FIELD)
+        {
+            ++lines;
+            CtrLog_Write(CTR_LOG_VIDEO, "bottom render f=%lu screen=%u page=%u total=%.2f: backdrop=%.2f screen=%.2f "
+                         "column=%.2f icons=%.2f blit=%.2f ms",
+                         (unsigned long)sFrames, s->screen, s->optPage, total,
+                         CtrPlatform_TickMs(phase[1] - phase[0]), CtrPlatform_TickMs(phase[2] - phase[1]),
+                         CtrPlatform_TickMs(phase[3] - phase[2]), CtrPlatform_TickMs(phase[4] - phase[3]),
+                         CtrPlatform_TickMs(phase[5] - phase[4]));
+        }
+    }
 }
 
 /* ------------------------------------------------------------------------ */
@@ -7082,6 +7312,7 @@ static bool8 BattleIntro(u8 mode)
     prev = mode;
     if (enter && sIntro.phase == INTRO_NONE)
     {
+        MapCacheTake();
         sIntro.phase = INTRO_OUT;
         sIntro.step = 0;
     }
@@ -7175,7 +7406,7 @@ void CtrBottom_Frame(void)
         /* The plate pictures are only for a battle. */
         FreeComps();
         sCompAny = FALSE;
-        sWarmKey = 0xFFFFFFFF;
+        sWarmKey = sWarmIdxKey = 0xFFFFFFFF;
     }
     if (BattleIntro(mode))
         return;
@@ -7210,6 +7441,7 @@ void CtrBottom_Frame(void)
 
     /* One RomFS read at most, and a single redraw once the icons are in. */
     sIconsReady = FALSE;
+    sIconsIn = FALSE;
     sShowCaptures = 1;
     if (Prefetch(&sState))
         iconsPending = TRUE;
@@ -7217,9 +7449,10 @@ void CtrBottom_Frame(void)
     {
         iconsPending = FALSE;
         sForceRedraw = TRUE;
+        sIconsIn = TRUE;
     }
     else
-        sIconsReady = TRUE;
+        sIconsReady = sIconsIn = TRUE;
 
     ticks[2] = CtrPlatform_Ticks();
     if (!sForceRedraw && MapCursorOnlyMoved(&sState, &sShown) && MoveMapCursor(&sShown, &sState))

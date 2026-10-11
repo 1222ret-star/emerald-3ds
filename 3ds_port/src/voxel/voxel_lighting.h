@@ -42,6 +42,9 @@ void VoxelLighting_Quad(VoxelBuilder *builder, const VoxelVertex *a,
  * for, since models are not wound consistently. It is replaced by the
  * sun's facing; models take no cast shadow.
  */
+/* A model triangle's lit shade (sun facing only, see ModelTri). */
+float VoxelLighting_ModelShade(const VoxelVertex *a, const VoxelVertex *b,
+                               const VoxelVertex *c, float drawnShade);
 void VoxelLighting_ModelTri(VoxelBuilder *builder, const VoxelVertex *a,
                             const VoxelVertex *b, const VoxelVertex *c, float drawnShade);
 void VoxelLighting_Contact(VoxelBuilder *builder, float x, float z);

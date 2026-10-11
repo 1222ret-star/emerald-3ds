@@ -34,6 +34,7 @@
 #include "3ds_log.h"
 #include "3ds_platform.h"
 #include "3ds_video.h"
+#include "3ds_map_events.h"
 
 #include "ctr_voxel.h"
 #include "voxel_arena.h"
@@ -216,7 +217,11 @@ static void FadeFor(bool sprites);
 #endif
 static void MakeStereo(void);
 static void FreeStereo(void);
+/* Static models one chunk may place (their spots, not their geometry). */
+#define VOXEL_CHUNK_STATICS 32u
 static VoxelVertex *sScratch;         /* chunk builder output, ordinary heap */
+static VoxelStaticDraw sJobStatics[VOXEL_CHUNK_STATICS]; /* the job's static models */
+static void StaticMeshesFree(void);
 static VoxelVertex *sDynamicScratch;   /* billboard builder output */
 static VoxelGpuVertex *sStaging;       /* chunk uploads, linear */
 static unsigned sStagingUsed, sChunkUploads;
@@ -293,6 +298,8 @@ static float TicksMs(uint64_t ticks)
 /* ── Packing ────────────────────────────────────────────────────────────── */
 
 static void JobCancel(void);
+static bool StaticMeshPrepare(unsigned pageModel, bool lit, unsigned triangles);
+static const struct StaticMesh *StaticMeshFind(unsigned pageModel, bool lit);
 
 static unsigned sPackErrors;
 /* The furthest value that did not fit, and which of x, y, z or shade it was:
@@ -612,6 +619,10 @@ typedef struct
     /* Only the draft of the square (DraftChunk): its ground laid flat, drawn
      * until the real build replaces it. Always asked for again. */
     bool draft;
+    /* Static models it places (voxel_building.c): drawn from their own
+     * meshes, each at its spot in the chunk's frame (DrawStatics). */
+    VoxelStaticDraw statics[VOXEL_CHUNK_STATICS];
+    unsigned staticCount;
 } VoxelChunk;
 
 static VoxelChunk sChunks[VOXEL_CHUNK_SLOTS];
@@ -875,6 +886,11 @@ static bool BoxVisible(float x0, float y0, float z0, float x1, float y1, float z
  */
 static uint32_t sEpoch = 1;
 static uint32_t sLiveDigest, sInstanceSignature;
+/* The map version last seen (3ds_map_events.c), whether sLiveDigest holds a
+ * hash yet, and the writes the version did not announce. */
+#define VOXEL_MAP_CHECK_FRAMES 60u
+static uint32_t sMapVersion, sUnannounced;
+static bool sDigestKnown;
 
 static int sMeshMapGroup = -1, sMeshMapNum = -1;
 /* Worst overflow logged so far: reporting only the first one hid how far
@@ -891,6 +907,9 @@ static C3D_Tex sTreeAtlas;
 /* The modelled buildings' own art, ground made transparent. Empty when
  * buildings.bin is absent, and then the region extrusion draws them. */
 static bool sHaveBuildings;
+/* The world's VRAM given back while it is off (CtrVoxel_ParkVram); the
+ * buildings' models stay loaded for when it comes back. */
+static bool sParked, sBuildingsLoaded;
 static unsigned sSpriteVertices;
 static unsigned sReflectionVertices;
 #if CTR_VOXEL_LIGHTING
@@ -1718,7 +1737,8 @@ bool CtrVoxel_Init(void)
     /* Not fatal: without models the houses fall back to the region path. */
     for (unsigned i = 0; i < VOXEL_BUILDING_PAGES; ++i)
         sPageSlots[i].page = -1;
-    sHaveBuildings = sPageBlock != NULL && VoxelBuildings_Init();
+    sBuildingsLoaded = sPageBlock != NULL && VoxelBuildings_Init();
+    sHaveBuildings = sBuildingsLoaded;
     if (sHaveBuildings)
         StreamStart();
 
@@ -1823,6 +1843,7 @@ void CtrVoxel_Shutdown(void)
         vramFree(sChunkBlock);
     sPageBlock = sChunkBlock = NULL;
     sHaveBuildings = false;
+    StaticMeshesFree();
     VoxelBuildings_Shutdown();
     VoxelRelief_Shutdown();
     free(sScratch);
@@ -1849,7 +1870,7 @@ void CtrVoxel_Shutdown(void)
 bool CtrVoxel_IsAvailable(void)
 {
 #if CTR_VOXEL_ENABLED
-    if (sReady && VoxelWorld_IsMapAvailable())
+    if (sReady && !sParked && VoxelWorld_IsMapAvailable())
         return true;
     /* Not an overworld frame: the 2D compositor owns it. Recorded so the
      * overlay can tell "not the overworld" from "the voxel path broke". */
@@ -2348,7 +2369,8 @@ enum
 {
     JOB_GROUND, JOB_TREES, JOB_MODELS, /* map chunks */
     JOB_BORDER, JOB_BORDER_TREES,      /* belt chunks */
-    JOB_SORT, JOB_PACK,                          /* into the GPU's vertex format */
+    JOB_SORT, JOB_PACK,                /* into the GPU's vertex format */
+    JOB_STATICS,                       /* its static models' meshes */
     JOB_DONE
 };
 
@@ -2372,6 +2394,7 @@ static struct
     unsigned terrainFirst[VOXEL_ATLAS_PAGES + 1u];
     unsigned sortPage, sortScan, sortWrite;
     VoxelBuildingCursor models;
+    unsigned staticIndex;   /* JOB_STATICS: the next of sJobStatics */
     uint64_t ticks;         /* spent on it, over every frame it took */
     /* ... and by phase, for the slow chunk log: where a chunk's time goes on
      * hardware is what says what to make cheaper next. */
@@ -2422,6 +2445,8 @@ static void JobStart(const ChunkSite *site, VoxelAtlasSlot *atlas, uint32_t hash
     sJob.col = site->x0;
     sJob.firstFrame = sFrame;
     VoxelBuilder_Init(&sBuilder, sScratch, VOXEL_CHUNK_SCRATCH);
+    sBuilder.statics = sJobStatics;
+    sBuilder.staticCapacity = VOXEL_CHUNK_STATICS;
     VoxelBuilder_SetAtlas(&sBuilder, &atlas->map);
     VoxelBuilder_SetOrigin(&sBuilder, site->baseX, site->baseY);
     /* The whole map stands at its base (voxel_relief.h), the belt round the
@@ -2450,6 +2475,8 @@ static bool JobValid(void)
 }
 
 #define VOXEL_MODEL_SLICE_TRIANGLES 64u
+/* About 11 us a triangle on hardware (lit, packed, shared): under a ms. */
+#define VOXEL_STATIC_SLICE_TRIANGLES 64u
 
 /*
  * The finished geometry measured and packed, in place: a GPU vertex is
@@ -2530,6 +2557,20 @@ static bool JobPack(void)
         sJob.gy0 = (float)sJob.bounds.lo[1] / VOXEL_POS_SCALE;
         sJob.gy1 = (float)sJob.bounds.hi[1] / VOXEL_POS_SCALE;
     }
+    /* ... and the static models it places, which are not in its geometry. */
+    for (unsigned i = 0; i < sBuilder.staticCount; ++i)
+    {
+        const VoxelStaticDraw *s = &sJobStatics[i];
+        int lx = (int)floorf(s->x), lz = (int)floorf(s->z);
+        int hx = (int)ceilf(s->x + s->w), hz = (int)ceilf(s->z + s->d);
+
+        if (lx < sJob.gx0) sJob.gx0 = lx;
+        if (lz < sJob.gz0) sJob.gz0 = lz;
+        if (hx > sJob.gx1) sJob.gx1 = hx;
+        if (hz > sJob.gz1) sJob.gz1 = hz;
+        if (s->y < sJob.gy0) sJob.gy0 = s->y;
+        if (s->y + s->top > sJob.gy1) sJob.gy1 = s->y + s->top;
+    }
     ReportPackErrors(site->border ? "border chunk" : "chunk", site->cx, site->cy,
                      site->inst->mapGroup, site->inst->mapNum);
     return true;
@@ -2606,7 +2647,24 @@ static void JobStep(void)
         return;
     case JOB_PACK:
         if (JobPack())
-            sJob.phase = JOB_DONE;
+            sJob.phase = sBuilder.staticCount != 0 ? JOB_STATICS : JOB_DONE;
+        return;
+    case JOB_STATICS:
+        /* Each model it places converted (or found cached) before the chunk
+         * is: it appears whole, and no draw converts one inside the frame. */
+        while (sJob.staticIndex < sBuilder.staticCount)
+        {
+            const VoxelStaticDraw *s = &sJobStatics[sJob.staticIndex];
+
+            bool cached = StaticMeshFind(s->pageModel, s->lit) != NULL;
+
+            if (!StaticMeshPrepare(s->pageModel, s->lit, VOXEL_STATIC_SLICE_TRIANGLES))
+                return;
+            ++sJob.staticIndex;
+            if (!cached)
+                return; /* one slice of conversion a step */
+        }
+        sJob.phase = JOB_DONE;
         return;
     default:
         return;
@@ -2720,10 +2778,12 @@ static BuildResult JobFinish(VoxelChunk *chunk)
     chunk->gy0 = sJob.gy0;
     chunk->gy1 = sJob.gy1;
     chunk->buildingPage = sHaveBuildings && !site->border ? VoxelBuildings_PageOf(inst) : -1;
+    chunk->staticCount = sBuilder.staticCount;
+    memcpy(chunk->statics, sJobStatics, sBuilder.staticCount * sizeof(VoxelStaticDraw));
     chunk->stamp = sFrame;
     if (sJob.forView)
         chunk->viewStamp = sFrame;
-    if (chunk->count > chunk->buildingFirst)
+    if (chunk->count > chunk->buildingFirst || chunk->staticCount != 0)
         WantPage(chunk->buildingPage, sJob.forView ? VOXEL_PAGE_KEEP_VIEW : VOXEL_PAGE_KEEP_RING,
                  !sJob.forView);
     /* Ids the atlas has never seen: it grows to take them (see AcquireAtlas). */
@@ -2935,6 +2995,7 @@ static VoxelChunk *DraftChunk(const ChunkSite *site, VoxelAtlasSlot *atlas, Voxe
         chunk->gy1 = (float)bounds.hi[1] / VOXEL_POS_SCALE;
     }
     chunk->buildingPage = -1;
+    chunk->staticCount = 0;
     chunk->buildMs = 0.0f;
     chunk->stamp = chunk->viewStamp = sFrame;
     /* Ids the atlas has never seen: it grows to take them (see AcquireAtlas). */
@@ -3519,7 +3580,7 @@ static void NoteBuildCost(VoxelChunk *chunk, const ChunkSite *site, float ms, ui
                      sJob.rays,
                      TicksMs(sJob.phaseTicks[JOB_GROUND] + sJob.phaseTicks[JOB_BORDER]),
                      TicksMs(sJob.phaseTicks[JOB_TREES] + sJob.phaseTicks[JOB_BORDER_TREES]),
-                     TicksMs(sJob.phaseTicks[JOB_MODELS]),
+                     TicksMs(sJob.phaseTicks[JOB_MODELS] + sJob.phaseTicks[JOB_STATICS]),
                      TicksMs(sJob.phaseTicks[JOB_PACK] + sJob.phaseTicks[JOB_DONE]));
     }
 }
@@ -3691,7 +3752,7 @@ static unsigned RunJobs(uint64_t started, float holeMs, float aheadMs, bool inFr
             static uint32_t lastSlowSlice;
             if (TicksMs(ticks) > 2.0f && sFrame - lastSlowSlice >= 120u)
             {
-                static const char *names[] = {"ground", "trees", "models", "border", "border-trees", "sort", "pack", "upload"};
+                static const char *names[] = {"ground", "trees", "models", "border", "border-trees", "sort", "pack", "statics", "upload"};
                 lastSlowSlice = sFrame;
                 CtrLog_Write(CTR_LOG_VIDEO, "VOXEL slice %s of %d:%d cell=%d,%d: %.2fms remaining=%.2f view=%d rays=%u misses=%u",
                              names[phase], sJob.site.inst->mapGroup, sJob.site.inst->mapNum,
@@ -4200,7 +4261,7 @@ static struct
 
 bool CtrVoxel_IsAvailableForBattle(void)
 {
-    return sReady && VoxelWorld_IsBattleMapAvailable();
+    return sReady && !sParked && VoxelWorld_IsBattleMapAvailable();
 }
 
 void CtrVoxel_BeginBattle(void)
@@ -4419,9 +4480,9 @@ bool CtrVoxel_Update(void)
     bool mapChanged, cut = false;
     uint64_t started;
 
-    if (!sReady)
+    if (!sReady || sParked)
     {
-        sStatus = "off";
+        sStatus = sReady ? "parked" : "off";
         return false;
     }
     /* The game has left the battle: the field is drawn again, as it was. */
@@ -4451,11 +4512,31 @@ bool CtrVoxel_Update(void)
     }
 
     {
-        uint32_t digest = VoxelWorld_LiveDigest(), signature = InstanceSignature();
+        /*
+         * A changed map is announced (3ds_map_events.c): hashing all of it
+         * every frame to find out cost 0.2 ms on an Old 3DS in every voxel
+         * frame. The hash stays, once a second, to catch a write that came
+         * by another way; one that does is logged and taken as a change.
+         */
+        uint32_t version = CtrMap_Version(), signature = InstanceSignature();
+        bool changed = version != sMapVersion || signature != sInstanceSignature;
 
-        if (digest != sLiveDigest || signature != sInstanceSignature)
+        if (changed || sFrame % VOXEL_MAP_CHECK_FRAMES == 0)
         {
+            uint32_t digest = VoxelWorld_LiveDigest();
+
+            if (!changed && sDigestKnown && digest != sLiveDigest)
+            {
+                changed = true;
+                if (sUnannounced++ < 50)
+                    CtrLog_Write(CTR_LOG_ERROR, "CONTRACT unannounced map change (%lu so far)", (unsigned long)sUnannounced);
+            }
             sLiveDigest = digest;
+            sDigestKnown = true;
+        }
+        if (changed)
+        {
+            sMapVersion = version;
             sInstanceSignature = signature;
             ++sEpoch;
 #if CTR_VOXEL_LIGHTING
@@ -4747,6 +4828,89 @@ unsigned long CtrVoxel_ReleaseIdleVram(void)
                      freed >> 10, (unsigned long)vramSpaceFree());
     }
     return freed;
+}
+
+/*
+ * The voxel world's VRAM while the world is off (CtrVideo, VoxelVramManage).
+ * The two arenas are 2.25 MiB, claimed whole at start-up; with the 2D field on
+ * they held 37% of VRAM for nothing, and the 2D screens lost their 3D for it:
+ * the depth planes and the battle scene did not fit beside the layers (F0 on
+ * an Old 3DS: 40% of the field's frames without planes, the first nine
+ * seconds of a battle composed whole per eye). Parked, everything the world
+ * keeps in VRAM goes - arenas, chunks, building pages, atlases - and comes
+ * back as for a new map. The caller parks only after the world has not been
+ * drawn for a while: nothing queued can still read it.
+ */
+bool CtrVoxel_HoldsVram(void)
+{
+    return sReady && !sParked;
+}
+
+void CtrVoxel_ParkVram(void)
+{
+    if (!sReady || sParked)
+        return;
+    StreamStop();
+    AtlasJobCancel();
+    JobCancel();
+    ReleaseAllChunks();
+    for (unsigned i = 0; i < VOXEL_BUILDING_PAGES; ++i)
+        if (sPageSlots[i].tex.data != NULL)
+            PageFree(&sPageSlots[i]);
+    for (unsigned i = 0; i < VOXEL_ATLAS_SLOTS; ++i)
+    {
+        FreeAtlasTextures(&sAtlases[i]);
+        AnimForget(&sAtlases[i]);
+        memset(&sAtlases[i].tex, 0, sizeof(sAtlases[i].tex));
+    }
+    sAtlasCapped = false;
+    VoxelArena_Init(&sChunkArena, NULL, 0, 16, sChunkPieces, VOXEL_CHUNK_SLOTS + 1);
+    VoxelArena_Init(&sPageArena, NULL, 0, 128, sPagePieces, VOXEL_BUILDING_PAGES);
+    if (sPageBlock != NULL)
+        vramFree(sPageBlock);
+    if (sChunkBlock != NULL)
+        vramFree(sChunkBlock);
+    sPageBlock = sChunkBlock = NULL;
+    sHaveBuildings = false;
+    /* Back as for a map never seen: HandleMapChange builds it again. */
+    sMeshMapGroup = sMeshMapNum = -1;
+    sParked = true;
+    CtrLog_Write(CTR_LOG_VIDEO, "VOXEL: VRAM parked while the world is off (VRAM free=%lu)",
+                 (unsigned long)vramSpaceFree());
+}
+
+/* False if the chunk arena does not fit: the caller frees its own surfaces
+ * first (they come back on demand) and tries again later. */
+bool CtrVoxel_UnparkVram(void)
+{
+    if (!sReady || !sParked)
+        return sReady;
+    sChunkBlock = vramAlloc(VOXEL_CHUNK_VRAM_BUDGET);
+    if (sChunkBlock == NULL)
+        return false;
+    VoxelArena_Init(&sChunkArena, sChunkBlock, VOXEL_CHUNK_VRAM_BUDGET, 16,
+                    sChunkPieces, VOXEL_CHUNK_SLOTS + 1);
+    sPageBlock = vramAlloc(VOXEL_PAGE_VRAM_BUDGET);
+    VoxelArena_Init(&sPageArena, sPageBlock, sPageBlock != NULL ? VOXEL_PAGE_VRAM_BUDGET : 0,
+                    128, sPagePieces, VOXEL_BUILDING_PAGES);
+    memset(sPageRetry, 0, sizeof(sPageRetry));
+    memset(sPageRingRetry, 0, sizeof(sPageRingRetry));
+    memset(sPageNoRoomLogged, 0, sizeof(sPageNoRoomLogged));
+    sHaveBuildings = sPageBlock != NULL && sBuildingsLoaded;
+    if (sHaveBuildings)
+        StreamStart();
+    sParked = false;
+    CtrLog_Write(CTR_LOG_VIDEO, "VOXEL: VRAM back%s (VRAM free=%lu)",
+                 sPageBlock != NULL ? "" : ", without the building pages", (unsigned long)vramSpaceFree());
+    return true;
+}
+
+void CtrVoxel_ArenaUse(uint32_t *chunkUsed, uint32_t *chunkLargest, uint32_t *pageUsed, uint32_t *pageLargest)
+{
+    *chunkUsed = sChunkArena.used;
+    *chunkLargest = sChunkBlock != NULL ? VoxelArena_LargestGap(&sChunkArena) : 0;
+    *pageUsed = sPageArena.used;
+    *pageLargest = sPageBlock != NULL ? VoxelArena_LargestGap(&sPageArena) : 0;
 }
 
 const char *CtrVoxel_Status(void)
@@ -5874,6 +6038,341 @@ static void PlaceGloom(const C3D_Mtx *projection, const C3D_Mtx *view)
 }
 #endif
 
+/*
+ * Static models (voxel_building.c): the way a game draws a detailed prop.
+ * Its mesh is converted once - lit, packed, its page's uv - into linear
+ * memory the GPU reads in place, and drawn wherever a chunk on screen places
+ * it with that spot as the model-view's translation. Nothing of it goes
+ * through a chunk build, its scratch or its VRAM: a model of thousands of
+ * cubes costs the chunk nothing and the frame one draw.
+ *
+ * Kept per (page model, lit) while used; the least recently drawn makes way
+ * when the cache is full.
+ */
+#define VOXEL_STATIC_MESHES 64u
+
+typedef struct StaticMesh
+{
+    bool used, lit;
+    unsigned pageModel;
+    VoxelGpuVertex *vertices;   /* linear memory: the vertices, then the indices */
+    uint16_t *indices;
+    unsigned count;             /* indices */
+    uint32_t stamp;
+} StaticMesh;
+
+static StaticMesh sStaticMeshes[VOXEL_STATIC_MESHES];
+static bool sStaticFailLogged;
+
+static void StaticMeshFree(StaticMesh *mesh)
+{
+    if (mesh->vertices != NULL)
+        linearFree(mesh->vertices);
+    memset(mesh, 0, sizeof(*mesh));
+}
+
+static void StaticBuildEnd(bool bad);
+
+static void StaticMeshesFree(void)
+{
+    StaticBuildEnd(false);
+    for (unsigned i = 0; i < VOXEL_STATIC_MESHES; ++i)
+        StaticMeshFree(&sStaticMeshes[i]);
+}
+
+/* The cached mesh of (page model, lit), marked as drawn this frame. */
+static const struct StaticMesh *StaticMeshFind(unsigned pageModel, bool lit)
+{
+    for (unsigned i = 0; i < VOXEL_STATIC_MESHES; ++i)
+        if (sStaticMeshes[i].used && sStaticMeshes[i].pageModel == pageModel
+         && sStaticMeshes[i].lit == lit)
+        {
+            sStaticMeshes[i].stamp = sFrame;
+            return &sStaticMeshes[i];
+        }
+    return NULL;
+}
+
+/*
+ * The one static mesh being converted, a slice of triangles at a time: the
+ * dome of the Battle Frontier is a few thousand, and converted whole inside
+ * the draw it held the frame 15-28 ms on hardware. A chunk's job converts
+ * the models it places before it is finished (JOB_STATICS), so the chunk
+ * appears with them; the draw only finishes one the cache gave up meanwhile.
+ *
+ * Packed, then shared: a face's two triangles meet on two corners, so a
+ * vertex identical to one already kept is that one again (open addressing
+ * on its words, in an ordinary heap scratch).
+ */
+static struct
+{
+    bool active, lit;
+    unsigned pageModel;
+    const VoxelVertex *src;
+    unsigned count, done, unique, buckets;
+    float ox, oy, su, sv;
+    VoxelGpuVertex *packed;
+    uint16_t *index;
+    int32_t *table;
+} sStaticBuild;
+
+/* Page models that cannot be converted (too large): never again. */
+#define VOXEL_STATIC_BAD_BITS 8192u
+static uint32_t sStaticBad[VOXEL_STATIC_BAD_BITS / 32u];
+
+/* ... and the one that found no memory (linear, or the heap for its
+ * scratch), not before this frame. */
+#define VOXEL_STATIC_RETRY_FRAMES 120u
+static unsigned sStaticRetryModel = ~0u;
+static uint32_t sStaticRetryFrame;
+
+static bool StaticBad(unsigned pageModel)
+{
+    if (pageModel == sStaticRetryModel && sFrame < sStaticRetryFrame)
+        return true;
+    return pageModel < VOXEL_STATIC_BAD_BITS && (sStaticBad[pageModel >> 5] >> (pageModel & 31u)) & 1u;
+}
+
+static void StaticBuildEnd(bool bad)
+{
+    if (bad && sStaticBuild.pageModel < VOXEL_STATIC_BAD_BITS)
+        sStaticBad[sStaticBuild.pageModel >> 5] |= 1u << (sStaticBuild.pageModel & 31u);
+    free(sStaticBuild.packed);
+    free(sStaticBuild.index);
+    free(sStaticBuild.table);
+    memset(&sStaticBuild, 0, sizeof(sStaticBuild));
+}
+
+static bool StaticBuildStart(unsigned pageModel, bool lit)
+{
+    unsigned count;
+
+    memset(&sStaticBuild, 0, sizeof(sStaticBuild));
+    sStaticBuild.pageModel = pageModel;
+    sStaticBuild.lit = lit;
+    if (!VoxelBuildings_StaticModel(pageModel, &sStaticBuild.src, &count, &sStaticBuild.ox,
+                                    &sStaticBuild.oy, &sStaticBuild.su, &sStaticBuild.sv)
+     || count < 3u || count > 0xFFFFu * 3u)
+    {
+        StaticBuildEnd(true);
+        return false;
+    }
+    count -= count % 3u;
+    sStaticBuild.count = count;
+    sStaticBuild.buckets = 1;
+    while (sStaticBuild.buckets < count * 2u)
+        sStaticBuild.buckets <<= 1;
+    sStaticBuild.packed = malloc(count * sizeof(VoxelGpuVertex));
+    sStaticBuild.index = malloc(count * sizeof(uint16_t));
+    sStaticBuild.table = malloc(sStaticBuild.buckets * sizeof(int32_t));
+    if (sStaticBuild.packed == NULL || sStaticBuild.index == NULL || sStaticBuild.table == NULL)
+    {
+        /* the heap may have room another time */
+        StaticBuildEnd(false);
+        sStaticRetryModel = pageModel;
+        sStaticRetryFrame = sFrame + VOXEL_STATIC_RETRY_FRAMES;
+        return false;
+    }
+    memset(sStaticBuild.table, 0xFF, sStaticBuild.buckets * sizeof(int32_t));
+    sStaticBuild.active = true;
+    return true;
+}
+
+/* Up to `triangles` more of the mesh; true once all are converted. */
+static bool StaticBuildSlice(unsigned triangles)
+{
+    const VoxelVertex *src = sStaticBuild.src;
+    unsigned end = sStaticBuild.done + triangles * 3u, mask = sStaticBuild.buckets - 1u;
+
+    if (end > sStaticBuild.count)
+        end = sStaticBuild.count;
+    for (unsigned k = sStaticBuild.done; k < end; k += 3)
+    {
+        float shade = src[k].shade;
+
+#if CTR_VOXEL_LIGHTING
+        if (sStaticBuild.lit)
+            shade = VoxelLighting_ModelShade(&src[k], &src[k + 1], &src[k + 2], src[k].shade);
+#endif
+        for (unsigned jj = 0; jj < 3; ++jj)
+        {
+            const VoxelVertex *v = &src[k + jj];
+            VoxelGpuVertex g;
+            uint32_t words[sizeof(VoxelGpuVertex) / 4u];
+            uint32_t h = 2166136261u;
+            unsigned at;
+
+            memset(&g, 0, sizeof(g));
+            g.u = (sStaticBuild.ox + v->u) * sStaticBuild.su;
+            g.v = 1.0f - (sStaticBuild.oy + v->v) * sStaticBuild.sv;
+            g.x = Quantise(v->x, VOXEL_POS_SCALE);
+            g.y = Quantise(v->y, VOXEL_POS_SCALE);
+            g.z = Quantise(v->z, VOXEL_POS_SCALE);
+            g.shade = Quantise(sStaticBuild.lit ? shade : v->shade, VOXEL_SHADE_SCALE);
+            memcpy(words, &g, sizeof(g));
+            for (unsigned t = 0; t < sizeof(words) / 4u; ++t)
+                h = (h ^ words[t]) * 16777619u;
+            h ^= h >> 15;
+            at = h & mask;
+            while (sStaticBuild.table[at] >= 0
+                && memcmp(&sStaticBuild.packed[sStaticBuild.table[at]], &g, sizeof(g)) != 0)
+                at = (at + 1u) & mask;
+            if (sStaticBuild.table[at] < 0)
+            {
+                if (sStaticBuild.unique == 0xFFFFu)
+                {
+                    StaticBuildEnd(true);
+                    return false;
+                }
+                sStaticBuild.packed[sStaticBuild.unique] = g;
+                sStaticBuild.table[at] = (int32_t)sStaticBuild.unique++;
+            }
+            sStaticBuild.index[k + jj] = (uint16_t)sStaticBuild.table[at];
+        }
+    }
+    sStaticBuild.done = end;
+    return end == sStaticBuild.count;
+}
+
+/* The converted mesh into linear memory and a cache slot: a free one, else
+ * the one drawn longest ago (never one drawn this frame). */
+static const StaticMesh *StaticBuildFinish(void)
+{
+    unsigned slot = VOXEL_STATIC_MESHES, unique = sStaticBuild.unique, count = sStaticBuild.count;
+    unsigned bytes = unique * sizeof(VoxelGpuVertex) + count * sizeof(uint16_t);
+    StaticMesh *mesh;
+
+    for (unsigned i = 0; i < VOXEL_STATIC_MESHES; ++i)
+        if (!sStaticMeshes[i].used)
+        {
+            slot = i;
+            break;
+        }
+    if (slot == VOXEL_STATIC_MESHES)
+    {
+        for (unsigned i = 0; i < VOXEL_STATIC_MESHES; ++i)
+            if (sStaticMeshes[i].stamp != sFrame
+             && (slot == VOXEL_STATIC_MESHES || sStaticMeshes[i].stamp < sStaticMeshes[slot].stamp))
+                slot = i;
+        if (slot == VOXEL_STATIC_MESHES)
+            return NULL; /* every one on screen: kept converted, tried again */
+        StaticMeshFree(&sStaticMeshes[slot]);
+    }
+    mesh = &sStaticMeshes[slot];
+    mesh->vertices = linearAlloc(bytes);
+    if (mesh->vertices == NULL)
+    {
+        if (!sStaticFailLogged)
+        {
+            sStaticFailLogged = true;
+            CtrLog_Write(CTR_LOG_ERROR, "VOXEL static model %u: no linear memory for %u vertices, %u indices",
+                         sStaticBuild.pageModel, unique, count);
+        }
+        /* tried again once memory may have come back, converted anew */
+        sStaticRetryModel = sStaticBuild.pageModel;
+        sStaticRetryFrame = sFrame + VOXEL_STATIC_RETRY_FRAMES;
+        StaticBuildEnd(false);
+        return NULL;
+    }
+    mesh->indices = (uint16_t *)(void *)(mesh->vertices + unique);
+    memcpy(mesh->vertices, sStaticBuild.packed, unique * sizeof(VoxelGpuVertex));
+    memcpy(mesh->indices, sStaticBuild.index, count * sizeof(uint16_t));
+    GSPGPU_FlushDataCache(mesh->vertices, bytes);
+    mesh->used = true;
+    mesh->lit = sStaticBuild.lit;
+    mesh->pageModel = sStaticBuild.pageModel;
+    mesh->count = count;
+    mesh->stamp = sFrame;
+    CtrLog_Write(CTR_LOG_VIDEO, "VOXEL static model %u: %u vertices, %u indices (%u KiB linear)",
+                 mesh->pageModel, unique, count, bytes >> 10);
+    StaticBuildEnd(false);
+    return mesh;
+}
+
+/*
+ * A slice of work towards (page model, lit)'s mesh. True once it is cached,
+ * or can never be (nothing more to wait for); false while it is still to
+ * come - including while the converter is busy with another, which it
+ * carries on with first.
+ */
+static bool StaticMeshPrepare(unsigned pageModel, bool lit, unsigned triangles)
+{
+    if (StaticMeshFind(pageModel, lit) != NULL || StaticBad(pageModel))
+        return true;
+    if (!sStaticBuild.active && !StaticBuildStart(pageModel, lit))
+        return StaticBad(pageModel);
+    if (sStaticBuild.done < sStaticBuild.count && !StaticBuildSlice(triangles))
+        return false;
+    if (!sStaticBuild.active)
+        return false; /* given up in the slice */
+    if (sStaticBuild.done == sStaticBuild.count)
+    {
+        bool mine = sStaticBuild.pageModel == pageModel && sStaticBuild.lit == lit;
+
+        if (StaticBuildFinish() == NULL && sStaticBuild.active)
+            return false;
+        return mine && (StaticMeshFind(pageModel, lit) != NULL || StaticBad(pageModel));
+    }
+    return false;
+}
+
+static void SetModelViewAt(const C3D_Mtx *view, float x, float y, float z)
+{
+    C3D_Mtx model;
+
+    Mtx_Copy(&model, view);
+    Mtx_Translate(&model, x, y, z, true);
+    C3D_FVUnifMtx4x4(GPU_VERTEX_SHADER, sUniModelView, &model);
+}
+
+/* The static models the chunks on screen place, in the building pass's
+ * state (alpha tested, the terrain's TexEnv and grade). */
+static uint32_t sStaticDrawSliced = ~0u;
+
+static void DrawStatics(const C3D_Mtx *view, bool dapples)
+{
+    (void)dapples;
+    for (unsigned i = 0; i < sDrawCount; ++i)
+    {
+        const VoxelChunk *chunk = sDraws[i].chunk;
+        C3D_Tex *tex;
+
+        if (chunk->staticCount == 0 || chunk->draft)
+            continue;
+        tex = BuildingPage(chunk->buildingPage);
+        if (tex == NULL)
+            continue;
+        C3D_TexBind(0, tex);
+        for (unsigned k = 0; k < chunk->staticCount; ++k)
+        {
+            const VoxelStaticDraw *s = &chunk->statics[k];
+            const StaticMesh *mesh = StaticMeshFind(s->pageModel, s->lit);
+            float x = (float)sDraws[i].worldX + s->x, z = (float)sDraws[i].worldZ + s->z;
+
+            if (mesh == NULL)
+            {
+                /* given up by the cache since its chunk was built: a slice
+                 * of it a frame until it is back */
+                if (sStaticDrawSliced != sFrame)
+                {
+                    sStaticDrawSliced = sFrame;
+                    StaticMeshPrepare(s->pageModel, s->lit, VOXEL_STATIC_SLICE_TRIANGLES);
+                }
+                continue;
+            }
+            SetModelViewAt(view, x, s->y, z);
+#if CTR_VOXEL_LIGHTING
+            /* The dapples are worked out from the model's own frame: whole
+             * tiles of its spot (a model stands on a whole cell). */
+            if (dapples)
+                DappleUniforms((int)floorf(x + 0.5f), (int)floorf(z + 0.5f));
+#endif
+            BindVertices(mesh->vertices);
+            C3D_DrawElements(GPU_TRIANGLES, (int)mesh->count, C3D_UNSIGNED_SHORT, mesh->indices);
+        }
+    }
+}
+
 void CtrVoxel_Draw(C3D_RenderTarget *target, float eyeOffset)
 {
     C3D_Mtx projection, view;
@@ -5991,6 +6490,8 @@ void CtrVoxel_Draw(C3D_RenderTarget *target, float eyeOffset)
             BindVertices(chunk->vram);
             C3D_DrawArrays(GPU_TRIANGLES, (int)first, (int)count);
         }
+        if (pass == VOXEL_ATLAS_PAGES + 1u && sHaveBuildings)
+            DrawStatics(&view, dapples);
     }
 
     /* The reflections, cast shadows and the player's silhouette take no

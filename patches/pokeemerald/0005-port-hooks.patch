@@ -15192,7 +15192,7 @@ index 171678cddbf9ef41a725fc8b4c7f4cdc3be1fa18..9d8c85d5cd8c3b47465ee3e6498be9cd
      ClearPokemonCrySongs();
  }
 diff --git a/src/sprite.c b/src/sprite.c
-index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..0944c577eb892dc4b6cbf6a20602d2c6e6f15ad3 100644
+index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..a46937e198a0556ec4d4646c67dd31ca1b217891 100644
 --- a/src/sprite.c
 +++ b/src/sprite.c
 @@ -2,6 +2,17 @@
@@ -15213,10 +15213,22 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..0944c577eb892dc4b6cbf6a20602d2c6
  
  #define MAX_SPRITE_COPY_REQUESTS 64
  
-@@ -291,6 +302,22 @@ EWRAM_DATA s16 gSpriteCoordOffsetY = 0;
+@@ -291,6 +302,34 @@ EWRAM_DATA s16 gSpriteCoordOffsetY = 0;
  EWRAM_DATA struct OamMatrix gOamMatrices[OAM_MATRIX_COUNT] = {0};
  EWRAM_DATA bool8 gAffineAnimsDisabled = FALSE;
  
++#ifdef PORT_BRIDGE
++/*
++ * Port: each sprite's identity, one number for as long as it lives, a new one
++ * whenever a slot takes a new sprite (phase F1 of the engine plan). Kept beside
++ * gSprites rather than in struct Sprite, so nothing of the game's layout
++ * changes. Sprites made by copying another (battle animations' clones) do not
++ * pass through CreateSpriteAt: the port numbers those (CtrSprites_Track).
++ */
++u32 gCtrSpriteId[MAX_SPRITES + 1];
++u32 gCtrSpriteNextId;
++#endif
++
 +#ifdef PORT_BRIDGE
 +static u32 GetPortSpriteAssetSize(const void *data, u32 declaredSize)
 +{
@@ -15236,7 +15248,7 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..0944c577eb892dc4b6cbf6a20602d2c6
  void ResetSpriteData(void)
  {
      ResetOamRange(0, 128);
-@@ -479,16 +506,119 @@ void CopyMatricesToOamBuffer(void)
+@@ -479,16 +518,119 @@ void CopyMatricesToOamBuffer(void)
      }
  }
  
@@ -15358,7 +15370,17 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..0944c577eb892dc4b6cbf6a20602d2c6
          i++;
      }
  
-@@ -562,8 +692,19 @@ u8 CreateSpriteAt(u8 index, const struct SpriteTemplate *template, s16 x, s16 y,
+@@ -544,6 +686,9 @@ u8 CreateSpriteAt(u8 index, const struct SpriteTemplate *template, s16 x, s16 y,
+     ResetSprite(sprite);
+ 
+     sprite->inUse = TRUE;
++#ifdef PORT_BRIDGE
++    gCtrSpriteId[index] = ++gCtrSpriteNextId;
++#endif
+     sprite->animBeginning = TRUE;
+     sprite->affineAnimBeginning = TRUE;
+     sprite->usingSheet = TRUE;
+@@ -562,8 +707,19 @@ u8 CreateSpriteAt(u8 index, const struct SpriteTemplate *template, s16 x, s16 y,
      if (template->tileTag == TAG_NONE)
      {
          s16 tileNum;
@@ -15379,7 +15401,7 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..0944c577eb892dc4b6cbf6a20602d2c6
          if (tileNum == -1)
          {
              ResetSprite(sprite);
-@@ -622,7 +763,13 @@ void DestroySprite(struct Sprite *sprite)
+@@ -622,7 +778,13 @@ void DestroySprite(struct Sprite *sprite)
          if (!sprite->usingSheet)
          {
              u16 i;
@@ -15394,7 +15416,7 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..0944c577eb892dc4b6cbf6a20602d2c6
              for (i = sprite->oam.tileNum; i < tileEnd; i++)
                  FREE_SPRITE_TILE(i);
          }
-@@ -791,6 +938,10 @@ void ProcessSpriteCopyRequests(void)
+@@ -791,6 +953,10 @@ void ProcessSpriteCopyRequests(void)
          while (sSpriteCopyRequestCount > 0)
          {
              CpuCopy16(sSpriteCopyRequests[i].src, sSpriteCopyRequests[i].dest, sSpriteCopyRequests[i].size);
@@ -15405,7 +15427,7 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..0944c577eb892dc4b6cbf6a20602d2c6
              sSpriteCopyRequestCount--;
              i++;
          }
-@@ -803,9 +954,17 @@ void RequestSpriteFrameImageCopy(u16 index, u16 tileNum, const struct SpriteFram
+@@ -803,9 +969,17 @@ void RequestSpriteFrameImageCopy(u16 index, u16 tileNum, const struct SpriteFram
  {
      if (sSpriteCopyRequestCount < MAX_SPRITE_COPY_REQUESTS)
      {
@@ -15425,7 +15447,7 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..0944c577eb892dc4b6cbf6a20602d2c6
          sSpriteCopyRequestCount++;
      }
  }
-@@ -814,6 +973,9 @@ void RequestSpriteCopy(const u8 *src, u8 *dest, u16 size)
+@@ -814,6 +988,9 @@ void RequestSpriteCopy(const u8 *src, u8 *dest, u16 size)
  {
      if (sSpriteCopyRequestCount < MAX_SPRITE_COPY_REQUESTS)
      {
@@ -15435,7 +15457,7 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..0944c577eb892dc4b6cbf6a20602d2c6
          sSpriteCopyRequests[sSpriteCopyRequestCount].src = src;
          sSpriteCopyRequests[sSpriteCopyRequestCount].dest = dest;
          sSpriteCopyRequests[sSpriteCopyRequestCount].size = size;
-@@ -1485,7 +1647,11 @@ void SetOamMatrixRotationScaling(u8 matrixNum, s16 xScale, s16 yScale, u16 rotat
+@@ -1485,7 +1662,11 @@ void SetOamMatrixRotationScaling(u8 matrixNum, s16 xScale, s16 yScale, u16 rotat
  
  u16 LoadSpriteSheet(const struct SpriteSheet *sheet)
  {
@@ -15448,7 +15470,7 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..0944c577eb892dc4b6cbf6a20602d2c6
  
      if (tileStart < 0)
      {
-@@ -1493,8 +1659,12 @@ u16 LoadSpriteSheet(const struct SpriteSheet *sheet)
+@@ -1493,8 +1674,12 @@ u16 LoadSpriteSheet(const struct SpriteSheet *sheet)
      }
      else
      {
@@ -15463,7 +15485,7 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..0944c577eb892dc4b6cbf6a20602d2c6
          return (u16)tileStart;
      }
  }
-@@ -1617,6 +1787,9 @@ void LoadSpritePalettes(const struct SpritePalette *palettes)
+@@ -1617,6 +1802,9 @@ void LoadSpritePalettes(const struct SpritePalette *palettes)
  
  void DoLoadSpritePalette(const u16 *src, u16 paletteOffset)
  {
