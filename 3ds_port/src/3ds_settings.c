@@ -27,9 +27,11 @@ static const int sPitches[] = {34, 37, 40, 43, 46};
 static const int sZooms[] = {90, 100, 110, 120};
 #define COUNT(a) ((int)(sizeof(a) / sizeof((a)[0])))
 static int sPitch = 2, sZoom = 1;
-/* The HD-2D tilt-shift blur over the voxel picture (3ds_video.c): on unless
- * turned off. */
-static bool sVoxelBlur = true;
+/* The HD-2D tilt-shift blur over the voxel picture (3ds_video.c): its
+ * strength in percent, full unless turned down; 0 turns it off. Settings
+ * written before it had a strength say 1 for on. */
+static const int sBlurs[] = {0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100};
+static int sBlur = 10;
 /* Battles in front of the voxel world rather than the GBA's scenery
  * (3ds_video.c, RenderBattleWorld): off unless turned on. */
 static bool sVoxelBattle = false;
@@ -93,8 +95,8 @@ void CtrSettings_Load(void)
             sPitch = Find(sPitches, COUNT(sPitches), value, sPitch);
         else if (sscanf(line, "voxel_zoom=%d", &value) == 1)
             sZoom = Find(sZooms, COUNT(sZooms), value, sZoom);
-        else if (strncmp(line, "voxel_blur=", 11) == 0)
-            sVoxelBlur = line[11] != '0';
+        else if (sscanf(line, "voxel_blur=%d", &value) == 1)
+            sBlur = Find(sBlurs, COUNT(sBlurs), value == 1 ? 100 : value, sBlur);
         else if (strncmp(line, "voxel_battle=", 13) == 0)
             sVoxelBattle = line[13] == '1';
         else if (strncmp(line, "fps=", 4) == 0)
@@ -114,7 +116,7 @@ void CtrSettings_Load(void)
     }
     fclose(file);
     CtrLog_Write(CTR_LOG_FS, "settings: voxel=%d pitch=%d zoom=%d blur=%d battle=%d fps=%d run=%d speed=%d",
-                 sVoxel ? 1 : 0, sPitches[sPitch], sZooms[sZoom], sVoxelBlur ? 1 : 0,
+                 sVoxel ? 1 : 0, sPitches[sPitch], sZooms[sZoom], sBlurs[sBlur],
                  sVoxelBattle ? 1 : 0, sShowFps ? 1 : 0, sRunAlways ? 1 : 0, sSpeeds[sSpeed]);
 }
 
@@ -181,7 +183,7 @@ static void Save(void)
     snprintf(text, sizeof(text),
              "voxel=%d\nvoxel_pitch=%d\nvoxel_zoom=%d\nvoxel_blur=%d\nvoxel_battle=%d\nfps=%d\nrun=%d\n"
              "speed=%d\n",
-             sVoxel ? 1 : 0, sPitches[sPitch], sZooms[sZoom], sVoxelBlur ? 1 : 0, sVoxelBattle ? 1 : 0,
+             sVoxel ? 1 : 0, sPitches[sPitch], sZooms[sZoom], sBlurs[sBlur], sVoxelBattle ? 1 : 0,
              sShowFps ? 1 : 0, sRunAlways ? 1 : 0, sSpeeds[sSpeed]);
     for (int i = 0; i < sExtraCount; ++i)
     {
@@ -300,14 +302,25 @@ void CtrSettings_StepSpeed(int direction, bool wrap)
 
 bool CtrSettings_VoxelBlur(void)
 {
-    return sVoxelBlur;
+    return sBlurs[sBlur] > 0;
 }
 
+int CtrSettings_VoxelBlurStrength(void)
+{
+    return sBlurs[sBlur];
+}
+
+void CtrSettings_StepVoxelBlur(int direction)
+{
+    Step(&sBlur, COUNT(sBlurs), direction);
+}
+
+/* On is the full blur, unless a strength was chosen already. */
 void CtrSettings_SetVoxelBlur(bool on)
 {
-    if (sVoxelBlur == on)
+    if (CtrSettings_VoxelBlur() == on)
         return;
-    sVoxelBlur = on;
+    sBlur = on ? COUNT(sBlurs) - 1 : 0;
     Save();
 }
 

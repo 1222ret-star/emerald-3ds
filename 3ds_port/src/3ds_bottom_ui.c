@@ -3419,7 +3419,7 @@ static void Snapshot(ViewState *s, u8 mode, u8 pressed)
             s->options[OPT_VOXEL] = CtrSettings_Voxel();
             s->options[OPT_VOXEL_PITCH] = CtrSettings_VoxelPitch();
             s->options[OPT_VOXEL_ZOOM] = CtrSettings_VoxelZoom();
-            s->options[OPT_VOXEL_BLUR] = CtrSettings_VoxelBlur();
+            s->options[OPT_VOXEL_BLUR] = CtrSettings_VoxelBlurStrength();
             s->options[OPT_VOXEL_BATTLE] = CtrSettings_VoxelBattle();
             if (sInside == INSIDE_OPTIONS)
                 s->optFocus = sOptFocus;
@@ -4158,10 +4158,13 @@ static const u8 *OptionValue(int row, u8 value)
     case 4: return value == 0 ? gText_ButtonTypeNormal : value == 1 ? gText_ButtonTypeLR : gText_ButtonTypeLEqualsA;
     case OPT_FPS:
     case OPT_VOXEL: return value ? gText_BattleSceneOn : gText_BattleSceneOff;
-    case OPT_VOXEL_BLUR:
     case OPT_VOXEL_BATTLE: return value ? gText_BattleSceneOn : gText_BattleSceneOff;
     case OPT_VOXEL_PITCH: return Number(value, 2, STR_CONV_MODE_LEFT_ALIGN);
+    case OPT_VOXEL_BLUR:
     case OPT_VOXEL_ZOOM:
+        /* Percentages; the blur's strength is OFF at 0 (the zoom never is). */
+        if (value == 0)
+            return gText_BattleSceneOff;
         StringCopy(frame, Number(value, 3, STR_CONV_MODE_LEFT_ALIGN));
         frame[StringLength(frame) + 1] = EOS;
         frame[StringLength(frame)] = CHAR_PERCENT;
@@ -6297,14 +6300,6 @@ static void ActivateOption(u8 id)
         PlaySE(SE_SELECT);
         return;
     }
-    if (row == OPT_VOXEL_BLUR)
-    {
-        if (!CtrSettings_Voxel())
-            return;
-        CtrSettings_SetVoxelBlur(!CtrSettings_VoxelBlur());
-        PlaySE(SE_SELECT);
-        return;
-    }
     if (row == OPT_VOXEL_BATTLE)
     {
         if (!CtrSettings_Voxel())
@@ -6313,14 +6308,16 @@ static void ActivateOption(u8 id)
         PlaySE(SE_SELECT);
         return;
     }
-    if (row == OPT_VOXEL_PITCH || row == OPT_VOXEL_ZOOM)
+    if (row == OPT_VOXEL_PITCH || row == OPT_VOXEL_ZOOM || row == OPT_VOXEL_BLUR)
     {
         if (!CtrSettings_Voxel())
             return;
         if (row == OPT_VOXEL_PITCH)
             CtrSettings_StepVoxelPitch(back ? -1 : 1);
-        else
+        else if (row == OPT_VOXEL_ZOOM)
             CtrSettings_StepVoxelZoom(back ? -1 : 1);
+        else
+            CtrSettings_StepVoxelBlur(back ? -1 : 1);
         PlaySE(SE_SELECT);
         return;
     }
