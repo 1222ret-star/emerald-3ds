@@ -5,7 +5,8 @@
  * Layout (little endian):
  *   "VXB7", u16 pages, models, pageModels, placements, heightBytes, masks,
  *   u32 vertices, u16 variants, u16 0
- *   pages       x 8:  u16 w, h; u32 file offset of its RGBA5551 texels
+ *   pages       x 8:  u16 w, h; u32 file offset of its RGBA5551 texels (h
+ *                     the rows it holds, whole tiles of 8: see TakePage)
  *   models      x 16: u8 w, h; u16 ground; u32 firstVertex, vertexCount, heights
  *                     (vertexCount's top bit: a static model, drawn from its
  *                     own mesh, never copied into a chunk)
@@ -48,7 +49,8 @@
 
 typedef struct
 {
-    uint16_t w, h;
+    uint16_t w, h;          /* h: the rows the file holds */
+    uint16_t texHeight;     /* the texture's: h rounded up to a power of two */
     uint32_t offset;
 } BuildingPage;
 
@@ -175,12 +177,25 @@ static bool ReadRows(FILE *file, unsigned count, unsigned size, uint8_t *row,
 
 static unsigned sHeightBytes;
 
+/*
+ * A page is a power of two wide but holds only the rows it uses, in whole
+ * tiles of 8. The GPU samples it as a texture the next power of two tall:
+ * the rows past the page are never stored, never given VRAM, and never
+ * read - no face's uv reaches them. Padded to a power of two, the Battle
+ * Frontier's two halves took 512 KiB each, and the page arena could not
+ * hold both maps in view together.
+ */
 static bool TakePage(unsigned i, const uint8_t *r)
 {
-    sPages[i].w = (uint16_t)U16(r);
-    sPages[i].h = (uint16_t)U16(r + 2);
+    unsigned w = U16(r), h = U16(r + 2), th = 8;
+
+    while (th < h)
+        th <<= 1;
+    sPages[i].w = (uint16_t)w;
+    sPages[i].h = (uint16_t)h;
+    sPages[i].texHeight = (uint16_t)th;
     sPages[i].offset = U32(r + 4);
-    return true;
+    return w >= 8 && w <= 1024 && (w & (w - 1)) == 0 && h > 0 && h % 8 == 0 && th <= 1024;
 }
 
 static bool TakeModel(unsigned i, const uint8_t *r)
@@ -357,12 +372,14 @@ float VoxelBuildings_MaxTop(void)
     return sMaxTop;
 }
 
-bool VoxelBuildings_PageSize(unsigned page, unsigned *width, unsigned *height)
+bool VoxelBuildings_PageSize(unsigned page, unsigned *width, unsigned *height,
+                             unsigned *texHeight)
 {
     if (page >= sPageCount)
         return false;
     *width = sPages[page].w;
     *height = sPages[page].h;
+    *texHeight = sPages[page].texHeight;
     return true;
 }
 
@@ -747,7 +764,7 @@ bool VoxelBuildings_StaticModel(unsigned pageModel, const VoxelVertex **vertices
     *ox = (float)pm->ox;
     *oy = (float)pm->oy;
     *su = 1.0f / page->w;
-    *sv = 1.0f / page->h;
+    *sv = 1.0f / page->texHeight;
     return true;
 }
 
@@ -773,7 +790,7 @@ bool VoxelBuildings_EmitSome(VoxelBuilder *builder, const VoxelMapInstance *inst
         const BuildingPage *page = &sPages[pm->page];
         float wx = (float)(inst->originX + p[i].x);
         float wz = (float)(inst->originY + p[i].y);
-        float su = 1.0f / page->w, sv = 1.0f / page->h;
+        float su = 1.0f / page->w, sv = 1.0f / page->texHeight;
         /* The model, then this placement's own ground patches: the model's
          * uv are pixels of its drawing, placed on the page at (ox, oy). */
         const uint32_t first[2] = { m->firstVertex, p[i].extraFirst };

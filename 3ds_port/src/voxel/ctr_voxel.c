@@ -988,15 +988,17 @@ static uint32_t sPageRingRetry[VOXEL_MAX_PAGES];
 static bool sPageNoRoomLogged[VOXEL_MAX_PAGES];
 
 /* A page texture over a piece of the arena. Never C3D_TexDelete'd: that
- * would hand the piece to the console's allocator, which never gave it. */
-static void PageTexInit(C3D_Tex *tex, void *data, unsigned w, unsigned h)
+ * would hand the piece to the console's allocator, which never gave it.
+ * The piece holds the page's `h` rows; the texture is `th` tall, a power of
+ * two, and its rows past `h` are never sampled (VoxelBuildings_PageSize). */
+static void PageTexInit(C3D_Tex *tex, void *data, unsigned w, unsigned h, unsigned th)
 {
     memset(tex, 0, sizeof(*tex));
     tex->data = data;
     tex->fmt = GPU_RGBA5551;
     tex->size = w * h * sizeof(uint16_t);
     tex->width = (u16)w;
-    tex->height = (u16)h;
+    tex->height = (u16)th;
     tex->param = GPU_TEXTURE_MODE(GPU_TEX_2D);
     C3D_TexSetFilter(tex, GPU_NEAREST, GPU_NEAREST);
     C3D_TexSetWrap(tex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
@@ -1213,7 +1215,7 @@ static uint32_t FramesAgo(uint32_t age)
 static void WantPage(int page, uint32_t keep, bool quiet)
 {
     BuildingPageSlot *victim = NULL;
-    unsigned w, h;
+    unsigned w, h, th;
     bool ring = keep > VOXEL_PAGE_KEEP_VIEW;
 
     if (page < 0 || page >= VOXEL_MAX_PAGES || sBadPages[page] || sFrame < sPageRetry[page])
@@ -1244,7 +1246,7 @@ static void WantPage(int page, uint32_t keep, bool quiet)
         if (victim == NULL || slot->used < victim->used)
             victim = slot;
     }
-    if (victim == NULL || !VoxelBuildings_PageSize((unsigned)page, &w, &h))
+    if (victim == NULL || !VoxelBuildings_PageSize((unsigned)page, &w, &h, &th))
         return;
     if (victim->tex.data != NULL && (victim->w != w || victim->h != h))
         PageFree(victim);
@@ -1263,7 +1265,7 @@ static void WantPage(int page, uint32_t keep, bool quiet)
 
         if (block != NULL)
         {
-            PageTexInit(&victim->tex, block, w, h);
+            PageTexInit(&victim->tex, block, w, h, th);
             victim->w = w;
             victim->h = h;
             break;

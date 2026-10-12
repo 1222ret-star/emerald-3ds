@@ -1337,20 +1337,45 @@ def same_building_pixels(model, layout_id, metatile, i, j):
 
 
 def pack_atlas(images):
-    """Pack (key, image) pairs, tallest first, into the smallest power-of-two
-    texture: each goes where its top edge lands lowest on the skyline of
-    what is placed (bottom-left). A shelf packer left the space beside a
-    tall, narrow drawing - a room's side wall - empty, and a small room took
-    a page of half a megabyte. Returns ((width, height), {key: (ox, oy)})."""
-    order = sorted(images, key=lambda kv: (-kv[1].size[1], -kv[1].size[0]))
-    sizes = sorted(((w, h) for w in (64, 128, 256, 512, 1024)
-                    for h in (64, 128, 256, 512, 1024) if w <= 8 * h and h <= 8 * w),
-                   key=lambda s: (s[0] * s[1], s[1]))
-    for tw, th in sizes:
-        spots = _skyline(order, tw, th)
-        if spots is not None:
-            return (tw, th), spots
-    raise SystemExit("building art does not fit a 1024x1024 texture")
+    """Pack (key, image) pairs into the smallest page: each goes where its
+    top edge lands lowest on the skyline of what is placed (bottom-left). A
+    shelf packer left the space beside a tall, narrow drawing - a room's
+    side wall - empty, and a small room took a page of half a megabyte.
+
+    A page is a power of two wide but only as tall as the rows it uses, in
+    whole tiles of 8: the console's texture is those rows rounded up to a
+    power of two (texture_rows), and the rows past them are neither stored
+    nor given VRAM - no face reads them. Rounded up, the Battle Frontier's
+    two halves took 512 KiB each, and the page arena cannot hold both maps
+    in view together. Every width is tried, tallest first and largest first,
+    and the fewest texels win. Returns ((width, rows), {key: (ox, oy)})."""
+    orders = [sorted(images, key=lambda kv: (-kv[1].size[1], -kv[1].size[0])),
+              sorted(images, key=lambda kv: (-kv[1].size[0] * kv[1].size[1], -kv[1].size[1]))]
+    best = None
+    for tw in (64, 128, 256, 512, 1024):
+        for order in orders:
+            spots = _skyline(order, tw, MAX_TEXTURE_SIDE)
+            if spots is None:
+                continue
+            rows = max(spots[key][1] + img.size[1] for key, img in order)
+            rows = max(8, (rows + 7) // 8 * 8)
+            th = texture_rows(rows)
+            if tw > 8 * th or th > 8 * tw:
+                continue
+            if best is None or (tw * rows, tw * th) < best[0]:
+                best = ((tw * rows, tw * th), (tw, rows), spots)
+    if best is None:
+        raise SystemExit("building art does not fit a 1024x1024 texture")
+    return best[1], best[2]
+
+
+def texture_rows(rows):
+    """The height of the texture that samples a page of `rows` rows: the
+    power of two the GPU needs (voxel_building.c TakePage)."""
+    th = 8
+    while th < rows:
+        th *= 2
+    return th
 
 
 def _skyline(order, tw, th):
@@ -1375,6 +1400,7 @@ def _skyline(order, tw, th):
 
 
 MAX_TEXTURE = (512, 512)   # one page in VRAM; ctr_voxel.c caches four
+MAX_TEXTURE_SIDE = 1024    # the GPU's largest texture
 
 
 def texel_offset(x, y, width):
@@ -1820,7 +1846,9 @@ def export(models, path):
 
       "VXB7", u16 pages, models, pageModels, placements, heightBytes, masks,
       u32 vertices, u16 variants, u16 0
-      pages       x 8:  u16 w, h; u32 file offset of its RGBA5551 texels
+      pages       x 8:  u16 w, h; u32 file offset of its RGBA5551 texels (h the
+                        rows it holds, a multiple of 8; its texture is h
+                        rounded up to a power of two - texture_rows)
       models      x 16: u8 w, h; u16 ground; u32 firstVertex, vertexCount, heights
                         (vertexCount's top bit: a static model)
       pageModels  x 8:  u16 model, page; i16 ox, oy (pixels)
@@ -1910,17 +1938,17 @@ def export(models, path):
                 patches.setdefault(img.tobytes(), img)
         images = [(("m", k), models[k].art.crop(crops[models[k].name])) for k in used]
         images += [(("p", key), img) for key, img in patches.items()]
-        (tw, th), spots = pack_atlas(images)
-        if tw * th > MAX_TEXTURE[0] * MAX_TEXTURE[1]:
+        (tw, rows), spots = pack_atlas(images)
+        if tw * rows > MAX_TEXTURE[0] * MAX_TEXTURE[1]:
             big = sorted(images, key=lambda kv: -kv[1].size[0] * kv[1].size[1])[:12]
             print("  page of %s: %d texels in %d images; largest: %s" % (
                 recs[0][6], sum(i.size[0] * i.size[1] for _, i in images), len(images),
                 ", ".join("%s %dx%d" % (models[k[1]].name if k[0] == "m" else "patch", i.size[0], i.size[1])
                           for k, i in big)))
             raise SystemExit("%s: building page %dx%d exceeds the console's %dx%d"
-                             % (recs[0][6], tw, th, MAX_TEXTURE[0], MAX_TEXTURE[1]))
+                             % (recs[0][6], tw, rows, MAX_TEXTURE[0], MAX_TEXTURE[1]))
         page = len(pages)
-        tex = bytearray(tw * th * 2)
+        tex = bytearray(tw * rows * 2)
         for key, img in images:
             ox, oy = spots[key]
             apx = img.load()
@@ -1929,7 +1957,7 @@ def export(models, path):
                     r_, g_, b_, a_ = apx[x, y]
                     value = (r_ >> 3) << 11 | (g_ >> 3) << 6 | (b_ >> 3) << 1 | int(a_ >= 128)
                     struct.pack_into("<H", tex, 2 * texel_offset(ox + x, oy + y, tw), value)
-        pages.append((tw, th))
+        pages.append((tw, rows))
         texels.append(tex)
         pm_of = {}
         for k in used:
@@ -1983,8 +2011,8 @@ def export(models, path):
     body += struct.pack("<%df" % len(verts), *verts)
     offset = len(head) + table_size + len(body)
     table = bytearray()
-    for (tw, th), tex in zip(pages, texels):
-        table += struct.pack("<HHI", tw, th, offset)
+    for (tw, rows), tex in zip(pages, texels):
+        table += struct.pack("<HHI", tw, rows, offset)
         offset += len(tex)
     blob = head + table + body + b"".join(texels)
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -1992,8 +2020,8 @@ def export(models, path):
     print("voxel buildings: %d models, %d pages, %d placements, %d vertices, %d footprints, "
           "%.1f KiB -> %s" % (len(models), len(pages), len(placements), nverts, len(masks),
                               len(blob) / 1024.0, path))
-    for (tw, th), lid in zip(pages, sorted(by_layout)):
-        print("  page for layout %3d: %dx%d" % (lid, tw, th))
+    for (tw, rows), lid in zip(pages, sorted(by_layout)):
+        print("  page for layout %3d: %dx%d" % (lid, tw, rows))
 
 
 def ground_variants(models, layouts_json):

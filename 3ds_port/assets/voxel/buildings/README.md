@@ -165,6 +165,17 @@ room next to Rustboro (512 KiB) must stay at 256 KiB or less, or crossing
 the door leaves one of them waiting. So a long, thin piece (a side wall the
 room's full length) is split.
 
+A page is a power of two wide but only as tall as the rows it uses, in
+whole tiles of 8: the GPU samples it as a texture the next power of two
+tall, and the rows past the page are neither stored nor given VRAM (no
+face reads them). Each width is tried, tallest drawing first and largest
+first, and the fewest texels win. Rounded up to 512×512, the Battle
+Frontier's two halves took 512 KiB each, and no splitting could bring
+either to 256 KiB: West's faces read about 120,000 texels and East's about
+150,000, more than a 512×256 page holds. At their own height they take
+512×352 and 512×384, 736 KiB together. `voxel_engine_view.py check` adds
+up the pages of connected maps.
+
 ## Memory
 
 The shared texture lives in VRAM (uploaded through the atlas staging buffer,

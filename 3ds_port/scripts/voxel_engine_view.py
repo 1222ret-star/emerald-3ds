@@ -40,11 +40,13 @@ import voxel_cells as vc  # noqa: E402
 import voxel_relief_lines as vl  # noqa: E402
 from PIL import Image  # noqa: E402
 
-DUMP = os.path.join(PORT, "build", "voxel_scene_dump.exe")
+DUMP = os.path.join(PORT, "build", "voxel_scene_dump" + (".exe" if os.name == "nt" else ""))
 SOURCES = ["tests/voxel_scene_dump.c"] + ["src/voxel/%s.c" % n for n in (
     "voxel_mesh_builder", "voxel_tree", "voxel_sign", "voxel_building", "voxel_relief",
     "voxel_grade", "voxel_lighting", "voxel_regions")] + ["src/3ds_video_decode.c"]
-GCC = r"C:\msys64\mingw64\bin\gcc.exe"
+# msys2 mingw64 on Windows; elsewhere the host's own (or VOXEL_HOST_CC)
+GCC = os.environ.get("VOXEL_HOST_CC") or (r"C:\msys64\mingw64\bin\gcc.exe" if os.name == "nt"
+                                         else "gcc")
 SCRATCH = 8192 + 64 * 18          # ctr_voxel.c VOXEL_CHUNK_SCRATCH
 # A map's static models (ctr_voxel.c StaticBuildSlice), in the console's linear
 # memory: what one map may hold at once, with room left for the rest of the
@@ -74,6 +76,8 @@ def build_dump():
            '-DVOXEL_RELIEF_PATH="romfs/voxel/relief.bin"',
            '-DVOXEL_REGIONS_PATH="romfs/voxel/regions.bin"',
            '-DSIGN_MASK_PATH="romfs/voxel/signposts.bin"'] + SOURCES + ["-lm", "-o", DUMP]
+    if os.name != "nt":
+        cmd.insert(1, "-D_POSIX_C_SOURCE=200809L")     # clock_gettime under -std=c99
     env = dict(os.environ)
     env["PATH"] = os.path.dirname(GCC) + os.pathsep + env.get("PATH", "")
     r = subprocess.run(cmd, cwd=PORT, capture_output=True, text=True, env=env)
@@ -111,10 +115,12 @@ class Buildings:
         self._pages = {}
 
     def page(self, k):
-        """Page k's texture, decoded from the console's tiled RGBA5551."""
+        """Page k's texture, decoded from the console's tiled RGBA5551: its
+        rows, and below them, clear, the rest of the power of two the GPU
+        samples it as (voxel_building.c TakePage)."""
         if k not in self._pages:
             w, h, off = self.pages[k]
-            img = Image.new("RGBA", (w, h))
+            img = Image.new("RGBA", (w, texture_rows(h)), (0, 0, 0, 0))
             px = img.load()
             for y in range(h):
                 for x in range(w):
@@ -129,7 +135,7 @@ class Buildings:
         lit by the sun's facing."""
         model, page, ox, oy = self.page_models[page_model]
         w, h, first, count, _ = self.models[model]
-        pw, ph = self.pages[page][:2]
+        pw, ph = self.pages[page][0], texture_rows(self.pages[page][1])
         out = []
         for k in range(0, count - count % 3, 3):
             vs = [struct.unpack_from("<6f", self.blob, self.vert_at + 24 * (first + k + j))
@@ -138,6 +144,14 @@ class Buildings:
             out.append(tuple((x, y, z, (ox + u) / pw, 1.0 - (oy + v) / ph, shade)
                              for (x, y, z, u, v, s) in vs))
         return page, out
+
+
+def texture_rows(rows):
+    """The height of the texture that samples a page of `rows` rows."""
+    th = 8
+    while th < rows:
+        th *= 2
+    return th
 
 
 def texel_offset(x, y, width):
@@ -316,8 +330,8 @@ def static_bytes(bld, page_model):
 
 
 def layout_pages(bld):
-    """Layout id (1-based) -> its page's (width, height), from the
-    placements (one page a layout)."""
+    """Layout id (1-based) -> its page's (width, rows), what the page arena
+    gives it, from the placements (one page a layout)."""
     b = bld.blob
     npages, nmodels, npm, nplaces = struct.unpack_from("<4H", b, 4)
     o = 24 + npages * 8 + nmodels * 16 + npm * 8

@@ -32,7 +32,11 @@ void VoxelBuildings_Shutdown(void);
  * places nothing.
  */
 int VoxelBuildings_PageOf(const VoxelMapInstance *inst);
-bool VoxelBuildings_PageSize(unsigned page, unsigned *width, unsigned *height);
+/* A page's texels, `width` x `height` (whole tiles of 8 rows), and the height
+ * of the texture that samples them: `height` rounded up to a power of two,
+ * its rows past `height` never read, so never allocated. */
+bool VoxelBuildings_PageSize(unsigned page, unsigned *width, unsigned *height,
+                             unsigned *texHeight);
 /* Reads `count` of a page's RGBA5551 texels (PICA order) from texel `first`
  * into `dest`. */
 bool VoxelBuildings_ReadPage(unsigned page, unsigned first, unsigned count, uint16_t *dest);
