@@ -43,6 +43,8 @@ EXESUFFIX := $(if $(filter Windows_NT,$(OS)),.exe,)
 SOURCES := src/main_3ds.c src/3ds_log.c src/3ds_platform.c src/3ds_input.c src/3ds_input_decode.c src/3ds_fs.c src/3ds_audio.c
 SOURCES += src/3ds_data.c src/3ds_pak.c src/3ds_settings.c src/3ds_prof.c
 SOURCES += src/3ds_video.c src/3ds_video_decode.c src/3ds_bottom_screen.c
+SOURCES += src/3ds_daynight.c
+SOURCES += src/3ds_encounters.c
 LIBS := -lcitro2d -lcitro3d $(LIBS)
 OBJECTS := $(patsubst src/%.c,build/%.o,$(SOURCES))
 GAMEFLAGS := -DPORTABLE -DPLATFORM_3DS -D__3DS__ -DMODERN=1 -DUBFIX -D__INTELLISENSE__
@@ -181,6 +183,24 @@ build/input_test.exe: tests/input_test.c src/3ds_input_decode.c include/3ds_inpu
 	$(HOSTCC) -std=c99 -O2 -Wall -Wextra -Werror -Iinclude tests/input_test.c src/3ds_input_decode.c -o $@
 
 verify: verify-video
+verify: verify-daynight
+verify: verify-encounters
+.PHONY: verify-encounters
+verify-encounters: build/encounters_test.exe
+	./build/encounters_test.exe
+
+build/encounters_test.exe: tests/encounters_test.c src/3ds_encounters.c include/3ds_encounters.h
+	@mkdir -p build
+	$(HOSTCC) -std=c99 -O2 -Wall -Wextra -Werror -Iinclude tests/encounters_test.c src/3ds_encounters.c -o $@
+
+.PHONY: verify-daynight
+verify-daynight: build/daynight_test.exe
+	./build/daynight_test.exe
+
+build/daynight_test.exe: tests/daynight_test.c src/3ds_daynight.c include/3ds_daynight.h include/3ds_platform.h
+	@mkdir -p build
+	$(HOSTCC) -std=c99 -O2 -Wall -Wextra -Werror -Iinclude tests/daynight_test.c src/3ds_daynight.c -lm -o $@
+
 .PHONY: verify-video
 verify-video: build/video_decode_test.exe
 	./build/video_decode_test.exe

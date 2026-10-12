@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- Opt-in ORIGINAL / TIMED grass encounters on eleven Hoenn routes, shared
+  by random encounters, Sweet Scent and new visible wild spawns, with original
+  levels/rates and unchanged water, caves, facilities and special encounters.
+- Optional bottom MAP footer showing effective HH:MM, time band and clock
+  rate, independently of lighting, localized in Spanish and partial-redrawn.
+
+- Optional outdoor morning, day, sunset and night lighting in classic 2D and
+  voxel mode, disabled by default and configurable from ENHANCEMENTS.
+- Independent visual clock speeds from 1X to 120X, without accelerating
+  Emerald's RTC events or modifying the save format.
+- Spanish labels for the touch-screen settings tabs, enhancements, cheats,
+  option values and give-items menu; English labels and saved settings stay
+  unchanged.
+
 ## 0.3.1 — 2026-10-10
 
 New and improved:

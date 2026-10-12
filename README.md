@@ -89,6 +89,7 @@ interface on the bottom screen replaces the START menu. Enable the optional
 | **Native 3DS homebrew** | Runs directly on the console's ARM11 using libctru, Citro2D and Citro3D, without an emulator. |
 | **Two screens, one adventure** | The game on top, with a dedicated touch interface below in place of the START menu. |
 | **Optional voxel overworld** | Modelled buildings, trees, signposts and terrain relief, with adjustable camera angle and zoom. |
+| **Optional day/night lighting** | Morning, daylight, sunset and night outdoors in both 2D and voxel mode, with an independently adjustable visual clock. |
 | **Built from your own cartridge** | The builder generates the game data locally from your own dump. No ROM content is distributed. |
 
 ### A new perspective on Hoenn
@@ -103,6 +104,36 @@ set your camera.
 > project moves forward.
 
 ## Getting started
+
+### Day/night and clock speed
+
+In **OPTION → ENHANCEMENTS**, set **DAY / NIGHT** to **AUTO** to enable
+outdoor lighting inspired by HeartGold/SoulSilver. It is **OFF by default**;
+indoors, caves, underwater areas, menus and classic battles retain their
+original colours. Voxel battle scenery follows the outdoor lighting.
+
+**CLOCK SPEED** selects **1X, 6X, 12X, 24X, 60X or 120X**. At 1X, lighting
+follows Emerald's local clock, including the time set at the start of the
+game. Higher speeds advance a separate feature clock: 60X completes a day
+in 24 real minutes and 120X in 12 minutes. Game speed does not accelerate
+this clock, and berries, daily events and save data are unaffected.
+
+The settings survive a restart. The accelerated clock starts from the game's
+local time each session, pauses during console sleep, and retains its current
+phase when switching between accelerated speeds. Selecting 1X synchronizes
+it with the game's clock; disabling all clock consumers and re-enabling one
+also resynchronizes it.
+
+**WILD POKEMON → TIMED** optionally changes selected grass slots by morning,
+day and night on routes 101–104, 110, 116–117, 119–121 and 123.
+**ORIGINAL** is the default and preserves the original tables. Levels, rates,
+rare slots, water, fishing, caves and special encounters stay unchanged.
+Random encounters, Sweet Scent and new visible Pokémon share the schedule.
+
+**SHOW CLOCK → ON** adds `HH:MM`, the time band and rate below the location
+name on the bottom MAP screen. It is OFF by default. The clock, encounters
+and lighting work independently and share the selected clock speed.
+See the [day/night test guide](docs/DAY_NIGHT.md) before publishing a build.
 
 ### Recommended: use the website
 

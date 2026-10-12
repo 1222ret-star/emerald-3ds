@@ -26,6 +26,8 @@
 #include "party_menu.h"
 #include "fldeff_misc.h"
 #include "battle_pyramid.h"
+#include "rtc.h"
+#include "constants/map_types.h"
 #include "sprite.h"
 #include "constants/party_menu.h"
 #ifdef CTR_TEST_BATTLE
@@ -534,6 +536,40 @@ bool CtrGame_IsOverworld(void)
     if (gMapHeader.mapLayout == NULL || gSaveBlock1Ptr == NULL)
         return false;
     return gMain.callback2 == CB2_Overworld || gMain.callback2 == CB2_OverworldBasic;
+}
+
+bool CtrGame_IsOutdoor(void)
+{
+    if (gMapHeader.mapLayout == NULL)
+        return false;
+    switch (gMapHeader.mapType)
+    {
+    case MAP_TYPE_TOWN:
+    case MAP_TYPE_CITY:
+    case MAP_TYPE_ROUTE:
+    case MAP_TYPE_OCEAN_ROUTE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool CtrGame_LocalTimeSeconds(unsigned *seconds)
+{
+    struct SiiRtcInfo rtc;
+    struct Time local;
+
+    if (gSaveBlock2Ptr == NULL || gMapHeader.mapLayout == NULL)
+        return false;
+    if (RtcGetErrorStatus() & RTC_ERR_FLAG_MASK)
+        return false;
+    RtcGetInfo(&rtc);
+    RtcCalcTimeDifference(&rtc, &local, &gSaveBlock2Ptr->localTimeOffset);
+    if (local.hours < 0 || local.hours >= 24 || local.minutes < 0 || local.minutes >= 60
+     || local.seconds < 0 || local.seconds >= 60)
+        return false;
+    *seconds = local.hours * 3600u + local.minutes * 60u + local.seconds;
+    return true;
 }
 
 /* The poison step's effect is running (see DrawPoisonVeil in 3ds_video.c). */

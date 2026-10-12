@@ -71,6 +71,7 @@ BACKEND_SRCS += src/3ds_bottom_ui.c
 build/bridge/3ds_bottom_ui.o: FULLCFLAGS += -DCTR_APP_VERSION='"$(APP_VERSION)"'
 # The ENHANCEMENTS and CHEATS pages of OPTIONS (include/3ds_extras.h).
 BACKEND_SRCS += src/3ds_extras.c
+BACKEND_SRCS += src/3ds_encounter_tables.c
 # The frame profiler times the engine's own routines through linker wrappers.
 BACKEND_SRCS += src/3ds_prof_wrap.c
 PROF_WRAPPED := RunTasks AnimateSprites BuildOamBuffer ProcessDma3Requests \

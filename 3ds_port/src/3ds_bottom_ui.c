@@ -52,6 +52,8 @@
 
 #include "global.h"
 #include "3ds_locale.h"
+#include "3ds_daynight.h"
+#include "3ds_encounters.h"
 #include "main.h"
 #include "money.h"
 #include "battle.h"
@@ -2418,6 +2420,8 @@ typedef struct
     u16 heldItem;
     /* Region map. */
     u8 mapsec, cursorX, cursorY, pickMapsec, pickX, pickY;
+    u8 clockShown, clockValid, clockRate, clockPhase;
+    u16 clockMinute;
     /* Bag: which of the game's is on show, BAG_VIEW_*. */
     u8 bagView;
     /* Trainer card. */
@@ -3351,6 +3355,19 @@ static void Snapshot(ViewState *s, u8 mode, u8 pressed)
             s->pickMapsec = sPickMapsec;
             s->pickX = sPickX;
             s->pickY = sPickY;
+            s->clockShown = !s->inBattle && CtrSettings_GetInt("show_clock", 0) == 1;
+            if (s->clockShown)
+            {
+                unsigned seconds, rate;
+
+                s->clockValid = CtrDayNight_Time(&seconds, &rate);
+                if (s->clockValid)
+                {
+                    s->clockMinute = seconds / 60;
+                    s->clockRate = rate;
+                    s->clockPhase = CtrEncounters_Phase(seconds);
+                }
+            }
             break;
         case SCR_POKEMON:
             /* The game's party menu is drawn by the compositor. */
@@ -3948,15 +3965,43 @@ static void BuildMapCache(void)
 static void DrawRegionName(const ViewState *s)
 {
     u8 name[32];
+    int height = s->clockShown ? 17 : NAME_H;
     bool8 picked = s->pickMapsec != MAPSEC_NONE;
     u8 mapsec = picked ? s->pickMapsec : s->mapsec;
 
     if (mapsec == MAPSEC_NONE)
         return;
     GetMapName(name, mapsec, 0);
-    DrawPlate(NAME_X, NAME_Y, NAME_W, NAME_H, picked ? &sLook.chosen : &sLook.plate, 0, FALSE);
-    DrawStrIn(&sNormal, name, NAME_X + 1, NAME_X + NAME_W - 1, NAME_Y + 1, NAME_Y + NAME_H - 2,
+    DrawPlate(NAME_X, NAME_Y, NAME_W, height, picked ? &sLook.chosen : &sLook.plate, 0, FALSE);
+    DrawStrIn(s->clockShown ? &sSmall : &sNormal, name, NAME_X + 1, NAME_X + NAME_W - 1, NAME_Y + 1, NAME_Y + height - 2,
               picked ? TXT_WHITE : TXT_DARK, picked ? sLook.chosenShadow : TXT_LIGHT);
+}
+
+static void DrawMapClock(const ViewState *s)
+{
+    static const char *const phases[] = {
+        CTR_TEXT("MORNING", "MANANA"), CTR_TEXT("DAY", "DIA"), CTR_TEXT("NIGHT", "NOCHE")
+    };
+    char time[8], speed[8];
+    int top = NAME_Y + 18, bottom = NAME_Y + NAME_H;
+
+    if (!s->clockShown)
+        return;
+    DrawPlate(NAME_X, top, NAME_W, bottom - top, &sLook.plate, 0, FALSE);
+    if (s->clockValid)
+    {
+        snprintf(time, sizeof(time), "%02u:%02u", s->clockMinute / 60u, s->clockMinute % 60u);
+        snprintf(speed, sizeof(speed), "%uX", s->clockRate);
+    }
+    else
+    {
+        strcpy(time, "--:--");
+        strcpy(speed, "--");
+    }
+    DrawStrIn(&sSmall, Ascii(time), NAME_X + 4, NAME_X + 65, top, bottom, TXT_DARK, TXT_LIGHT);
+    DrawStrIn(&sSmall, Ascii(s->clockValid ? phases[s->clockPhase] : "--"),
+              NAME_X + 66, NAME_X + 168, top, bottom, TXT_DARK, TXT_LIGHT);
+    DrawStrIn(&sSmall, Ascii(speed), NAME_X + 169, NAME_X + NAME_W - 4, top, bottom, TXT_DARK, TXT_LIGHT);
 }
 
 /* The player's mark and a picked cell's cursor, inside the window. */
@@ -3979,6 +4024,7 @@ static void DrawRegionMap(const ViewState *s)
     DrawMapMarks(s);
     AddHit(MAP_WIN_X0, MAP_WIN_Y0, MAP_WIN_X1 - MAP_WIN_X0, MAP_WIN_Y1 - MAP_WIN_Y0, HIT_MAP);
     DrawRegionName(s);
+    DrawMapClock(s);
 }
 
 /* The section under a tapped map cell, as the region map's cursor finds it. */
@@ -4254,7 +4300,8 @@ static void DrawExtraCell(const ViewState *s, int row, const CtrExtra *extra)
 /* The tabs: SETTINGS (the options) and each page that has extras. */
 static void DrawOptionTabs(const ViewState *s)
 {
-    static const char *const names[CTR_EXTRAS_PAGES] = {"SETTINGS", "ENHANCEMENTS", "CHEATS"};
+    static const char *const names[CTR_EXTRAS_PAGES] = {CTR_TEXT("SETTINGS", "AJUSTES"),
+                                                     CTR_TEXT("ENHANCEMENTS", "MEJORAS"), CTR_TEXT("CHEATS", "TRUCOS")};
     u8 pages[CTR_EXTRAS_PAGES], count = 0;
     int capTop, capBottom, cap;
 
@@ -5405,6 +5452,24 @@ static bool8 DirtyRect(const ViewState *now, const ViewState *shown, Rect *r)
 {
     static ViewState probe;
     bool8 battle = now->mode >= MODE_BATTLE_INFO;
+
+    if (now->mode == MODE_FIELD && shown->mode == MODE_FIELD
+     && now->screen == SCR_MAP && shown->screen == SCR_MAP)
+    {
+        probe = *now;
+        probe.clockShown = shown->clockShown;
+        probe.clockValid = shown->clockValid;
+        probe.clockRate = shown->clockRate;
+        probe.clockPhase = shown->clockPhase;
+        probe.clockMinute = shown->clockMinute;
+        if (memcmp(&probe, shown, sizeof(probe)) != 0)
+            return FALSE;
+        r->x0 = NAME_X;
+        r->y0 = NAME_Y;
+        r->x1 = NAME_X + NAME_W;
+        r->y1 = NAME_Y + NAME_H;
+        return TRUE;
+    }
 
     if (now->mode != shown->mode || (now->mode != MODE_FIELD && !battle) || shown->screen != now->screen
      || (now->mode == MODE_FIELD && now->screen != SCR_OPTION))
@@ -6991,6 +7056,7 @@ static bool8 MoveMapCursor(const ViewState *from, const ViewState *to)
                    NAME_H * sizeof(u16));
         ResolveFonts();
         DrawRegionName(to);
+        DrawMapClock(to);
         CtrBottom_BlitRect(sCanvas, NAME_X, NAME_Y, NAME_X + NAME_W, NAME_Y + NAME_H);
     }
     for (int k = 0; k < 2; ++k)

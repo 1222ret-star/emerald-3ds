@@ -7,6 +7,8 @@
 #include "global.h"
 #include "3ds_extras.h"
 #include "3ds_platform.h"
+#include "3ds_daynight.h"
+#include "3ds_locale.h"
 #include "event_data.h"
 #include "pokedex.h"
 #include "pokemon.h"
@@ -19,11 +21,16 @@
 #include "constants/items.h"
 #include "constants/songs.h"
 
-const char *const gCtrExtrasOffOn[2] = {"OFF", "ON"};
+const char *const gCtrExtrasOffOn[2] = {CTR_TEXT("OFF", "NO"), CTR_TEXT("ON", "SI")};
 
-static const char *const sVisibleWild[] = {"OFF", "FEW", "SOME", "MANY"};
-static const char *const sEncounterRate[] = {"NORMAL", "OFF", "1/4", "1/2", "2X"};
-static const char *const sShinyOdds[] = {"1/8192", "1/4096", "1/1024", "1/256", "1/64", "ALWAYS"};
+static const char *const sDayNight[] = {CTR_TEXT("OFF", "NO"), "AUTO"};
+static const char *const sClockSpeeds[] = {"1X", "6X", "12X", "24X", "60X", "120X"};
+static const char *const sTimedEncounters[] = {"ORIGINAL", CTR_TEXT("TIMED", "POR HORARIO")};
+
+static const char *const sVisibleWild[] = {CTR_TEXT("OFF", "NO"), CTR_TEXT("FEW", "POCOS"),
+                                         CTR_TEXT("SOME", "ALGUNOS"), CTR_TEXT("MANY", "MUCHOS")};
+static const char *const sEncounterRate[] = {"NORMAL", CTR_TEXT("OFF", "NO"), "1/4", "1/2", "2X"};
+static const char *const sShinyOdds[] = {"1/8192", "1/4096", "1/1024", "1/256", "1/64", CTR_TEXT("ALWAYS", "SIEMPRE")};
 /*
  * Pokedex (CHEATS): the Hoenn Pokedex complete, the National Pokedex
  * unlocked, or complete (and unlocked): every Pokemon seen and caught. OPTIONS
@@ -56,13 +63,15 @@ static void CompleteNationalDex(void)
     PlaySE(SE_SUCCESS);
 }
 
-static const char *const sDexDone[] = {"TAP TO SET"};
+static const char *const sDexDone[] = {CTR_TEXT("TAP TO SET", "TOCA PARA ACTIVAR")};
 /*
  * Give items (CHEATS): a pocket, an item of it, a count, and GIVE puts them in
  * the bag (OPTIONS is only open in the field). The item steps through the
  * pocket's items in the game's order, skipping unused ids.
  */
-static const char *const sGivePockets[] = {"ITEMS", "POKE BALLS", "TMS & HMS", "BERRIES", "KEY ITEMS"};
+static const char *const sGivePockets[] = {CTR_TEXT("ITEMS", "OBJETOS"), CTR_TEXT("POKE BALLS", "POK* BALLS"),
+                                         CTR_TEXT("TMS & HMS", "MT Y MO"), CTR_TEXT("BERRIES", "BAYAS"),
+                                         CTR_TEXT("KEY ITEMS", "OBJ. CLAVE")};
 static const char *const sGiveCounts[] = {"1", "5", "10", "50", "99"};
 static const u8 sGiveCountValues[] = {1, 5, 10, 50, 99};
 
@@ -140,9 +149,9 @@ static void GiveItemsNow(void)
         PlaySE(SE_FAILURE);
 }
 
-static const char *const sGiveText[] = {"TAP TO GIVE"};
-static const char *const sGiveOpenText[] = {"TAP TO OPEN"};
-static const char *const sGiveBackText[] = {"BACK TO CHEATS"};
+static const char *const sGiveText[] = {CTR_TEXT("TAP TO GIVE", "TOCA PARA DAR")};
+static const char *const sGiveOpenText[] = {CTR_TEXT("TAP TO OPEN", "TOCA PARA ABRIR")};
+static const char *const sGiveBackText[] = {CTR_TEXT("BACK TO CHEATS", "VOLVER A TRUCOS")};
 
 /* The cells have a screen of their own, opened from the first. */
 static void GiveOpen(void)
@@ -178,27 +187,31 @@ static const u8 *SpeedText(void)
 const CtrExtra gCtrExtras[] =
 {
     /* Features add their lines here. */
-    {CTR_EXTRAS_ENHANCEMENTS, "SPEED", "speed", 0, 0, NULL, NULL, SpeedStep, SpeedText},
-    {CTR_EXTRAS_ENHANCEMENTS, "EXP FOR CATCHING", "exp_catch", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
-    {CTR_EXTRAS_ENHANCEMENTS, "PARTY EXP SHARE", "exp_share", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
-    {CTR_EXTRAS_ENHANCEMENTS, "TRADE EVO LV. 40", "trade_evo", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
-    {CTR_EXTRAS_ENHANCEMENTS, "HMS WITHOUT MOVE", "field_hms", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
-    {CTR_EXTRAS_ENHANCEMENTS, "VISIBLE WILD", "visible_wild", 4, 0, sVisibleWild, NULL, NULL, NULL},
-    {CTR_EXTRAS_CHEATS, "WILD ENCOUNTERS", "encounter_rate", 5, 0, sEncounterRate, NULL, NULL, NULL},
-    {CTR_EXTRAS_CHEATS, "SHINY ODDS", "shiny_odds", 6, 0, sShinyOdds, NULL, NULL, NULL},
-    {CTR_EXTRAS_CHEATS, "ALWAYS CATCH", "always_catch", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
-    {CTR_EXTRAS_CHEATS, "INSTANT VICTORY", "instant_victory", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
-    {CTR_EXTRAS_CHEATS, "FAST EGGS", "fast_eggs", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
-    {CTR_EXTRAS_CHEATS, "INFINITE MONEY", "infinite_money", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
-    {CTR_EXTRAS_CHEATS, "HOENN DEX FULL", "dex_hoenn", 0, 0, sDexDone, CompleteHoennDex, NULL, NULL},
-    {CTR_EXTRAS_CHEATS, "NATIONAL DEX ON", "dex_national_on", 0, 0, sDexDone, UnlockNationalDex, NULL, NULL},
-    {CTR_EXTRAS_CHEATS, "NATIONAL DEX FULL", "dex_national", 0, 0, sDexDone, CompleteNationalDex, NULL, NULL},
-    {CTR_EXTRAS_CHEATS, "GIVE ITEMS", "give_open", 0, 0, sGiveOpenText, GiveOpen, NULL, NULL},
-    {CTR_EXTRAS_SCREEN(CTR_EXTRAS_CHEATS, 1), "GIVE ITEMS", "give_back", 0, 0, sGiveBackText, GiveBack, NULL, NULL},
-    {CTR_EXTRAS_SCREEN(CTR_EXTRAS_CHEATS, 1), "POCKET", "give_pocket", 5, 0, sGivePockets, NULL, NULL, NULL},
-    {CTR_EXTRAS_SCREEN(CTR_EXTRAS_CHEATS, 1), "ITEM", "give_item", 0, 0, NULL, NULL, GiveItemStep, GiveItemText},
-    {CTR_EXTRAS_SCREEN(CTR_EXTRAS_CHEATS, 1), "HOW MANY", "give_count", 5, 0, sGiveCounts, NULL, NULL, NULL},
-    {CTR_EXTRAS_SCREEN(CTR_EXTRAS_CHEATS, 1), "GIVE", "give_now", 0, 0, sGiveText, GiveItemsNow, NULL, NULL},
+    {CTR_EXTRAS_ENHANCEMENTS, CTR_TEXT("SPEED", "VELOC. JUEGO"), "speed", 0, 0, NULL, NULL, SpeedStep, SpeedText},
+    {CTR_EXTRAS_ENHANCEMENTS, CTR_TEXT("EXP FOR CATCHING", "EXP AL CAPTURAR"), "exp_catch", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
+    {CTR_EXTRAS_ENHANCEMENTS, CTR_TEXT("PARTY EXP SHARE", "EXP TODO EQUIPO"), "exp_share", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
+    {CTR_EXTRAS_ENHANCEMENTS, CTR_TEXT("TRADE EVO LV. 40", "EVOL. INTERC. N40"), "trade_evo", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
+    {CTR_EXTRAS_ENHANCEMENTS, CTR_TEXT("HMS WITHOUT MOVE", "MO SIN APRENDER"), "field_hms", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
+    {CTR_EXTRAS_ENHANCEMENTS, CTR_TEXT("VISIBLE WILD", "SALVAJES VISIBLES"), "visible_wild", 4, 0, sVisibleWild, NULL, NULL, NULL},
+    {CTR_EXTRAS_ENHANCEMENTS, CTR_TEXT("DAY / NIGHT", "DIA / NOCHE"), "day_night", 2, 0, sDayNight, NULL, NULL, NULL},
+    {CTR_EXTRAS_ENHANCEMENTS, CTR_TEXT("CLOCK SPEED", "VELOC. RELOJ"), "clock_speed", CTR_DAYNIGHT_SPEED_COUNT, 0, sClockSpeeds, NULL, NULL, NULL},
+    {CTR_EXTRAS_ENHANCEMENTS, CTR_TEXT("WILD POKEMON", "POK*MON SALV."), "timed_encounters", 2, 0, sTimedEncounters, NULL, NULL, NULL},
+    {CTR_EXTRAS_ENHANCEMENTS, CTR_TEXT("SHOW CLOCK", "VER RELOJ"), "show_clock", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
+    {CTR_EXTRAS_CHEATS, CTR_TEXT("WILD ENCOUNTERS", "ENC. SALVAJES"), "encounter_rate", 5, 0, sEncounterRate, NULL, NULL, NULL},
+    {CTR_EXTRAS_CHEATS, CTR_TEXT("SHINY ODDS", "PROB. VARIOCOLOR"), "shiny_odds", 6, 0, sShinyOdds, NULL, NULL, NULL},
+    {CTR_EXTRAS_CHEATS, CTR_TEXT("ALWAYS CATCH", "CAPTURA SEGURA"), "always_catch", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
+    {CTR_EXTRAS_CHEATS, CTR_TEXT("INSTANT VICTORY", "VICTORIA INSTANT."), "instant_victory", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
+    {CTR_EXTRAS_CHEATS, CTR_TEXT("FAST EGGS", "HUEVOS RAPIDOS"), "fast_eggs", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
+    {CTR_EXTRAS_CHEATS, CTR_TEXT("INFINITE MONEY", "DINERO INFINITO"), "infinite_money", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
+    {CTR_EXTRAS_CHEATS, CTR_TEXT("HOENN DEX FULL", "DEX HOENN LLENA"), "dex_hoenn", 0, 0, sDexDone, CompleteHoennDex, NULL, NULL},
+    {CTR_EXTRAS_CHEATS, CTR_TEXT("NATIONAL DEX ON", "DEX NACIONAL ACT."), "dex_national_on", 0, 0, sDexDone, UnlockNationalDex, NULL, NULL},
+    {CTR_EXTRAS_CHEATS, CTR_TEXT("NATIONAL DEX FULL", "DEX NACIONAL LLENA"), "dex_national", 0, 0, sDexDone, CompleteNationalDex, NULL, NULL},
+    {CTR_EXTRAS_CHEATS, CTR_TEXT("GIVE ITEMS", "DAR OBJETOS"), "give_open", 0, 0, sGiveOpenText, GiveOpen, NULL, NULL},
+    {CTR_EXTRAS_SCREEN(CTR_EXTRAS_CHEATS, 1), CTR_TEXT("GIVE ITEMS", "DAR OBJETOS"), "give_back", 0, 0, sGiveBackText, GiveBack, NULL, NULL},
+    {CTR_EXTRAS_SCREEN(CTR_EXTRAS_CHEATS, 1), CTR_TEXT("POCKET", "BOLSILLO"), "give_pocket", 5, 0, sGivePockets, NULL, NULL, NULL},
+    {CTR_EXTRAS_SCREEN(CTR_EXTRAS_CHEATS, 1), CTR_TEXT("ITEM", "OBJETO"), "give_item", 0, 0, NULL, NULL, GiveItemStep, GiveItemText},
+    {CTR_EXTRAS_SCREEN(CTR_EXTRAS_CHEATS, 1), CTR_TEXT("HOW MANY", "CANTIDAD"), "give_count", 5, 0, sGiveCounts, NULL, NULL, NULL},
+    {CTR_EXTRAS_SCREEN(CTR_EXTRAS_CHEATS, 1), CTR_TEXT("GIVE", "DAR"), "give_now", 0, 0, sGiveText, GiveItemsNow, NULL, NULL},
     {0},
 };
 

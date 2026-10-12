@@ -65,6 +65,17 @@ and VRAM behave differently there.
 
 ## Host tests
 
+The SDK-free day/night clock and lighting tests can also run separately:
+`make -C 3ds_port verify-daynight`. They are included in `make verify` and CI.
+The shared-clock consumers and timed encounter resolver are tested by
+`make -C 3ds_port verify-daynight verify-encounters`. After bootstrap, run
+`python3 3ds_port/tests/encounter_tables_test.py --tree build/upstream` to
+check every production route rule, its pinned species, levels/rates and
+original fallbacks under ASan/UBSan. Use `--tree build/upstream-es` for Spanish.
+`python3 3ds_port/tests/bottom_map_test.py` compares partial/full map redraws,
+including the clock footer, midnight, toggles and location changes.
+See [day/night validation](DAY_NIGHT.md) for the hardware acceptance checklist.
+
 `make verify` builds and runs the C host tests (input decoding, video decode,
 pack parser, voxel world hashing, arena, atlas, trees, lighting, ground mesh,
 signposts, relief) and audits the link. The builder's tests:

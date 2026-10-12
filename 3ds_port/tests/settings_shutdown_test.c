@@ -42,6 +42,10 @@ int main(int argc, char **argv) {
     pthread_mutex_unlock(&diskMutex);
     /* Queue newer text while the worker owns an older snapshot. */
     CtrSettings_SetVoxelBlur(false); CtrSettings_SetShowFps(true);
+    CtrSettings_SetInt("day_night", 1); CtrSettings_SetInt("clock_speed", 5);
+    CtrSettings_SetInt("timed_encounters", 1); CtrSettings_SetInt("show_clock", 1);
+    assert(CtrSettings_GetInt("timed_encounters", 0) == 1 && CtrSettings_GetInt("show_clock", 0) == 1);
+    assert(CtrSettings_GetInt("day_night", 0) == 1 && CtrSettings_GetInt("clock_speed", 0) == 5);
     pthread_t card; assert(pthread_create(&card, NULL, SlowCard, NULL) == 0);
     CtrSettings_Shutdown(); pthread_join(card, NULL);
     assert(sSaver == NULL && sSaveQuit && !sSavePending);
@@ -49,6 +53,8 @@ int main(int argc, char **argv) {
     if (fault == 1) assert(errors == 2 && writes == 0);
     else {
         assert(writes == 2 && strstr(saved, "voxel=1\n") && strstr(saved, "voxel_blur=0\n") && strstr(saved, "fps=1\n"));
+        assert(strstr(saved, "day_night=1\n") && strstr(saved, "clock_speed=5\n"));
+        assert(strstr(saved, "timed_encounters=1\n") && strstr(saved, "show_clock=1\n"));
         assert(errors == (fault == 2 ? 2u : 0u));
     }
     CtrSettings_Shutdown(); /* idempotent, no freed-thread access */

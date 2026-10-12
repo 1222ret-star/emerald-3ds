@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "3ds_platform.h"
+#include "3ds_daynight.h"
 #include "3ds_video.h"
 #include "3ds_data.h"
 #include "3ds_bottom.h"
@@ -1057,6 +1058,9 @@ static void DrawSlot(int slot, float x, float y, bool flipX, bool flipY)
     DrawSlotTinted(slot, x, y, flipX, flipY, &sTint);
 }
 
+static bool sDayNightObject;
+static bool sDayNightEnv;
+
 static void Blend(unsigned layer, bool effects, bool semiTransparent)
 {
     /*
@@ -1066,12 +1070,22 @@ static void Blend(unsigned layer, bool effects, bool semiTransparent)
      * configuration again is a no-op: an overworld frame with forty sprites
      * asked for it forty times.
      */
-    unsigned key = layer | (effects << 8) | (semiTransparent << 9);
+    const CtrDayNightLight *light = CtrDayNight_Get();
+    bool night = (light->rgb[0] != 1.0f || light->rgb[1] != 1.0f || light->rgb[2] != 1.0f)
+              && !sInLayerTexture && !sStage && !sCentred && !sBattle && CtrGame_IsOverworld()
+              && ((layer >= 1 && layer <= 3) || (layer == 4 && sDayNightObject));
+    unsigned key = layer | (effects << 8) | (semiTransparent << 9) | (night << 10);
 
     if (key == sBlendKey) return;
     sBlendKey = key;
 
     C2D_Flush();
+    if (sDayNightEnv)
+    {
+        C3D_TexEnvInit(C3D_GetTexEnv(4));
+        C3D_TexEnvInit(C3D_GetTexEnv(5));
+        sDayNightEnv = false;
+    }
     C3D_AlphaTest(true, GPU_GREATER, 0);
     if (sObjWinPass != OBJWIN_NONE)
     {
@@ -1104,6 +1118,33 @@ static void Blend(unsigned layer, bool effects, bool semiTransparent)
 
     C2D_PlainImageTint(&sTint, C2D_Color32(fadeTo >> 24, fadeTo >> 16, fadeTo >> 8, 255),
                        paletteTint ? sPaletteFade : 0);
+    if (night)
+    {
+        C3D_TexEnv *env = C3D_GetTexEnv(4);
+
+        C3D_TexEnvSrc(env, C3D_RGB, GPU_PREVIOUS, GPU_CONSTANT, GPU_CONSTANT);
+        C3D_TexEnvFunc(env, C3D_RGB, GPU_MODULATE);
+        C3D_TexEnvColor(env, C2D_Color32((unsigned)(light->rgb[0] * 255 + 0.5f),
+                                       (unsigned)(light->rgb[1] * 255 + 0.5f),
+                                       (unsigned)(light->rgb[2] * 255 + 0.5f), 255));
+        float fade = paletteTint ? sPaletteFade : 0.0f;
+        uint32_t color = C2D_Color32(fadeTo >> 24, fadeTo >> 16, fadeTo >> 8, (unsigned)(fade * 255));
+
+        if (effects && (control & (1u << layer)) && effect >= 2)
+        {
+            unsigned channel = effect == 2 ? 255 : 0;
+
+            fade = Min(Reg(0x54), 16) / 16.0f;
+            color = C2D_Color32(channel, channel, channel, (unsigned)(fade * 255));
+        }
+        env = C3D_GetTexEnv(5);
+        C3D_TexEnvSrc(env, C3D_RGB, GPU_CONSTANT, GPU_PREVIOUS, GPU_CONSTANT);
+        C3D_TexEnvOpRgb(env, GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_ALPHA);
+        C3D_TexEnvFunc(env, C3D_RGB, GPU_INTERPOLATE);
+        C3D_TexEnvColor(env, color);
+        sDayNightEnv = true;
+        C2D_PlainImageTint(&sTint, C2D_Color32(0, 0, 0, 255), 0);
+    }
     /* A semi-transparent sprite blends even where the window turns colour
      * effects off: the overworld keeps WIN0 over the whole screen without
      * them, and its fog and clouds are still see-through on the GBA. */
@@ -1125,7 +1166,8 @@ static void Blend(unsigned layer, bool effects, bool semiTransparent)
     else if ((control & (1u << layer)) && effect >= 2)
     {
         unsigned c = effect == 2 ? 255 : 0;
-        C2D_PlainImageTint(&sTint, C2D_Color32(c, c, c, 255), Min(Reg(0x54), 16) / 16.0f);
+        if (!night)
+            C2D_PlainImageTint(&sTint, C2D_Color32(c, c, c, 255), Min(Reg(0x54), 16) / 16.0f);
     }
 }
 
@@ -3739,6 +3781,13 @@ static void DrawObjects(unsigned priority, bool effects)
         /* Below the PokeNav's picture is its background, not the space the
          * GBA parks its unused sprites in. */
         if (sCentredScreen == CTR_CENTRED_POKENAV && y >= 160) continue;
+        bool nightObject = !sStage && !sCentred && !sBattle
+                        && CtrDayNight_Get()->daylight != 1.0f
+                        && (sScreenOam[i >> 5] & (1u << (i & 31))) == 0;
+
+        if (sDayNightObject != nightObject)
+            SpriteBatchFlush();
+        sDayNightObject = nightObject;
         if (sNavBand && NavObjectBand(attr2 & 1023, y) != sNavBand) continue;
         /*
          * Any one of the fog's sprites gives the lattice its phase, on the
@@ -3762,7 +3811,7 @@ static void DrawObjects(unsigned priority, bool effects)
         {
             /* A new blend state ends the batch: Blend changes the GPU state. */
             static unsigned batchKey = ~0u;
-            unsigned key = (effects ? 1u : 0u) | (mode == 1 ? 2u : 0u);
+            unsigned key = (effects ? 1u : 0u) | (mode == 1 ? 2u : 0u) | (sDayNightObject ? 4u : 0u);
             float shiftX = x + CTR_VIEW_X + sLayerShift;
             int whole = (int)shiftX;
 
@@ -8221,6 +8270,7 @@ void CtrVideo_Present(void)
     sStats.display = Reg(0);
     if (sUsed > CACHE_COUNT - 4096) { memset(sHash, 0, sizeof(sHash)); sUsed = 0; ++sCacheGeneration; }
     PORT_PROF_BEGIN(palette);
+    CtrDayNight_Update();
     TrackVram();
     UpdatePalette();
     KeySectionColours();

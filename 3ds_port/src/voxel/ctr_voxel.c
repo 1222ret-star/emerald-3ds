@@ -33,6 +33,7 @@
 #include "3ds_assets.h"
 #include "3ds_log.h"
 #include "3ds_platform.h"
+#include "3ds_daynight.h"
 #include "3ds_video.h"
 
 #include "ctr_voxel.h"
@@ -4917,7 +4918,7 @@ static VoxelLight FogLight(const VoxelLight *clear, bool cave)
 }
 #endif
 
-static VoxelLight LightFor(bool indoor)
+static VoxelLight BaseLightFor(bool indoor)
 {
     VoxelLight light = {{1.00f, 0.99f, 0.95f}, {0.93f, 0.97f, 1.05f}, VOXEL_HAZE_MAX,
                         0.96f, 1.04f, 0.11f, 0.07f, 0.85f,
@@ -4983,6 +4984,28 @@ static VoxelLight LightFor(bool indoor)
     light.rays = 0.0f;
     light.bloom = 0.0f;
     light.motes = 0.0f;
+    return light;
+}
+
+static VoxelLight LightFor(bool indoor)
+{
+    VoxelLight light = BaseLightFor(indoor);
+
+    if (!indoor)
+    {
+        const CtrDayNightLight *cycle = CtrDayNight_Get();
+
+        for (unsigned channel = 0; channel < 3; ++channel)
+        {
+            light.sun[channel] *= cycle->rgb[channel];
+            light.shade[channel] *= cycle->rgb[channel];
+            light.hazeRgb[channel] *= cycle->rgb[channel];
+        }
+        light.rays *= cycle->daylight;
+        light.motes *= cycle->daylight;
+        light.dappleLow = 1.0f + (light.dappleLow - 1.0f) * cycle->daylight;
+        light.dappleHigh = 1.0f + (light.dappleHigh - 1.0f) * cycle->daylight;
+    }
     return light;
 }
 
@@ -6006,9 +6029,14 @@ void CtrVoxel_Draw(C3D_RenderTarget *target, float eyeOffset)
 
     if (sReflectionVertices != 0)
     {
+        VoxelLight reflected = unlit;
+
+        if (!indoor)
+            for (unsigned channel = 0; channel < 3; ++channel)
+                reflected.sun[channel] = reflected.shade[channel] = CtrDayNight_Get()->rgb[channel];
         /* Mirrored sprite art lies just above reflective ground. One draw for
          * every visible reflection, blended without writing depth. */
-        SetGrade(&unlit);
+        SetGrade(&reflected);
         C3D_TexBind(0, &sSpriteAtlas);
         C3D_AlphaTest(true, GPU_GREATER, 0);
         C3D_DepthTest(true, GPU_GREATER, GPU_WRITE_COLOR);

@@ -3,6 +3,7 @@
 #include <malloc.h>
 #include <string.h>
 #include "3ds_platform.h"
+#include "3ds_daynight.h"
 #include "3ds_data.h"
 #include "3ds_audio.h"
 #include "3ds_video.h"
@@ -26,6 +27,7 @@ static void Lifecycle(APT_HookType type, void *parameter)
         CtrLog_Write(CTR_LOG_BOOT, "suspend/sleep");
     else if (type == APTHOOK_ONRESTORE || type == APTHOOK_ONWAKEUP)
     {
+        CtrDayNight_Resume();
         CtrInput_Clear();
         sLastFrame = CtrPlatform_Milliseconds();
         sLastTick = sExitStart = 0;

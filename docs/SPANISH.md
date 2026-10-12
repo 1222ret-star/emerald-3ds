@@ -63,8 +63,16 @@ Si un cambio del port modifica alguno de los archivos fuente del manifiesto,
 la localización se detiene («Source differs from the pinned patched tree»)
 hasta que se actualicen sus posiciones y huellas.
 
-Las funciones añadidas después de la traducción (ajustes y trucos nuevos de
-la pantalla táctil, por ejemplo) pueden mostrar todavía textos en inglés.
+Las pestañas de opciones, mejoras y trucos de la pantalla táctil también
+están traducidas, incluidos sus valores, acciones y el menú para dar objetos.
+Las etiquetas usan abreviaturas y texto sin tildes donde el conversor de
+la interfaz solo admite ASCII. Los nombres de objetos proceden de tu ROM.
+El ciclo opcional de día/noche y la velocidad del reloj aparecen como
+`DIA / NOCHE` y `VELOC. RELOJ`; las opciones binarias muestran `NO` y `SI`.
+`POKéMON SALV.` permite elegir `ORIGINAL` o `POR HORARIO`, de forma
+independiente del tinte. `VER RELOJ` añade hora, franja y velocidad al pie del
+mapa inferior; las franjas se muestran como `MANANA`, `DIA` y `NOCHE`.
+Las dos opciones nuevas están desactivadas de forma predeterminada.
 
 ## Autoría
 
