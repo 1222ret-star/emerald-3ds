@@ -1433,11 +1433,8 @@ def export(models, path):
             window_pixels = None
             if key[0] == "m":
                 model = models[key[1]]
-                rectangles = voxel_night.NIGHT_WINDOWS.get(model.name, ())
-                full_mask = voxel_night.window_mask(model.art, rectangles)
+                full_mask = voxel_night.building_mask(model.art, model.name)
                 window_pixels = Image.frombytes("L", model.art.size, bytes(full_mask)).crop(crops[model.name])
-                if rectangles and not any(full_mask):
-                    raise ValueError("%s has no glass pixels in its authored windows" % model.name)
             for y in range(img.size[1]):
                 for x in range(img.size[0]):
                     r_, g_, b_, a_ = apx[x, y]

@@ -522,7 +522,7 @@ build/voxel_sign_test.exe: tests/voxel_sign_test.c src/voxel/voxel_sign.c src/vo
 	@mkdir -p $(@D)
 	$(HOSTCC) -std=c99 -O2 -Wall -Wextra -Werror -Iinclude -Isrc/voxel \
 		-DVOXEL_HOST_FILES -DSIGN_MASK_PATH='"romfs/voxel/signposts.bin"' \
-		tests/voxel_sign_test.c src/voxel/voxel_sign.c -o $@
+		tests/voxel_sign_test.c src/voxel/voxel_sign.c -lm -o $@
 
 # The mountains' geometry against what the projection allows, every drawn
 # group (scripts/voxel_relief_check.py), compared with the run before.

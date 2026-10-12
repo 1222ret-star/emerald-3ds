@@ -166,7 +166,7 @@ release: build/$(TARGET)_3dsx.elf $(TARGET).smdh romfs/boot.txt $(ROMFS_DATA_OUT
 # The data pack, built from this tree's own staging: the release path, tested
 # without the builder.
 pak: romfs/engine/abi.bin
-	"$(PYTHON)" $(SCRIPTS)/staging.py pak --romfs romfs --out build/emerald3ds.pak
+	"$(PYTHON)" $(SCRIPTS)/staging.py pak --romfs romfs --out build/emerald3ds.pak --game-config $(ROOT)/include/constants/global.h
 
 # Loose game data for sdmc:/3ds/emerald3ds/devdata/ (see tools/dev_assets.py).
 devdata: romfs/engine/abi.bin
@@ -187,6 +187,7 @@ verify: verify-video
 verify: verify-daynight
 verify: verify-clock-store
 verify: verify-night-windows
+verify: verify-night-lamps
 verify: verify-encounters
 .PHONY: verify-encounters
 verify-encounters: build/encounters_test.exe
@@ -198,6 +199,14 @@ build/encounters_test.exe: tests/encounters_test.c src/3ds_encounters.c include/
 
 .PHONY: verify-daynight
 .PHONY: verify-night-windows
+.PHONY: verify-night-lamps
+verify-night-lamps: build/voxel_lamps_test$(EXESUFFIX)
+	./build/voxel_lamps_test$(EXESUFFIX)
+
+build/voxel_lamps_test$(EXESUFFIX): tests/voxel_lamps_test.c src/voxel/voxel_sign.c src/voxel/voxel_sign.h
+	@mkdir -p build
+	$(HOSTCC) -std=c99 -O2 -Wall -Wextra -Werror -Iinclude -Isrc/voxel -DVOXEL_HOST_FILES -DSIGN_MASK_PATH='"build/voxel_lamps_fixture.bin"' tests/voxel_lamps_test.c src/voxel/voxel_sign.c -lm -o $@
+
 verify-night-windows:
 	"$(PYTHON)" tests/voxel_night_test.py --cc "$(HOSTCC)" --assets romfs/voxel/buildings.bin
 

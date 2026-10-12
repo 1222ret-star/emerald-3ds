@@ -185,9 +185,11 @@ sunset and fade out towards morning. Coverage starts with Petalburg's shared
 four- and five-cell houses, Oldale's houses, Littleroot's two houses and lab,
 and Route 104's flower shop. Reused copies of those building models receive
 the same effect. Frames, roofs, signs, doors and ground are excluded.
-This does not claim coverage for every Hoenn building. Street lamps and
-classic 2D window emission are not implemented in this preview; classic 2D
-does receive the softer global transitions.
+This does not claim coverage for every Hoenn building. The separate
+[city-lighting extension](CITY_LIGHTS.md) extends supported glass coverage and
+adds original street lamps with local ground pools. On 2026-10-12 the user
+reported successful 3DS testing and authorized publication. Classic 2D window emission remains
+unimplemented; classic 2D does receive the softer global transitions.
 
 Window light follows `day_night` and the shared effective clock, without a
 new setting. With lighting disabled, indoors, or without a valid RTC, its
@@ -247,10 +249,11 @@ the latest supplied build works on their physical 3DS and authorized uploading
 these follow-up changes to PR #57. No console model or itemized results were
 provided; this records general hardware acceptance, not individual checklist passes.
 
-The broad terrain mesh harness could not link because its existing fixture
-does not supply `gTileset_Dewford`, which the unchanged tree code references.
-That fixture was not altered. Automated validation is not a full-suite pass or
-a GPU performance measurement; hardware acceptance is the user's report above.
+The earlier broad terrain mesh harness could not link because its fixture
+did not supply `gTileset_Dewford`, which the unchanged tree code references.
+The CI repair now supplies that symbol and updates stale tree/settings fixtures;
+the complete staged `make verify` passes. This is not a GPU performance
+measurement; hardware acceptance is the user's report above.
 
 ## Automated validation
 

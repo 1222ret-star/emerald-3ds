@@ -174,7 +174,7 @@ def copy_or_concat_asset(obj_rel: str, symbol: str, rel_paths: list[str]) -> tup
         dst = FS_DIR / rel
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dst)
-        return (f"{URI_PREFIX}{rel.replace('\\', '/')}", src.stat().st_size, [0])
+        return (URI_PREFIX + rel.replace("\\", "/"), src.stat().st_size, [0])
 
     obj_tag = obj_rel.replace("/", "_").replace(".o", "")
     out_rel = Path("generated") / "assets" / f"{obj_tag}__{symbol}.bin"
@@ -193,7 +193,7 @@ def copy_or_concat_asset(obj_rel: str, symbol: str, rel_paths: list[str]) -> tup
             fout.write(data)
             total_size += len(data)
 
-    return (f"{URI_PREFIX}{str(out_rel).replace('\\', '/')}", total_size, offsets)
+    return (URI_PREFIX + str(out_rel).replace("\\", "/"), total_size, offsets)
 
 
 def configure(argv: list[str] | None = None) -> None:

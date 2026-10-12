@@ -89,7 +89,7 @@ interface on the bottom screen replaces the START menu. Enable the optional
 | **Native 3DS homebrew** | Runs directly on the console's ARM11 using libctru, Citro2D and Citro3D, without an emulator. |
 | **Two screens, one adventure** | The game on top, with a dedicated touch interface below in place of the START menu. |
 | **Optional voxel overworld** | Modelled buildings, trees, signposts and terrain relief, with adjustable camera angle and zoom. |
-| **Optional day/night lighting** | Eased morning, daylight, sunset and night outdoors in both 2D and voxel mode, an independently adjustable visual clock, and experimental moving solar shadows and warm windows on supported voxel houses. |
+| **Optional day/night lighting** | Eased morning, daylight, sunset and night outdoors in both 2D and voxel mode, an independently adjustable visual clock, and experimental moving solar shadows, warm glass on supported voxel buildings and original Rustboro lamps. |
 | **Built from your own cartridge** | The builder generates the game data locally from your own dump. No ROM content is distributed. |
 
 ### A new perspective on Hoenn
@@ -135,6 +135,11 @@ Random encounters, Sweet Scent and new visible Pokémon share the schedule.
 name on the bottom MAP screen. It is OFF by default. The clock, encounters
 and lighting work independently and share the selected clock speed.
 See the [day/night test guide](docs/DAY_NIGHT.md) before publishing a build.
+The [city-lighting extension](docs/CITY_LIGHTS.md) extends voxel emission to
+shared Pokémon Centers, marts, gyms, Rustboro apartment blocks and Devon,
+plus the original street lamps and small ground-light pools. It follows
+the same clock without a separate setting and has user-reported 3DS acceptance.
+Unmodelled buildings and classic 2D windows do not receive local emission.
 The experimental follow-up also accelerates berry growth and preserves the
 clock offset and pending fractions alongside the save. Daily events remain
 on the original RTC; sleep/offline time advances at 1X. Back up the auxiliary

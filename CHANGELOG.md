@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- Local staging packs now select their ROM fingerprint from the compiled game
+  language, rather than marking Spanish data as English. An explicitly supplied
+  ROM must match that language; synthetic tests cover both profiles and rejection.
+- City lighting (user-reported 3DS acceptance): extend authored voxel
+  glass masks to shared Pokémon Centers, marts and gyms, Rustboro apartment
+  blocks and Devon; correct Littleroot east-house window coordinates.
+  Original Rustboro lamps emit warm glass and bounded floor-only light pools,
+  cached with the visible map state and faded by the existing shared clock.
+  Unmodelled buildings and classic 2D windows remain outside local emission.
+- CI: remove Python 3.12-only f-string expressions from asset-table generation
+  so the Python 3.11 build container can bootstrap. Add URI/offset regression
+  tests in that container and update voxel fixtures for tileset-aware tree APIs,
+  atlas dimensions and clock updates. Package CI's engine-only ZIP under the
+  existing allowed `payload/` layout without weakening publication checks.
 - Experimental follow-up: berry growth shares clock acceleration, with
   fractional bonus-minute carry, continuous speed changes and save-bound clock
   persistence. Sleep/offline time stays at 1X; daily RTC events remain original.

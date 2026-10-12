@@ -14,6 +14,7 @@
 
 static VoxelMapInstance sMap={.layoutId=1,.width=8,.height=8};
 static VoxelAtlasMap sAtlas;
+const uint8_t gTileset_Dewford = 0;
 static VoxelVertex sWhole[12000],sChunks[12000];
 
 unsigned VoxelRegions_RoleAt(unsigned id,int x,int y)

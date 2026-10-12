@@ -11,7 +11,7 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
-from voxel_night import window_mask, NIGHT_WINDOWS
+from voxel_night import window_mask, building_mask, NIGHT_WINDOWS
 
 
 def mask_tests():
@@ -34,6 +34,25 @@ def mask_tests():
     else:
         raise AssertionError("out-of-bounds window accepted")
     assert "kit_house_4" in NIGHT_WINDOWS and "kit_house_5" in NIGHT_WINDOWS
+    assert NIGHT_WINDOWS["littleroot_house_e"][0][0] == 49
+    for name in ("pokemon_center", "poke_mart", "gym", "gym_rustboro", "devon_corporation"):
+        assert name in NIGHT_WINDOWS
+    house = Image.new("RGBA", (80, 80), (65, 74, 106, 255))
+    house.putpixel((49, 62), (189, 205, 230, 255))
+    assert building_mask(house, "littleroot_house_e")[62 * 80 + 49] != 0
+    assert building_mask(house, "littleroot_house_e_bare") == building_mask(house, "littleroot_house_e")
+    assert not any(building_mask(house, "unannotated_house"))
+    stone = Image.new("RGBA", (80, 80), (139, 148, 156, 255))
+    for ypos in range(53, 63):
+        for xpos in range(19, 29):
+            stone.putpixel((xpos, ypos), (65, 74, 106, 255)
+                           if xpos in (19, 23, 24, 28) or ypos in (57, 62)
+                           else (156, 180, 213, 255))
+    stone_mask = building_mask(stone, "rustboro_stone_31_15")
+    assert any(stone_mask)
+    assert not any(stone_mask[:53 * 80])
+    assert stone_mask[54 * 80 + 20] > 0 and stone_mask[54 * 80 + 23] == 0
+    assert stone_mask[54 * 80 + 18] == 0
 
 
 def reader_tests(cc):
@@ -98,7 +117,7 @@ int main(int argc, char **argv)
 def renderer_tests(cc):
     text = (ROOT / "src/voxel/ctr_voxel.c").read_text()
     functions = []
-    for name in ("ReleaseGlowUnit", "BuildingGlowEnv"):
+    for name in ("ReleaseGlowUnit", "BuildingGlowEnv", "LampTexEnv"):
         start = text.index("static void " + name + "(")
         position = text.index("{", start) + 1
         depth = 1
@@ -111,11 +130,12 @@ def renderer_tests(cc):
 #include <stdint.h>
 #include <stddef.h>
 #include <string.h>
+#include <stdbool.h>
 typedef struct { unsigned placeholder; } C3D_Tex;
 typedef struct { int rgb[3], alpha[3], alphaOp[3], rgbOp[3], rgbFunc, alphaFunc; uint32_t colour; } C3D_TexEnv;
 enum { C3D_RGB, C3D_Alpha, GPU_TEXTURE0, GPU_TEXTURE2, GPU_CONSTANT, GPU_PREVIOUS,
        GPU_TEVOP_A_SRC_R, GPU_TEVOP_A_SRC_ALPHA, GPU_MODULATE, GPU_TEVOP_RGB_SRC_COLOR,
-       GPU_TEVOP_RGB_SRC_ALPHA, GPU_INTERPOLATE, GPU_REPLACE };
+       GPU_TEVOP_RGB_SRC_ALPHA, GPU_INTERPOLATE, GPU_REPLACE, GPU_PRIMARY_COLOR, GPU_TEVSCALE_2 };
 static uint8_t __C3D_Context[512] __attribute__((aligned(16)));
 #define C3DI_CONTEXT_FLAGS 0x20u
 #define C3DI_CONTEXT_TEX 0x118u
@@ -123,6 +143,7 @@ static uint8_t __C3D_Context[512] __attribute__((aligned(16)));
 static C3D_Tex sTreeAtlas, *sGlowBound;
 static C3D_TexEnv sEnvs[6];
 static int sBinds;
+static int sAlphaScale;
 static C3D_TexEnv *C3D_GetTexEnv(unsigned index) { return &sEnvs[index]; }
 static void TerrainTexEnv(void *unused) { (void)unused; memset(sEnvs, 0, sizeof(sEnvs)); }
 static void C3D_TexBind(int unit, C3D_Tex *texture)
@@ -143,6 +164,9 @@ static void C3D_TexEnvOpRgb(C3D_TexEnv *env, int first, int second, int third)
 static void C3D_TexEnvFunc(C3D_TexEnv *env, int mode, int function)
 { if (mode == C3D_RGB) env->rgbFunc = function; else env->alphaFunc = function; }
 static void C3D_TexEnvColor(C3D_TexEnv *env, uint32_t colour) { env->colour = colour; }
+static void C3D_TexEnvInit(C3D_TexEnv *env) { memset(env, 0, sizeof(*env)); sAlphaScale = 0; }
+static void C3D_TexEnvScale(C3D_TexEnv *env, int mode, int scale)
+{ (void)env; assert(mode == C3D_Alpha); sAlphaScale = scale; }
 '''
     source += "\n".join(functions)
     source += r'''
@@ -173,6 +197,15 @@ int main(void)
     BuildingGlowEnv(&mask, 1.0f);
     BuildingGlowEnv(NULL, 1.0f);
     assert(bound[2] == NULL && sGlowBound == NULL && sEnvs[2].colour == 0);
+    LampTexEnv(1.0f, false);
+    assert(sEnvs[0].rgbFunc == GPU_REPLACE && sEnvs[0].alphaFunc == GPU_REPLACE);
+    assert(sEnvs[0].colour == 0xDC6BBFFFu && sAlphaScale == 0);
+    LampTexEnv(1.0f, true);
+    assert(sEnvs[0].alpha[0] == GPU_PRIMARY_COLOR && sEnvs[0].alphaFunc == GPU_MODULATE);
+    assert(sEnvs[0].alphaOp[0] == GPU_TEVOP_A_SRC_R && sAlphaScale == GPU_TEVSCALE_2);
+    assert(sEnvs[0].colour == 0x4B6BBFFFu);
+    LampTexEnv(0.0f, true);
+    assert((sEnvs[0].colour >> 24) == 0);
     return 0;
 }
 '''
@@ -209,16 +242,51 @@ def asset_tests(path):
     print("PASS night assets: %d glowing pages, opaque glass only" % lit_count)
 
 
+def production_tests(tree):
+    sys.path.insert(0, str(tree / "3ds_port/scripts"))
+    import gen_voxel_buildings as generator
+    import voxel_building as building
+    import voxel_building_specs as specs
+
+    checked = 0
+    for spec in specs.SPECS:
+        expanded = generator.kit_specs(spec) if "kit" in spec else [spec]
+        for current in expanded:
+            name = current["name"]
+            if name not in NIGHT_WINDOWS and not name.startswith(("rustboro_stone_", "rustboro_olive_")):
+                continue
+            layout = building.LayoutArt(current["layout"])
+            xpos, ypos, width, height = current["rect"]
+            art = layout.building_art(xpos, ypos, width, height,
+                                      layout.ground_tiles(current["ground"]))
+            original = art.tobytes()
+            mask = building_mask(art, name)
+            assert any(mask), name
+            assert art.tobytes() == original
+            for index, value in enumerate(mask):
+                if value:
+                    assert art.getpixel((index % art.width, index // art.width))[3] >= 128
+            if name.startswith(("rustboro_stone_", "rustboro_olive_")):
+                assert not any(mask[:48 * art.width]), name
+            assert building_mask(art, name + "_bare") == mask
+            checked += 1
+    assert checked == 19
+    print("PASS production city windows: %d exterior models, opaque panes, unchanged art, dark roofs" % checked)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--cc", default="clang")
     parser.add_argument("--assets", type=Path)
+    parser.add_argument("--tree", type=Path)
     arguments = parser.parse_args()
     mask_tests()
     reader_tests(arguments.cc)
     renderer_tests(arguments.cc)
     if arguments.assets:
         asset_tests(arguments.assets)
+    if arguments.tree:
+        production_tests(arguments.tree)
     print("PASS night windows: masks, unchanged art, legacy pages, streaming slices, truncation, bounds")
 
 

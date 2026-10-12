@@ -133,9 +133,13 @@ typedef struct
  */
 #define VOXEL_SPRITE_RESERVE 128u
 #define VOXEL_REFLECTION_RESERVE (VOXEL_SPRITE_SLOTS * VOXEL_REFLECTION_VERTICES)
-#define VOXEL_DYNAMIC_VERTICES (VOXEL_SPRITE_RESERVE + VOXEL_SHADOW_RESERVE + VOXEL_REFLECTION_RESERVE)
+#define VOXEL_LAMP_RESERVE 2046u
+#define VOXEL_LAMP_GROUND_RESERVE 4092u
+#define VOXEL_DYNAMIC_VERTICES (VOXEL_SPRITE_RESERVE + VOXEL_SHADOW_RESERVE + VOXEL_REFLECTION_RESERVE + VOXEL_LAMP_RESERVE + VOXEL_LAMP_GROUND_RESERVE)
 #define VOXEL_SHADOW_FIRST VOXEL_SPRITE_RESERVE
 #define VOXEL_REFLECTION_FIRST (VOXEL_SHADOW_FIRST + VOXEL_SHADOW_RESERVE)
+#define VOXEL_LAMP_FIRST (VOXEL_REFLECTION_FIRST + VOXEL_REFLECTION_RESERVE)
+#define VOXEL_LAMP_GROUND_FIRST (VOXEL_LAMP_FIRST + VOXEL_LAMP_RESERVE)
 
 /* One atlas per tileset pair, shared by every map that uses that pair. Six:
  * walking back and forth through a string of towns and routes reaches five
@@ -894,6 +898,11 @@ static C3D_Tex sTreeAtlas;
 static bool sHaveBuildings;
 static unsigned sSpriteVertices;
 static unsigned sReflectionVertices;
+static unsigned sLampVertices, sLampGroundVertices;
+static bool sLampReady;
+static uint32_t sLampSignature, sLampDigest;
+static int sLampX, sLampZ;
+static int sLampView[4];
 #if CTR_VOXEL_LIGHTING
 static unsigned sShadowVertices;
 #endif
@@ -1618,6 +1627,8 @@ static void BrightenCrowns(uint16_t *texels)
 
 bool CtrVoxel_Init(void)
 {
+    sLampReady = false;
+    sLampVertices = sLampGroundVertices = 0;
     const char *step = "open " VOXEL_SHADER_PATH;
     FILE *file = fopen(VOXEL_SHADER_PATH, "rb");
     long size;
@@ -4363,6 +4374,38 @@ static void BattleCamera(void)
  * read back into a CPU copy, recomposed and written out whole, which was 6-7 ms
  * of a frame whenever it came round.
  */
+static void UpdateNightLamps(VoxelVertex *dynamic)
+{
+    if (!CtrGame_IsOutdoor() || CtrDayNight_Get()->glow <= 0.0f)
+    {
+        sLampReady = false;
+        sLampVertices = sLampGroundVertices = 0;
+        return;
+    }
+    if (sLampReady && sLampSignature == sInstanceSignature && sLampDigest == sLiveDigest
+        && sLampX == sDynamicX && sLampZ == sDynamicZ
+        && memcmp(sLampView, sViewRect, sizeof(sLampView)) == 0)
+        return;
+    VoxelBuilder glass, ground;
+    VoxelBuilder_Init(&glass, dynamic + VOXEL_LAMP_FIRST, VOXEL_LAMP_RESERVE);
+    VoxelBuilder_Init(&ground, dynamic + VOXEL_LAMP_GROUND_FIRST, VOXEL_LAMP_GROUND_RESERVE);
+    VoxelBuilder_SetOrigin(&glass, sDynamicX, sDynamicZ);
+    VoxelBuilder_SetOrigin(&ground, sDynamicX, sDynamicZ);
+    for (unsigned index = 0; index < VoxelWorld_InstanceCount(); ++index)
+        VoxelSign_EmitNight(&glass, &ground, VoxelWorld_Instance(index),
+                           sViewRect[0] - 3, sViewRect[1] - 3, sViewRect[2] + 3, sViewRect[3] + 3);
+    sLampVertices = glass.count;
+    sLampGroundVertices = ground.count;
+    PackDynamic(dynamic + VOXEL_LAMP_FIRST, glass.count, sDynamic + VOXEL_LAMP_FIRST);
+    PackDynamic(dynamic + VOXEL_LAMP_GROUND_FIRST, ground.count, sDynamic + VOXEL_LAMP_GROUND_FIRST);
+    sLampSignature = sInstanceSignature;
+    sLampDigest = sLiveDigest;
+    sLampX = sDynamicX;
+    sLampZ = sDynamicZ;
+    memcpy(sLampView, sViewRect, sizeof(sLampView));
+    sLampReady = true;
+}
+
 static void AnimateTiles(const VoxelMapInstance *inst)
 {
     VoxelAtlasSlot *active;
@@ -4647,6 +4690,8 @@ bool CtrVoxel_Update(void)
         sDynamicX = (int)floorf(sCamera.targetX);
         sDynamicZ = (int)floorf(sCamera.targetZ);
         sSpriteVertices = sReflectionVertices = 0;
+        sLampVertices = sLampGroundVertices = 0;
+        sLampReady = false;
         sStats.reflections = 0;
 #if CTR_VOXEL_LIGHTING
         sShadowVertices = 0;
@@ -4666,6 +4711,7 @@ bool CtrVoxel_Update(void)
         sDynamicX = (int)floorf(sCamera.targetX);
         sDynamicZ = (int)floorf(sCamera.targetZ);
 
+        UpdateNightLamps(dynamic);
         VoxelBuilder_Init(&sprites, dynamic, VOXEL_SPRITE_RESERVE);
         VoxelBuilder_SetOrigin(&sprites, sDynamicX, sDynamicZ);
         VoxelBuilder_Init(&reflections, dynamic + VOXEL_REFLECTION_FIRST,
@@ -4713,7 +4759,7 @@ bool CtrVoxel_Update(void)
     for (unsigned i = 0; i < VOXEL_CHUNK_SLOTS; ++i)
         if (sChunks[i].used)
             ++sStats.chunks;
-    sStats.vertices += sSpriteVertices + sReflectionVertices;
+    sStats.vertices += sSpriteVertices + sReflectionVertices + sLampVertices + sLampGroundVertices;
 #if CTR_VOXEL_LIGHTING
     sStats.vertices += sShadowVertices;
 #endif
@@ -5757,6 +5803,29 @@ static void BuildingGlowEnv(C3D_Tex *mask, float strength)
     C3D_TexEnvColor(env, 0xFFA0D8FFu);
 }
 
+static void LampTexEnv(float strength, bool ground)
+{
+    C3D_TexEnv *env;
+
+    TerrainTexEnv(NULL);
+    env = C3D_GetTexEnv(0);
+    C3D_TexEnvInit(env);
+    C3D_TexEnvSrc(env, C3D_RGB, GPU_CONSTANT, GPU_CONSTANT, GPU_CONSTANT);
+    C3D_TexEnvFunc(env, C3D_RGB, GPU_REPLACE);
+    C3D_TexEnvSrc(env, C3D_Alpha, ground ? GPU_PRIMARY_COLOR : GPU_CONSTANT,
+                  GPU_CONSTANT, GPU_CONSTANT);
+    if (ground)
+    {
+        C3D_TexEnvOpAlpha(env, GPU_TEVOP_A_SRC_R, GPU_TEVOP_A_SRC_ALPHA, GPU_TEVOP_A_SRC_ALPHA);
+        C3D_TexEnvFunc(env, C3D_Alpha, GPU_MODULATE);
+        C3D_TexEnvScale(env, C3D_Alpha, GPU_TEVSCALE_2);
+    }
+    else
+        C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
+    C3D_TexEnvColor(env, ((uint32_t)(strength * (ground ? 75.0f : 220.0f) + 0.5f) << 24)
+                         | 0x006BBFFFu);
+}
+
 static void HazeTexEnv(uint32_t colour)
 {
     C3D_TexEnv *env = C3D_GetTexEnv(3);
@@ -6120,6 +6189,34 @@ void CtrVoxel_Draw(C3D_RenderTarget *target, float eyeOffset)
     /* Billboards and shadows: the linear buffer, around the camera's tile. */
     SetModelView(&view, sDynamicX, sDynamicZ);
     BindVertices(sDynamic);
+
+    if (!indoor && !sBattle.on && CtrGame_IsOutdoor() && CtrDayNight_Get()->glow > 0.0f
+        && (sLampVertices != 0 || sLampGroundVertices != 0))
+    {
+        float strength = CtrDayNight_Get()->glow;
+        SetGrade(&unlit);
+        C3D_AlphaTest(false, GPU_ALWAYS, 0);
+        C3D_DepthTest(true, GPU_GREATER, GPU_WRITE_COLOR);
+        C3D_DepthMap(true, -1.0f, 3.0f / 65535.0f);
+        C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD,
+                      GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_ZERO, GPU_ONE);
+        if (sLampGroundVertices != 0)
+        {
+            LampTexEnv(strength, true);
+            C3D_DrawArrays(GPU_TRIANGLES, VOXEL_LAMP_GROUND_FIRST, sLampGroundVertices);
+        }
+        if (sLampVertices != 0)
+        {
+            LampTexEnv(strength, false);
+            C3D_DrawArrays(GPU_TRIANGLES, VOXEL_LAMP_FIRST, sLampVertices);
+        }
+        C3D_DepthMap(true, -1.0f, 0.0f);
+        C3D_AlphaTest(true, GPU_GREATER, 0);
+        C3D_ColorLogicOp(GPU_LOGICOP_COPY);
+        C3D_DepthTest(true, GPU_GREATER, GPU_WRITE_ALL);
+        TerrainTexEnv(NULL);
+        SetGrade(&light);
+    }
 
     if (sReflectionVertices != 0)
     {

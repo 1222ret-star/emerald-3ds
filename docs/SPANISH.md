@@ -13,10 +13,17 @@ La vista experimental de luces suaves usa el mismo código en los dos idiomas:
 transiciones de dos horas de juego y cristales cálidos en casas voxel
 compatibles, incluidas las de Ciudad Petalia. Se activa con **MEJORAS →
 DIA / NOCHE → AUTO** y respeta **VELOC. RELOJ**. No cambia los horarios de
-encuentros ni la partida. Las farolas y los cristales luminosos en el modo
+encuentros ni la partida. Los cristales luminosos en el modo
 clásico 2D siguen pendientes. El usuario confirmó esta compilación en consola
 y autorizó incorporarla a la PR #57. Consulta el
 [alcance y procedimiento](DAY_NIGHT.md#experimental-follow-up-softer-transitions-and-warm-windows).
+
+La [ampliación de iluminación urbana](CITY_LIGHTS.md) amplía los
+cristales voxel a Centros Pokémon, tiendas, gimnasios, bloques de Ciudad
+Férrica y Devon, y enciende las farolas originales de Ciudad Férrica con
+pequeños halos cálidos sobre el suelo. Usa el mismo reloj en inglés y español.
+El usuario confirmó su funcionamiento en 3DS y autorizó subirla a la PR #57;
+no añade farolas a ciudades que no las tienen ni cubre edificios sin modelo.
 
 Igual que la versión inglesa: el builder web y el de Windows aceptan las dos
 ROM y eligen solos el idioma. Cada release incluye las dos variantes: el

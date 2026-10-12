@@ -40,6 +40,21 @@ const int16_t *VoxelRelief_Cell(const VoxelMapInstance *inst, int x, int y)
     (void)inst; (void)x; (void)y;
     return NULL;
 }
+float VoxelRelief_Base(const VoxelMapInstance *inst)
+{
+    (void)inst;
+    return 0.0f;
+}
+float VoxelRelief_CellLift(const VoxelMapInstance *inst, int x, int y)
+{
+    (void)inst; (void)x; (void)y;
+    return 0.0f;
+}
+float VoxelRelief_CellShift(const VoxelMapInstance *inst, int x, int y)
+{
+    (void)inst; (void)x; (void)y;
+    return 0.0f;
+}
 unsigned VoxelRegions_RoleAt(unsigned id,int x,int y)
 {
     return id == sLayout && x == sX && y == sY ? VOXEL_ROLE_SIGNPOST : VOXEL_ROLE_FLOOR;
