@@ -393,7 +393,7 @@ static void PictureSize(const struct Sprite *sprite, const struct ObjectEvent *o
         return;
     info = GetObjectEventGraphicsInfo(obj->graphicsId);
     if ((info->width > *w || info->height > *h)
-     && info->width <= VOXEL_SPRITE_SLOT_DIM && info->height <= VOXEL_SPRITE_SLOT_DIM)
+     && info->width <= (int)VOXEL_SPRITE_SLOT_DIM && info->height <= (int)VOXEL_SPRITE_SLOT_DIM)
     {
         *w = info->width;
         *h = info->height;
