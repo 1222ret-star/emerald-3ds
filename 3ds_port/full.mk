@@ -68,6 +68,8 @@ FULL_DATA_OBJS += build/root/3ds_song_blob.o
 BACKEND_SRCS := src/3ds_assets.c src/3ds_map_loader.c src/3ds_compat.c
 BACKEND_SRCS += src/3ds_game_full.c src/3ds_game_bridge.c src/3ds_script_loader.c
 BACKEND_SRCS += src/3ds_bottom_ui.c
+# The battle's info boxes at the screen's resolution (3ds_battle_hud.h).
+BACKEND_SRCS += src/3ds_battle_hud.c
 build/bridge/3ds_bottom_ui.o: FULLCFLAGS += -DCTR_APP_VERSION='"$(APP_VERSION)"'
 # The ENHANCEMENTS and CHEATS pages of OPTIONS (include/3ds_extras.h).
 BACKEND_SRCS += src/3ds_extras.c
@@ -93,6 +95,8 @@ BACKEND_SRCS += src/3ds_map_events.c
 BACKEND_SRCS += src/3ds_sprite_ids.c
 # The scene cycling test of phase F2 (empty unless built with CTR_CYCLE_TEST).
 BACKEND_SRCS += src/3ds_cycle_test.c
+# Its flags, e.g. TEST_FLAGS=-DCTR_BATTLE_TEST=SPECIES_SHUCKLE (touch the source to rebuild it).
+build/bridge/3ds_cycle_test.o: FULLCFLAGS += $(TEST_FLAGS)
 MAP_WRAPPED := MapGridSetMetatileIdAt MapGridSetMetatileEntryAt MapGridSetMetatileImpassabilityAt \
 	InitMap InitMapFromSavedGame SetCurrentMapLayout GenerateBattlePyramidFloorLayout \
 	GenerateTrainerHillFloorLayout CameraMove
@@ -124,6 +128,8 @@ endif
 ROMFS_SHADER_OUTS += romfs/stage/leaves.bin
 # The bottom screen's battle menus: the port's own art (scripts/gen_battle_art.py).
 ROMFS_SHADER_OUTS += romfs/bottom/battle.bin
+# The battle's info boxes and text box: the port's own art (scripts/gen_battle_hud.py).
+ROMFS_SHADER_OUTS += romfs/battle/hud.bin
 
 FULL_OBJECTS := $(FULL_C_OBJS) $(FULL_DATA_OBJS) $(BACKEND_OBJS)
 # The keep table is only referenced from the payload, which is not linked,
@@ -436,6 +442,10 @@ romfs/voxel/relief.bin: scripts/gen_voxel_relief.py scripts/voxel_cells.py scrip
 romfs/bottom/battle.bin: scripts/gen_battle_art.py
 	@mkdir -p $(@D)
 	"$(PYTHON)" scripts/gen_battle_art.py --output $@
+
+romfs/battle/hud.bin: scripts/gen_battle_hud.py
+	@mkdir -p $(@D)
+	"$(PYTHON)" scripts/gen_battle_hud.py --output $@
 
 romfs/stage/leaves.bin: scripts/gen_intro_margins.py $(ROOT)/graphics/intro/scene_1/bg.4bpp \
 		$(wildcard $(ROOT)/graphics/intro/scene_1/bg?_map.bin)

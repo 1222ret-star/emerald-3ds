@@ -19,6 +19,8 @@
 #include "script_pokemon_util.h"
 #include "overworld.h"
 #include "constants/species.h"
+#include "constants/opponents.h"
+#include "trainer_see.h"
 #include "3ds_platform.h"
 
 #ifdef CTR_CYCLE_TEST
@@ -99,6 +101,45 @@ void CtrCycle_Input(CtrInputSample *sample)
     if (sPress)
         sample->buttons |= 1;
 }
+
+#elif defined(CTR_BATTLE_TEST)
+
+/*
+ * A battle on demand, for looking at the battle screen in an emulator
+ * (-DCTR_BATTLE_TEST=SPECIES_x, optionally -DCTR_BATTLE_TEST_LEVEL=n, or
+ * -DCTR_BATTLE_TEST_TRAINER=TRAINER_x for that trainer's battle - a double
+ * one for a doubles trainer): a second and a half after the field is up,
+ * every time it is. Nothing else is pressed.
+ */
+#ifndef CTR_BATTLE_TEST_LEVEL
+#define CTR_BATTLE_TEST_LEVEL 50
+#endif
+static u32 sFrame, sFieldSince;
+
+void CtrCycle_Frame(void)
+{
+    ++sFrame;
+    if (gMain.callback2 != CB2_Overworld || gMain.inBattle)
+    {
+        sFieldSince = 0;
+        return;
+    }
+    if (!sFieldSince)
+        sFieldSince = sFrame;
+    if (sFrame - sFieldSince == 90)
+    {
+#ifdef CTR_BATTLE_TEST_TRAINER
+        gNoOfApproachingTrainers = 1;
+        gTrainerBattleOpponent_A = CTR_BATTLE_TEST_TRAINER;
+        BattleSetup_StartTrainerBattle();
+#else
+        CreateScriptedWildMon(CTR_BATTLE_TEST, CTR_BATTLE_TEST_LEVEL, 0);
+        BattleSetup_StartScriptedWildBattle();
+#endif
+    }
+}
+
+void CtrCycle_Input(CtrInputSample *sample) { (void)sample; }
 
 #else
 

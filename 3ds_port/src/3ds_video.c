@@ -11,6 +11,8 @@
 #include "3ds_video.h"
 #include "3ds_data.h"
 #include "3ds_bottom.h"
+#include "ctr_battle_layout.h"
+#include "3ds_battle_hud.h"
 #include "../compat/port_prof.h"
 
 /* Public queue passed by libctru, never a cast of Citro3D's private context.
@@ -278,6 +280,13 @@ static int sSurfaceH = 256;
 #define SCENE_ZOOM 2.0f
 #define SCENE_W 1024
 #define SCENE_H 256
+/*
+ * The GBA line the battle scene is composed down to: the top of the text box
+ * frame (CTR_BATTLE_BOX_TOP), which floats a few lines lower than the GBA's
+ * picture ends; below that, behind the box's margins, the scene's last line
+ * is carried down (ScenePlaceFrom).
+ */
+#define BATTLE_SCENE_BOTTOM (112 + (int)ceilf((CTR_BATTLE_BOX_TOP - (CTR_GAME_HEIGHT - 48)) / CTR_BATTLE_ZOOM))
 static C3D_Tex sSceneTex;
 static C3D_RenderTarget *sScene;
 static bool sSceneFailed;
@@ -734,6 +743,7 @@ static void StereoWhy(unsigned why)
     sFrameFlat |= 1u << why;
 }
 static float BattleSpriteShift(int centre);
+static float BattleSceneryShift(void);
 static bool sObjMaskOn;
 /* The OBJ window's own composition (ObjWindowCompose): its sprites as a
  * mask, then the layers it shows over that mask. */
@@ -2050,6 +2060,694 @@ static void DrawBattleCut(unsigned bg, int x0, int x1, int y0, int y1, int shift
     RestoreScissor();
 }
 
+static void SpriteBatchFlush(void);
+
+/*
+ * The battle's info boxes and text box at the screen's resolution
+ * (3ds_battle_hud.h).
+ *
+ * Each info box battle_interface.c makes has a picture drawn for the top
+ * screen; its sprites - the two halves and the bar - are left out wherever
+ * the GBA would draw them, and the picture drawn instead where the left half
+ * is. Normally that is after the scene, at the screen's own pixels
+ * (HudDrawCrisp): nothing the battle draws goes over its info boxes, which
+ * moves raise to the front while they play (UpdateOamPriorityInAllHealthboxes).
+ * When something does - a background or a sprite in front of a box, a window
+ * shaping the sprites - or the scene is composed per eye for the 3D slider,
+ * the picture is drawn into the scene in the left half's place instead
+ * (HudDrawInScene), magnified with it.
+ *
+ * A picture is two RGBA8 textures, 128 and 32 texels wide (40 KiB of linear
+ * memory, where one 256 wide would take 64), made for the boxes of a battle
+ * and given back after it.
+ */
+#define HUD_TEX_H 64
+static const unsigned sHudPartW[2] = {128, 32};
+static C3D_Tex sHudTex[CTR_HUD_BOXES][2];
+static uint32_t sHudVersion[CTR_HUD_BOXES];
+static bool sHudReady[CTR_HUD_BOXES];
+static const CtrHudBox *sHud;
+static bool sHudCrisp, sHudFailLogged;
+static uint32_t sHudLastBattleFrame;
+/* Whether a background in front of the boxes drew something last frame. */
+static bool sHudCovered;
+
+static void HudRelease(void)
+{
+    for (unsigned k = 0; k < CTR_HUD_BOXES; ++k)
+    {
+        for (unsigned part = 0; part < 2; ++part)
+        {
+            if (sHudTex[k][part].data) C3D_TexDelete(&sHudTex[k][part]);
+            memset(&sHudTex[k][part], 0, sizeof(sHudTex[k][part]));
+        }
+        sHudReady[k] = false;
+        sHudVersion[k] = 0;
+    }
+}
+
+static bool HudUpload(unsigned k, const CtrHudBox *box)
+{
+    for (unsigned part = 0, x0 = 0; part < 2; x0 += sHudPartW[part], ++part)
+    {
+        C3D_Tex *tex = &sHudTex[k][part];
+        uint32_t *data;
+
+        if (!tex->data)
+        {
+            if (!C3D_TexInit(tex, sHudPartW[part], HUD_TEX_H, GPU_RGBA8))
+            {
+                memset(tex, 0, sizeof(*tex));
+                if (!sHudFailLogged)
+                    CtrLog_Write(CTR_LOG_ERROR, "video: no memory for an HD info box (linear free=%lu); "
+                                 "the GBA's box is shown", (unsigned long)linearSpaceFree());
+                sHudFailLogged = true;
+                return false;
+            }
+            C3D_TexSetWrap(tex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+        }
+        data = tex->data;
+        for (unsigned y = 0; y < HUD_TEX_H; ++y)
+            for (unsigned x = 0; x < sHudPartW[part]; ++x)
+                data[CtrVideo_Texel(x, y, sHudPartW[part])] =
+                    x0 + x < CTR_HUD_W && y < CTR_HUD_H ? box->pixels[y * CTR_HUD_W + x0 + x] : 0;
+        C3D_TexFlush(tex);
+    }
+    sHudVersion[k] = box->version;
+    return true;
+}
+
+/*
+ * Blend's state for a picture with soft edges: its colour over what is
+ * there, and its coverage added to the surface's (Blend writes the source's
+ * alone), so the edges and the shadows of the boxes and the text box do not
+ * leave the surface see-through - through to the black under it - when it is
+ * put on the screen. Not when the layer blends by the GBA's alpha effect,
+ * which keeps Blend's own. BlendForget after drawing.
+ */
+static void HudBlend(unsigned layer, bool effects)
+{
+    unsigned control = Reg(0x50);
+
+    Blend(layer, effects, false);
+    if (effects && ((control >> 6) & 3) == 1 && (control & (1u << layer)) && ((control >> 8) & 63)) return;
+    C2D_Flush();
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA,
+                   GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
+}
+
+/* A box's picture at (x, y), `scale` times the screen's size. */
+static void HudDrawPicture(unsigned k, float x, float y, float scale, bool smooth)
+{
+    for (unsigned part = 0, x0 = 0; part < 2; x0 += sHudPartW[part], ++part)
+    {
+        const Tex3DS_SubTexture all = {(u16)sHudPartW[part], HUD_TEX_H, 0, 1, 1, 0};
+
+        C3D_TexSetFilter(&sHudTex[k][part], smooth ? GPU_LINEAR : GPU_NEAREST, smooth ? GPU_LINEAR : GPU_NEAREST);
+        C2D_DrawImageAt((C2D_Image){&sHudTex[k][part], &all}, x + x0 * scale, y, 0, &sTint, scale, scale);
+    }
+}
+
+/* The box whose sprites use OAM tile `tile`, drawn from its picture; or -1. */
+static int HudBoxOfTile(unsigned tile)
+{
+    if (!sHud) return -1;
+    for (unsigned k = 0; k < CTR_HUD_BOXES; ++k)
+    {
+        const CtrHudBox *box = &sHud[k];
+
+        if (!sHudReady[k]) continue;
+        if ((tile >= box->boxTile && tile < (unsigned)box->boxTile + box->boxTiles)
+            || (box->barTiles && tile >= box->barTile && tile < (unsigned)box->barTile + box->barTiles))
+            return (int)k;
+    }
+    return -1;
+}
+
+/* A visible OAM entry's place in GBA coordinates, wrapped as the battle reads it. */
+static bool HudEntry(unsigned i, unsigned *priority, int *x, int *y, int *w, int *h)
+{
+    static const uint8_t dimensions[3][4][2] = {
+        {{8,8},{16,16},{32,32},{64,64}},
+        {{16,8},{32,8},{32,16},{64,32}},
+        {{8,16},{8,32},{16,32},{32,64}}
+    };
+    const uint16_t *obj = sMemory.oam + i * 4;
+    unsigned attr0 = obj[0], attr1 = obj[1], attr2 = obj[2], shape = attr0 >> 14;
+    bool affine = (attr0 & 0x100) != 0;
+
+    if ((!affine && (attr0 & 0x200)) || shape == 3 || ((attr0 >> 10) & 3) >= 2) return false;
+    *w = dimensions[shape][attr1 >> 14][0] * (affine && (attr0 & 0x200) ? 2 : 1);
+    *h = dimensions[shape][attr1 >> 14][1] * (affine && (attr0 & 0x200) ? 2 : 1);
+    *x = attr1 & 511;
+    *y = attr0 & 255;
+    if (*x + *w > 512) *x -= 512;
+    if (*y + *h > 256) *y -= 256;
+    /* Below the picture: where the GBA parks its unused entries (y 160),
+     * tile 0 - an info box's first tile, as often as not. */
+    if (*y >= 160 || *y + *h <= 0) return false;
+    *priority = (attr2 >> 10) & 3;
+    return true;
+}
+
+/*
+ * Whether the boxes can be drawn after the scene: no window shapes the
+ * sprites, no background in front of them drew anything, and no sprite in
+ * front of a box overlaps its picture.
+ */
+/*
+ * Whether the windows show a box's picture, (x, y) w x h in GBA pixels, as it
+ * is: every part of the screen it covers shows sprites, as the compositor
+ * reads the windows (WindowPartition). The battle keeps WIN0 and the OBJ
+ * window on throughout (battle_bg.c); while its intro opens the scene through
+ * WIN0 (BattleCurtain) a box inside the opening is as it would be anywhere.
+ * A box the windows cut, or a sprite in window mode shaping the sprites, is
+ * drawn into the scene with them.
+ */
+static unsigned WindowPartition(int top, int bottom, int rects[25][4], unsigned masks[25]);
+
+static bool HudWindowsShow(int x, int y, int w, int h)
+{
+    unsigned control = Reg(0), count;
+    int rects[25][4];
+    unsigned masks[25];
+
+    if (!(control & 0xE000)) return true;
+    if (control & 0x8000)
+        for (unsigned i = 0; i < 128; ++i)
+        {
+            unsigned attr0 = sMemory.oam[i * 4];
+
+            if (((attr0 >> 10) & 3) == 2 && ((attr0 & 0x100) || !(attr0 & 0x200))) return false;
+        }
+    if (y < 0) { h += y; y = 0; }
+    if (y + h > 160) h = 160 - y;
+    if (h <= 0) return true;
+    count = WindowPartition(y, y + h, rects, masks);
+    for (unsigned r = 0; r < count; ++r)
+        if (rects[r][0] < x + w && rects[r][2] > x && !(masks[r] & 0x10)) return false;
+    return true;
+}
+
+static bool HudCrispPossible(void)
+{
+    if (sHudCovered) return false;
+    for (unsigned i = 0; i < 128; ++i)
+    {
+        unsigned p;
+        int x, y, w, h, k = HudBoxOfTile(sMemory.oam[i * 4 + 2] & 1023);
+
+        if (k < 0 || (sMemory.oam[i * 4 + 2] & 1023) != sHud[k].boxTile || !HudEntry(i, &p, &x, &y, &w, &h))
+            continue;
+        /* The picture's extent in GBA pixels. */
+        w = (int)ceilf(CTR_HUD_W / CTR_BATTLE_ZOOM);
+        h = (int)ceilf(CTR_HUD_H / CTR_BATTLE_ZOOM);
+        if (!HudWindowsShow(x, y, w, h)) return false;
+        for (unsigned j = 0; j < 128; ++j)
+        {
+            unsigned q;
+            int ox, oy, ow, oh;
+
+            if (j == i || HudBoxOfTile(sMemory.oam[j * 4 + 2] & 1023) >= 0) continue;
+            if (!HudEntry(j, &q, &ox, &oy, &ow, &oh)) continue;
+            if (q > p || (q == p && j > i)) continue;
+            if (ox < x + w && ox + ow > x && oy < y + h && oy + oh > y) return false;
+        }
+    }
+    return true;
+}
+
+static unsigned BattleBoxLayers(void);
+
+/* After a scene: whether a background in front of the boxes drew in it. */
+static void HudCoverUpdate(void)
+{
+    unsigned front = 4;
+
+    sHudCovered = false;
+    if (!sHud) return;
+    for (unsigned i = 0; i < 128; ++i)
+    {
+        unsigned p;
+        int x, y, w, h, k = HudBoxOfTile(sMemory.oam[i * 4 + 2] & 1023);
+
+        if (k >= 0 && (sMemory.oam[i * 4 + 2] & 1023) == sHud[k].boxTile && HudEntry(i, &p, &x, &y, &w, &h)
+            && p < front)
+            front = p;
+    }
+    for (unsigned bg = 1; bg < 4; ++bg)
+        if (sBgDrawn[bg] && (Reg(0) & (0x100u << bg)) && (Reg(8 + bg * 2) & 3) < front
+            && !(BattleBoxLayers() & (1u << bg)))
+            sHudCovered = true;
+}
+
+/* This frame's boxes, their pictures uploaded; given back once out of battle. */
+static void HudFrame(void)
+{
+    sHud = NULL;
+    if (!sBattle)
+    {
+        if (sHudTex[0][0].data || sHudTex[1][0].data || sHudTex[2][0].data || sHudTex[3][0].data)
+            if (sStats.frames - sHudLastBattleFrame > 60) HudRelease();
+        return;
+    }
+    sHudLastBattleFrame = sStats.frames;
+    sHud = CtrBattleHud_Boxes();
+    if (!sHud) return;
+    for (unsigned k = 0; k < CTR_HUD_BOXES; ++k)
+    {
+        if (!sHud[k].used) { sHudReady[k] = false; continue; }
+        if (sHudReady[k] && sHudVersion[k] == sHud[k].version) continue;
+        sHudReady[k] = HudUpload(k, &sHud[k]);
+    }
+}
+
+/*
+ * The part of a box's picture over one of its halves, in the current view
+ * (the scene's): each half draws what is over its own rectangle, so a box
+ * whose halves the 3D slider's sprite groups put apart is still whole.
+ */
+static void HudDrawInScene(unsigned k, unsigned tile, int x, int y, int w, int h, bool effects)
+{
+    /* The right half is 64 pixels right of the left one (SpriteCB_HealthBoxOther). */
+    int left = tile == sHud[k].boxTile ? x : x - 64;
+
+    SpriteBatchFlush();
+    HudBlend(4, effects);
+    ViewBase();
+    C2D_Flush();
+    /* With each sprite at its depth (BattleSpriteShift), the half is moved too. */
+    Scissor((int)floorf(x + sLayerShift), y, (int)ceilf(x + w + sLayerShift), y + h);
+    HudDrawPicture(k, left + CTR_VIEW_X + sLayerShift, y + CTR_VIEW_Y, 1.0f / CTR_BATTLE_ZOOM, true);
+    C2D_Flush();
+    RestoreScissor();
+    BlendForget();
+    ++sStats.sprites;
+}
+
+/* Every box's picture over the scene at the screen's own pixels, the GBA's
+ * order kept: the lower OAM entry in front. */
+enum { HUD_FLAT, HUD_SPRITE_DEPTH, HUD_SCENERY_DEPTH };
+
+static void HudDrawCrisp(unsigned depth)
+{
+    bool any = false;
+
+    if (!sHud || !sHudCrisp) return;
+    C2D_Flush();
+    C2D_ViewReset();
+    for (int i = 127; i >= 0; --i)
+    {
+        unsigned p;
+        int x, y, w, h, k = HudBoxOfTile(sMemory.oam[i * 4 + 2] & 1023);
+        float shift = 0;
+
+        if (k < 0 || (sMemory.oam[i * 4 + 2] & 1023) != sHud[k].boxTile || !HudEntry((unsigned)i, &p, &x, &y, &w, &h))
+            continue;
+        /* With the 3D slider up, this eye's: where the box's sprites would
+         * be (BattleSpriteShift, as the slots place them), or the scenery's
+         * when the scene is put behind the screen whole. Whole pixels. */
+        if (depth == HUD_SPRITE_DEPTH) shift = BattleSpriteShift(y + h / 2);
+        else if (depth == HUD_SCENERY_DEPTH) shift = BattleSceneryShift();
+        if (!any) HudBlend(4, true);
+        any = true;
+        HudDrawPicture((unsigned)k, roundf((x + CTR_VIEW_X) * sZoom + sOffX + shift),
+                       roundf((y + CTR_VIEW_Y) * sZoom + sOffY), 1, false);
+        ++sStats.sprites;
+    }
+    C2D_Flush();
+    if (any) BlendForget();
+    ViewBase();
+}
+
+/*
+ * The battle text box (3ds_battle_hud.h, gen_battle_hud.py): a panel floating
+ * over the scene with margins at its sides, the game's message window over
+ * it 1:1 - its text, the window's fill left out - moved a few pixels right
+ * to keep its distance from the panel's edge. Only while BG0 shows the
+ * message box where battle_bg.c puts it; anything else (the GBA's menus, in
+ * a link battle) is drawn as the GBA has it.
+ */
+#define BOX_TEX_W 32       /* the panel's art: its left cap, and its middle column */
+#define BOX_TEX_H 64
+#define BOX_MIDDLE_X 28
+#define TEXT_TEX_W 256     /* the message window's 208x32 */
+#define TEXT_TEX_H 32
+#define BOX_TEXT_SHIFT 4
+#define BOX_SLIDE_FRAMES 16
+#define BOX_HIDDEN 60.0f
+/* The player's trainer under it meanwhile, in GBA pixels: below the screen. */
+#define BOX_TRAINER_HIDDEN 90.0f
+static C3D_Tex sBoxTex, sTextTex;
+static bool sBoxTexFailed;
+static int sBoxCapW, sBoxArtH, sBoxArtY;
+static uint8_t sBoxWindow[26 * 4 * 32];
+static uint16_t sBoxEntries[26 * 4], sBoxColours[16];
+static bool sBoxText;     /* the message window shows something */
+/* A battle over the voxel world: the box waits out of sight while the
+ * camera flies in, and slides in when the first message comes. */
+static bool sBoxHidden, sBoxDecided, sBoxBarsUp;
+/* The frame the HD text box was last drawn (or kept out of sight) in. */
+static uint32_t sBoxShown = ~0u;
+/* The cinema bars this far out of their way: the box comes in with them. */
+#define BOX_BARS_LEAVING 0.35f
+static int sBoxSlide = -1;
+static uint32_t sBoxBattleFrames;
+
+static bool BoxTexture(void)
+{
+    const uint32_t *cap, *middle;
+    int cx, cy, cw, ch, mx, my, mw, mh;
+    uint32_t *data;
+
+    if (sBoxTex.data && sTextTex.data) return true;
+    if (sBoxTexFailed || !CtrBattleHud_Ready()) return false;
+    cap = CtrBattleHud_BoxArt(false, &cx, &cy, &cw, &ch);
+    middle = CtrBattleHud_BoxArt(true, &mx, &my, &mw, &mh);
+    if (!cap || !middle || cw > BOX_MIDDLE_X || ch > BOX_TEX_H || mh != ch)
+    {
+        sBoxTexFailed = true;
+        return false;
+    }
+    if (!C3D_TexInit(&sBoxTex, BOX_TEX_W, BOX_TEX_H, GPU_RGBA8)
+        || !C3D_TexInit(&sTextTex, TEXT_TEX_W, TEXT_TEX_H, GPU_RGBA4))
+    {
+        if (sBoxTex.data) C3D_TexDelete(&sBoxTex);
+        memset(&sBoxTex, 0, sizeof(sBoxTex));
+        memset(&sTextTex, 0, sizeof(sTextTex));
+        sBoxTexFailed = true;
+        CtrLog_Write(CTR_LOG_ERROR, "video: no memory for the HD text box (linear free=%lu); the GBA's is shown",
+                     (unsigned long)linearSpaceFree());
+        return false;
+    }
+    C3D_TexSetFilter(&sBoxTex, GPU_NEAREST, GPU_NEAREST);
+    C3D_TexSetWrap(&sBoxTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+    C3D_TexSetFilter(&sTextTex, GPU_NEAREST, GPU_NEAREST);
+    C3D_TexSetWrap(&sTextTex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+    data = sBoxTex.data;
+    memset(data, 0, BOX_TEX_W * BOX_TEX_H * 4);
+    for (int y = 0; y < ch; ++y)
+    {
+        for (int x = 0; x < cw; ++x)
+            data[CtrVideo_Texel(x, y, BOX_TEX_W)] = cap[y * cw + x];
+        data[CtrVideo_Texel(BOX_MIDDLE_X, y, BOX_TEX_W)] = middle[y * mw];
+    }
+    C3D_TexFlush(&sBoxTex);
+    memset(sTextTex.data, 0, TEXT_TEX_W * TEXT_TEX_H * 2);
+    C3D_TexFlush(&sTextTex);
+    sBoxCapW = cw;
+    sBoxArtH = ch;
+    sBoxArtY = cy;
+    memset(sBoxEntries, 0xFF, sizeof(sBoxEntries));
+    return true;
+}
+
+/* The message window's 26x4 cells into the texture, when they changed. */
+static void BoxWindowSync(unsigned map, unsigned size, unsigned chars)
+{
+    bool changed = memcmp(sBoxColours, (const uint16_t *)sTexturePalette, sizeof(sBoxColours)) != 0;
+    uint16_t *data = sTextTex.data;
+
+    for (unsigned i = 0; i < 26 * 4 && !changed; ++i)
+    {
+        unsigned entry = MapEntry(map, size, 2 + i % 26, 15 + i / 26);
+        unsigned address = chars + (entry & 1023) * 32;
+
+        if (entry != sBoxEntries[i] || address + 32 > 0x10000
+            || memcmp(sBoxWindow + i * 32, sMemory.vram + address, 32))
+            changed = true;
+    }
+    if (!changed) return;
+    memcpy(sBoxColours, (const uint16_t *)sTexturePalette, sizeof(sBoxColours));
+    sBoxText = false;
+    for (unsigned i = 0; i < 26 * 4; ++i)
+    {
+        unsigned entry = MapEntry(map, size, 2 + i % 26, 15 + i / 26);
+        unsigned address = chars + (entry & 1023) * 32, bank = entry >> 12;
+        unsigned cx = (i % 26) * 8, cy = (i / 26) * 8;
+
+        sBoxEntries[i] = (uint16_t)entry;
+        if (address + 32 > 0x10000) address = 0;
+        memcpy(sBoxWindow + i * 32, sMemory.vram + address, 32);
+        for (unsigned p = 0; p < 64; ++p)
+        {
+            unsigned px = p & 7, py = p >> 3;
+            unsigned sx = (entry & 1024) ? 7 - px : px, sy = (entry & 2048) ? 7 - py : py;
+            unsigned index = (sBoxWindow[i * 32 + sy * 4 + sx / 2] >> ((sx & 1) * 4)) & 15;
+            uint16_t texel = 0;
+
+            /* The window's fill (index 15) and nothing (0) are the panel. */
+            if (index && index != 15)
+            {
+                uint16_t c = sTexturePalette[bank * 16 + index];
+
+                texel = (uint16_t)(((c >> 12) & 15) << 12 | ((c >> 7) & 15) << 8 | ((c >> 2) & 15) << 4 | 15);
+                sBoxText = true;
+            }
+            data[CtrVideo_Texel(cx + px, cy + py, TEXT_TEX_W)] = texel;
+        }
+    }
+    C3D_TexFlush(&sTextTex);
+}
+
+/* How far below its place the text box is this frame (its slide in). */
+static float BoxOffset(void)
+{
+    float t;
+
+    if (sBoxHidden) return BOX_HIDDEN;
+    if (sBoxSlide < 0) return 0;
+    /* An ease out with a little overshoot: quick, and settling. */
+    t = (float)sBoxSlide / BOX_SLIDE_FRAMES - 1.0f;
+    return BOX_HIDDEN * -(t * t * (2.7f * t + 1.7f));
+}
+
+/* Once a frame: whether the box waits out of sight, and its slide. */
+static void BoxFrame(void)
+{
+    static bool sliding;
+    bool slidingNow = false;
+
+    if (!sBattle)
+    {
+        sBoxHidden = sliding = false;
+        /* The party or the bag over the battle: back from them, the box is
+         * where it was, not slid in again as for a new battle. */
+#if CTR_VOXEL_ENABLED
+        if (!sBoxDecided || !CtrVoxel_InBattle())
+#endif
+            sBoxDecided = sBoxBarsUp = false;
+        sBoxSlide = -1;
+        sBoxBattleFrames = 0;
+        /* The next battle's message window is read afresh. */
+        sBoxText = false;
+        memset(sBoxEntries, 0xFF, sizeof(sBoxEntries));
+        return;
+    }
+    ++sBoxBattleFrames;
+    if (sBoxSlide >= 0 && ++sBoxSlide > BOX_SLIDE_FRAMES) sBoxSlide = -1;
+    /* Only a battle over the voxel world, decided as it begins: the world is
+     * there from its first frames, the camera's flight a little later. */
+    if (!sBoxDecided)
+    {
+        /* Through the fade in, until there is a picture: the world, or a
+         * message already in a 2D battle. */
+        if (sBattleWorld && !sBoxText) sBoxHidden = true;
+        if (sBattleWorld || sBoxText) sBoxDecided = true;
+    }
+    if (sBoxHidden)
+    {
+        bool barsGone = false;
+
+        slidingNow = CtrBattleIntro_Sliding() != 0;
+#if CTR_VOXEL_ENABLED
+        {
+            CtrVoxelBattleIntro intro;
+
+            CtrVoxel_BattleIntro(&intro);
+            if (intro.bars > 0.9f) sBoxBarsUp = true;
+            barsGone = sBoxBarsUp && intro.bars < BOX_BARS_LEAVING;
+        }
+#endif
+        /* In as the camera lands: the cinema bars leaving, the intro's
+         * scenery done sliding, the first message begun, or, whatever
+         * happens, after ten seconds. */
+        if (barsGone || sBoxText || (sliding && !slidingNow) || sBoxBattleFrames > 600)
+        {
+            sBoxHidden = false;
+            sBoxSlide = 0;
+        }
+        sliding = slidingNow;
+    }
+    /*
+     * The player's trainer goes with it: its picture ends where the box
+     * covers it. Out of sight while the box is (all of it: the picture is
+     * taller than the box), up with it as it comes, arriving together, and
+     * with it pixel for pixel through the overshoot, so its edge never shows.
+     */
+    {
+        float offset = BoxOffset();
+
+        CtrBattleHud_LiftPlayerTrainer((int)lroundf(offset > 0 ? offset * (BOX_TRAINER_HIDDEN / BOX_HIDDEN)
+                                                               : offset / CTR_BATTLE_ZOOM));
+    }
+}
+
+/*
+ * The panel's art under the fade the message box's palette (BG palette 0) is
+ * under, as a tint: the colour it goes towards and how far. A fade of every
+ * palette in even steps is already a tint (UpdatePalette, sPaletteFade); the
+ * battle's end fades by its own steps (BeginFastPaletteFade), which only the
+ * palette shows - the text, drawn in the palette's colours, follows it, and
+ * so must the panel. Read from white (colour 1) and the colour furthest from
+ * it, as the info boxes are (3ds_battle_hud.c FadeOf).
+ */
+static void BoxFadeTint(C2D_ImageTint *tint)
+{
+    const uint16_t *unfaded = gPlttBufferUnfaded, *now = sMemory.palette;
+    unsigned a = unfaded[1] & 0x7fff, fa = now[1] & 0x7fff, b = a, fb = fa;
+    int best = 0;
+    float k = 0, target[3];
+
+    *tint = sTint;
+    if (sPaletteFade > 0 || !memcmp(unfaded, now, 32)) return;
+    for (unsigned i = 2; i < 16; ++i)
+    {
+        unsigned c = unfaded[i] & 0x7fff;
+        int d = 0;
+
+        for (int ch = 0; ch < 15; ch += 5)
+        {
+            int e = (int)((a >> ch) & 31) - (int)((c >> ch) & 31);
+            d += e < 0 ? -e : e;
+        }
+        if (d > best)
+        {
+            best = d;
+            b = c;
+            fb = now[i] & 0x7fff;
+        }
+    }
+    if (best == 0) return;
+    /* How far, from the channel the two differ most in. */
+    {
+        int most = 0;
+
+        for (int ch = 0; ch < 15; ch += 5)
+        {
+            int ua = (a >> ch) & 31, ub = (b >> ch) & 31, d = ua > ub ? ua - ub : ub - ua;
+
+            if (d > most)
+            {
+                most = d;
+                k = 1.0f - (float)((int)((fa >> ch) & 31) - (int)((fb >> ch) & 31)) / (float)(ua - ub);
+            }
+        }
+    }
+    if (k < 0.02f) return;
+    if (k > 1) k = 1;
+    /* Towards what: white's channels solved for it. */
+    for (int ch = 0; ch < 3; ++ch)
+    {
+        float u = (a >> (ch * 5)) & 31, f = (fa >> (ch * 5)) & 31, t = (f - u * (1 - k)) / k;
+
+        target[ch] = t < 0 ? 0 : t > 31 ? 255 : t * 255 / 31;
+    }
+    /*
+     * How far the panel itself is, by its own colour (the window's fill,
+     * colour 15): a fade in even steps takes every colour the same part of
+     * the way, the battle's end takes the same amount off each channel, which
+     * brings the panel's mid tones down well before white.
+     */
+    {
+        unsigned u = unfaded[15] & 0x7fff, f = now[15] & 0x7fff;
+        float moved = 0, way = 0;
+
+        for (int ch = 0; ch < 3; ++ch)
+        {
+            float uc = (u >> (ch * 5)) & 31, fc = (f >> (ch * 5)) & 31, tc = target[ch] * 31 / 255;
+
+            moved += fabsf(fc - uc);
+            way += fabsf(tc - uc);
+        }
+        if (way > 0.5f)
+            k = moved / way > 1 ? 1 : moved / way;
+    }
+    C2D_PlainImageTint(tint, C2D_Color32((uint8_t)target[0], (uint8_t)target[1], (uint8_t)target[2], 255), k);
+}
+
+/* The text box in HD, if BG0 shows the message box; false to draw the GBA's. */
+static bool DrawBattleTextHd(unsigned bg)
+{
+    unsigned control = Reg(8 + bg * 2), size = control >> 14;
+    unsigned map = ((control >> 8) & 31) * 0x800;
+    unsigned chars = ((control >> 2) & 3) * 0x4000;
+    unsigned scrollX = Reg(0x10 + bg * 4) & 511, scrollY = Reg(0x12 + bg * 4) & 511;
+    int down = scrollY >= 256 ? 512 - (int)scrollY : -(int)scrollY;
+    float y0, shift = sLayerShift;
+    bool empty;
+
+    if (bg != 0 || scrollX != 0 || down < 0 || down > 64 || (control & 128)) return false;
+    /* The message window put on the box; or not yet, through the intro: the
+     * box's own frame (textbox_map.bin) round its plain fill. */
+    if ((MapEntry(map, size, 2, 15) & 1023) == 0x90 && (MapEntry(map, size, 27, 18) & 1023) == 0x90 + 103)
+        empty = false;
+    else if ((MapEntry(map, size, 2, 15) & 1023) == 0x0a && (MapEntry(map, size, 27, 18) & 1023) == 0x0a
+             && (MapEntry(map, size, 0, 14) & 1023) == 0x03 && (MapEntry(map, size, 29, 19) & 1023) == 0x11)
+        empty = true;
+    else
+        return false;
+    if (!BoxTexture()) return false;
+    if (empty)
+    {
+        /* Nothing to show; the window is read afresh when it is put there. */
+        if (sBoxEntries[0] != 0xFFFF)
+        {
+            memset(sBoxEntries, 0xFF, sizeof(sBoxEntries));
+            memset(sTextTex.data, 0, TEXT_TEX_W * TEXT_TEX_H * 2);
+            C3D_TexFlush(&sTextTex);
+        }
+        sBoxText = false;
+    }
+    else
+        BoxWindowSync(map, size, chars);
+
+    /* Above the text box: windows, where the game put them. */
+    {
+        uint32_t before = sStats.tiles;
+        DrawBattleCut(bg, 0, 240, 0, BATTLE_BAND_TOP, 0);
+        if (sStats.tiles != before) sTextAbove = true;
+    }
+    y0 = sBoxArtY + down + BoxOffset();
+    sBoxShown = sStats.frames;
+    if (y0 >= CTR_GAME_HEIGHT) return true;
+    /* Layers set the blend for BG0: its effects bit is in the key. */
+    HudBlend(bg, (sBlendKey >> 8) & 1);
+    ViewBase();
+    {
+        C2D_ImageTint art;
+        const float cap = (float)sBoxCapW, h = (float)sBoxArtH;
+        const Tex3DS_SubTexture left = {(u16)sBoxCapW, (u16)sBoxArtH, 0, 1, cap / BOX_TEX_W, 1 - h / BOX_TEX_H};
+        const Tex3DS_SubTexture right = {(u16)sBoxCapW, (u16)sBoxArtH, cap / BOX_TEX_W, 1, 0, 1 - h / BOX_TEX_H};
+        const float mu = (BOX_MIDDLE_X + 0.5f) / BOX_TEX_W;
+        const Tex3DS_SubTexture middle = {1, (u16)sBoxArtH, mu, 1, mu, 1 - h / BOX_TEX_H};
+        const Tex3DS_SubTexture text = {208, 32, 0, 1, 208.0f / TEXT_TEX_W, 0};
+
+        BoxFadeTint(&art);
+
+        C2D_DrawImageAt((C2D_Image){&sBoxTex, &left}, shift, y0, 0, &art, 1, 1);
+        C2D_DrawImageAt((C2D_Image){&sBoxTex, &middle}, cap + shift, y0, 0, &art, CTR_GAME_WIDTH - 2 * cap, 1);
+        C2D_DrawImageAt((C2D_Image){&sBoxTex, &right}, CTR_GAME_WIDTH - cap + shift, y0, 0, &art, 1, 1);
+        /* The message window: GBA (16, 120), on the screen where the band puts it. */
+        C2D_DrawImageAt((C2D_Image){&sTextTex, &text}, 16 + BOX_TEXT_SHIFT + shift,
+                        (CTR_GAME_HEIGHT - 48) + 8 + down + BoxOffset(), 0, &sTint, 1, 1);
+        sStats.tiles += 4;
+    }
+    C2D_Flush();
+    BlendForget();
+    return true;
+}
+
 static void DrawBattleText(unsigned bg)
 {
     unsigned control = Reg(8 + bg * 2), size = control >> 14;
@@ -2064,6 +2762,7 @@ static void DrawBattleText(unsigned bg)
     int fill0 = 240 - BATTLE_BAND_CAP + VIEW_LEFT, fill1 = VIEW_RIGHT - BATTLE_BAND_CAP;
     int x0 = fill0, x1 = fill1, y0 = BATTLE_BAND_TOP, y1 = 160;
 
+    if (DrawBattleTextHd(bg)) return;
     /* Above the text box: windows, where the game put them. */
     uint32_t before = sStats.tiles;
     DrawBattleCut(bg, 0, 240, 0, BATTLE_BAND_TOP, 0);
@@ -2167,13 +2866,49 @@ static bool BattleRowShown(unsigned map, unsigned size, unsigned chars, bool col
     return false;
 }
 
+/*
+ * The battle terrain split at CTR_BATTLE_SIDE_SPLIT (ctr_battle_layout.h):
+ * the opponent's half above it drawn CTR_BATTLE_ENEMY_RISE lines higher, the
+ * player's half below it CTR_BATTLE_PLAYER_DROP lower, as the game moves the
+ * two sides' sprites. Only while BG3 holds the terrain, not a move's
+ * background, which is drawn for the whole screen.
+ */
+static bool BattleTerrainSplit(unsigned bg)
+{
+    return sBattle && bg == 3 && !CtrBattleBg_MoveBgShown();
+}
+
+/*
+ * The terrain line shown on line y of the split terrain. Between the two
+ * halves the lines are filled from the four just below the split - open
+ * ground on every terrain, the opponent's platform ending above it and the
+ * player's starting well below - repeated: the terrain's stripes repeat
+ * every four lines, so they carry on the half below without a seam.
+ */
+static int BattleTerrainLine(int y)
+{
+    const int top = CTR_BATTLE_SIDE_SPLIT - CTR_BATTLE_ENEMY_RISE;
+    const int bottom = CTR_BATTLE_SIDE_SPLIT + CTR_BATTLE_PLAYER_DROP;
+
+    if (y < top) return y + CTR_BATTLE_ENEMY_RISE;
+    if (y < bottom) return CTR_BATTLE_SIDE_SPLIT + ((y - bottom) & 3);
+    /* The terrain's map is empty from line 112, where the GBA's text box
+     * began: the scene goes on below it with its last four lines. */
+    if (y - CTR_BATTLE_PLAYER_DROP >= BATTLE_BAND_TOP)
+        return BATTLE_BAND_TOP - 4 + ((y - CTR_BATTLE_PLAYER_DROP - BATTLE_BAND_TOP) & 3);
+    return y - CTR_BATTLE_PLAYER_DROP;
+}
+
+/* Lines the tile walk below shows moved by: the line it draws at y is y + this. */
+static int sBattleBgLineShift;
+
 static void DrawBattleBg(unsigned bg)
 {
     unsigned control = Reg(8 + bg * 2), size = control >> 14;
     unsigned map = ((control >> 8) & 31) * 0x800;
     unsigned chars = ((control >> 2) & 3) * 0x4000;
     bool color256 = (control & 128) != 0;
-    unsigned scrollX = Reg(0x10 + bg * 4) & 511, scrollY = Reg(0x12 + bg * 4) & 511;
+    unsigned scrollX = Reg(0x10 + bg * 4) & 511, scrollY = (Reg(0x12 + bg * 4) + sBattleBgLineShift) & 511;
     unsigned columns = (size & 1) ? 64 : 32, rows = (size & 2) ? 64 : 32;
     int ox = (int)(scrollX & 7), oy = (int)(scrollY & 7);
     int x0 = sClipX0, x1 = sClipX1, y0 = sClipY0, y1 = sClipY1;
@@ -2238,6 +2973,47 @@ static void DrawBattleBg(unsigned bg)
         }
     }
     TileWalkEnd(batch);
+}
+
+/* Lines [y0, y1) of a battle background, each showing the line `shift` below it. */
+static void DrawBattleBgBand(unsigned bg, int y0, int y1, int shift)
+{
+    int x0 = sClipX0, x1 = sClipX1, clipY0 = sClipY0, clipY1 = sClipY1;
+
+    if (!ClipCell(&x0, &x1, &y0, &y1)) return;
+    C2D_Flush();
+    Scissor(x0, y0, x1, y1);
+    sClipY0 = y0;
+    sClipY1 = y1;
+    sBattleBgLineShift = shift;
+    DrawBattleBg(bg);
+    sBattleBgLineShift = 0;
+    sClipY0 = clipY0;
+    sClipY1 = clipY1;
+    C2D_Flush();
+    RestoreScissor();
+}
+
+/* A battle background, the terrain split between the two sides (BattleTerrainLine). */
+static void DrawBattleBgSplit(unsigned bg)
+{
+    int y0 = sClipY0, y1 = sClipY1;
+
+    if (!BattleTerrainSplit(bg))
+    {
+        DrawBattleBg(bg);
+        return;
+    }
+    /* In runs of lines drawn with the same shift: each half, and four lines
+     * at a time between them and below the terrain's end. */
+    for (int y = y0; y < y1;)
+    {
+        int shift = BattleTerrainLine(y) - y, end = y + 1;
+
+        while (end < y1 && BattleTerrainLine(end) - end == shift) ++end;
+        DrawBattleBgBand(bg, y, end, shift);
+        y = end;
+    }
 }
 
 /*
@@ -2555,7 +3331,7 @@ static void DrawTextBg(unsigned bg)
     if (sBattle)
     {
         if (bg == 0) DrawBattleText(bg);
-        else DrawBattleBg(bg);
+        else DrawBattleBgSplit(bg);
         return;
     }
     if (sCentred)
@@ -3642,23 +4418,27 @@ static bool DrawLineBg(unsigned bg)
     ViewBase();
     for (int y = clipY0; y < clipY1;)
     {
-        unsigned x = LineValue(bg * 2, y, baseX), v = LineValue(bg * 2 + 1, y, baseY);
+        /* The split battle terrain (BattleTerrainLine): line y shows line sy. */
+        bool split = BattleTerrainSplit(bg);
+        int sy = split ? BattleTerrainLine(y) : y;
+        unsigned x = LineValue(bg * 2, sy, baseX), v = LineValue(bg * 2 + 1, sy, baseY);
         int end = y + 1;
         /* The texture row line y shows. */
-        int ty = (int)v + y;
+        int ty = (int)v + sy;
         int rowTop = -(int)(v & 7);
 
-        if (clampTop && y < rowTop)
+        if (clampTop && sy < rowTop)
         {
             /* The tile row under line 0, once per eight lines above it. */
-            int phase = ((y - rowTop) % 8 + 8) % 8;
+            int phase = ((sy - rowTop) % 8 + 8) % 8;
 
             ty = (int)(v - (v & 7)) + phase;
             end = y + 8 - phase;
             if (end > clipY1) end = clipY1;
         }
-        else while (end < clipY1 && LineValue(bg * 2, end, baseX) == x
-               && LineValue(bg * 2 + 1, end, baseY) == v)
+        else while (end < clipY1 && (!split || BattleTerrainLine(end) - end == sy - y)
+               && LineValue(bg * 2, split ? BattleTerrainLine(end) : end, baseX) == x
+               && LineValue(bg * 2 + 1, split ? BattleTerrainLine(end) : end, baseY) == v)
         {
             /* The fade is linear between these lines, so a run stops at them. */
             if (fade && (end == top || end == bottom || end == top - (int)FADE_DOWN
@@ -4005,6 +4785,23 @@ static void DrawObjects(unsigned priority, bool effects)
         }
         /* A battle in 3D: each sprite at its own depth (BattleSpriteShift). */
         if (sSpriteDepth) sLayerShift = BattleSpriteShift(y + (int)boxH / 2) / sShiftZoom;
+        /* An info box drawn from its picture: its sprites are not drawn. */
+        if (sHud && sBattle && sObjWinPass == OBJWIN_NONE)
+        {
+            int box = HudBoxOfTile(attr2 & 1023);
+
+            if (box >= 0)
+            {
+                unsigned tile = attr2 & 1023;
+
+                /* The halves, not the bar: it lies over them. */
+                /* Only one in sight: the GBA's unused entries are tile 0 too. */
+                if (!sHudCrisp && tile >= sHud[box].boxTile && tile < (unsigned)sHud[box].boxTile + sHud[box].boxTiles
+                    && x < sClipX1 && x + (int)boxW > sClipX0 && y < sClipY1 && y + (int)boxH > sClipY0)
+                    HudDrawInScene((unsigned)box, tile, x, y, (int)boxW, (int)boxH, effects);
+                continue;
+            }
+        }
         /* Below the PokeNav's picture is its background, not the space the
          * GBA parks its unused sprites in. */
         if (sCentredScreen == CTR_CENTRED_POKENAV && y >= 160) continue;
@@ -5070,6 +5867,12 @@ static float BattleSpriteNear(int centre)
 }
 
 /* A sprite centred on GBA line `centre`, in screen pixels for this eye. */
+/* This eye's displacement of the scenery, put behind the screen. */
+static float BattleSceneryShift(void)
+{
+    return -sEyeParallax * BATTLE_BACK_DEPTH;
+}
+
 static float BattleSpriteShift(int centre)
 {
     return -sEyeParallax * BATTLE_SPRITE_DEPTH * (1 - BattleSpriteNear(centre));
@@ -5279,7 +6082,7 @@ static void BattleSceneCompose(int margin, unsigned exclude)
      * top row (DrawBattleBg), so it is filled from the surface's own top tile
      * rows, repeated, rather than doubling the surface for a dozen lines.
      */
-    int left = VIEW_LEFT - margin, top = VIEW_TOP, lowest = 112 - (int)(SCENE_H / SCENE_ZOOM);
+    int left = VIEW_LEFT - margin, top = VIEW_TOP, lowest = BATTLE_SCENE_BOTTOM - (int)(SCENE_H / SCENE_ZOOM);
     float ox, oy;
 
     if (top < lowest) top = lowest;
@@ -5287,7 +6090,7 @@ static void BattleSceneCompose(int margin, unsigned exclude)
     oy = top * zoom + offY;
     float scale = zoom / SCENE_ZOOM;
     int width = (int)ceilf((CTR_GAME_WIDTH + margin * zoom - ox) / scale);
-    int height = (int)ceilf((CTR_GAME_HEIGHT - 48 - oy) / scale);
+    int height = (int)ceilf((BATTLE_SCENE_BOTTOM * zoom + offY - oy) / scale);
 
     if (width > SCENE_W) width = SCENE_W;
     if (height > SCENE_H) height = SCENE_H;
@@ -5372,13 +6175,45 @@ static void SplitFrame(void)
  * A scene composed into `tex` from texel column `column` on `target`, `shift`
  * screen pixels across; with `sky`, the rows above it filled from its top.
  */
+/*
+ * Rows [row, row + rows) of the scene surface's columns `cut`, `scale` times,
+ * from y on the screen, the part between `top` and `bottom` only.
+ */
+static void SceneRows(C3D_Tex *tex, float u0, float u1, float row, float rows, float x, float y, float scale,
+                      float stretch, float top, float bottom)
+{
+    float h = rows * stretch, y0 = y, y1 = y + h;
+
+    if (y0 < top) y0 = top;
+    if (y1 > bottom) y1 = bottom;
+    if (y1 <= y0) return;
+    {
+        float r0 = row + (y0 - y) / stretch, r1 = row + (y1 - y) / stretch;
+        const Tex3DS_SubTexture part = {(u16)ceilf((u1 - u0) * tex->width), (u16)ceilf(r1 - r0), u0,
+                                        1 - r0 / tex->height, u1, 1 - r1 / tex->height};
+
+        C2D_DrawImageAt((C2D_Image){tex, &part}, x, y0, 0, NULL, scale, (y1 - y0) / (r1 - r0));
+    }
+}
+
 static void ScenePlaceFrom(C3D_RenderTarget *target, float shift, C3D_Tex *tex, int column, bool sky)
 {
     float ox = sScenePut.ox + shift, oy = sScenePut.oy, scale = sScenePut.scale;
     int width = sScenePut.width, height = sScenePut.height;
     float u0 = column / (float)tex->width, u1 = (column + width) / (float)tex->width;
     const Tex3DS_SubTexture cut = {(u16)width, (u16)height, u0, 1, u1, 1 - height / (float)tex->height};
+    /* The intro's curtain (BattleCurtain) is over the fills as over the
+     * rest: its edges, on the screen as the compositor puts them. */
+    float top = 0, bottom = CTR_GAME_HEIGHT;
 
+    if ((Reg(0) & 0x2000) && !(Reg(0x4a) & 63) && (Reg(0x40) >> 8) == 0 && (Reg(0x40) & 255) >= 240)
+    {
+        unsigned v = Reg(0x44), first = v >> 8, last = v & 255;
+
+        if (last > 160 || first > last) last = 160;
+        top = first * (float)CTR_GAME_HEIGHT / 160;
+        bottom = last * (float)CTR_GAME_HEIGHT / 160;
+    }
     SceneOn(target);
     C2D_ViewReset();
     Blend(5, false, false);
@@ -5388,13 +6223,21 @@ static void ScenePlaceFrom(C3D_RenderTarget *target, float shift, C3D_Tex *tex, 
     {
         /* Two tile rows, the period of the stripes the terrain repeats. */
         const float rows = 16 * SCENE_ZOOM;
-        const Tex3DS_SubTexture strip = {(u16)width, (u16)rows, u0, 1, u1, 1 - rows / tex->height};
 
-        for (float y = oy; y > 0; )
+        for (float y = oy; y > top; )
         {
             y -= rows * scale;
-            C2D_DrawImageAt((C2D_Image){tex, &strip}, ox, y, 0, NULL, scale, scale);
+            SceneRows(tex, u0, u1, 0, rows, ox, y, scale, scale, top, bottom);
         }
+    }
+    /* Below it, behind the text box's margins: its last line carried down,
+     * sampled at the line's middle so the filter reads nothing under it. */
+    if (sky && !sBattleWorld && oy + height * scale < bottom)
+    {
+        float y0 = oy + height * scale, v = 1 - (height - 0.5f) / tex->height;
+        const Tex3DS_SubTexture line = {(u16)width, 1, u0, v, u1, v};
+
+        C2D_DrawImageAt((C2D_Image){tex, &line}, ox, y0, 0, NULL, scale, bottom - y0);
     }
     C2D_Flush();
 }
@@ -5403,6 +6246,44 @@ static void ScenePlaceFrom(C3D_RenderTarget *target, float shift, C3D_Tex *tex, 
 static void BattleScenePlace(C3D_RenderTarget *target, float shift)
 {
     ScenePlaceFrom(target, shift, &sSceneTex, 0, true);
+}
+
+/*
+ * The lines above the composed scene, in the 2D battle as one picture: the
+ * scene surface holds 128 lines and the screen shows 140, so its top rows
+ * were repeated up to the screen's edge (ScenePlaceFrom) - which repeated
+ * whatever reaches them, the opponent's info boxes and the heads of tall
+ * Pokemon now that their side sits higher (ctr_battle_layout.h). They are
+ * composed here instead, straight onto the screen at its scale, over that
+ * fill: a dozen lines of sky, the odd head or box top. Into the current
+ * target, at the frame's own view.
+ */
+static void Compose(void);
+
+static void BattleSkyCompose(bool sprites)
+{
+    int clipX0 = sClipX0, clipY0 = sClipY0, clipX1 = sClipX1, clipY1 = sClipY1;
+    bool scissored = sScissored;
+    unsigned exclude = sLayerExclude;
+
+    if (sBattleWorld || sScenePut.top <= VIEW_TOP) return;
+    ClipToView();
+    sClipY1 = sScenePut.top;
+    sScissored = true;
+    C2D_Flush();
+    Scissor(sClipX0, sClipY0, sClipX1, sClipY1);
+    BlendForget();
+    sLayerExclude = 1u | 32u | (sprites ? 0u : 16u) | BattleBoxLayers();
+    if (!(Reg(0) & 128)) Compose();
+    C2D_Flush();
+    sLayerExclude = exclude;
+    sClipX0 = clipX0;
+    sClipY0 = clipY0;
+    sClipX1 = clipX1;
+    sClipY1 = clipY1;
+    sScissored = scissored;
+    RestoreScissor();
+    BlendForget();
 }
 
 /*
@@ -5422,6 +6303,7 @@ static void RenderBattleScene(uint32_t clear)
         BattleSceneCompose(sEyeParallax != 0.0f ? BATTLE_STEREO_MARGIN : 0, 0);
         sSpriteDepth = false;
         sLayerOrigin = origin;
+        HudCoverUpdate();
     }
     BattleScenePlace(sLogical, sSceneComposed ? -sEyeParallax * BATTLE_BACK_DEPTH : 0.0f);
 }
@@ -5743,6 +6625,8 @@ static void RenderEye(C3D_RenderTarget *target, uint32_t clear, float parallax)
     C2D_SceneBegin(sLogical);
     Blend(5, false, false);
     StageUnderlay();
+    if (scene) BattleSkyCompose(true);
+    if (scene) HudDrawCrisp(HUD_SPRITE_DEPTH);
     /* After a scene composed on its own, only the text box is left. */
     if (scene) sLayerExclude = 63 & ~(1u | 32u | BattleBoxLayers());
     if (!(Reg(0) & 128))
@@ -5931,7 +6815,7 @@ static bool BattleSprites(unsigned *furthest, bool *apart)
     unsigned display = Reg(0), control = Reg(0x50);
     bool alpha = ((control >> 6) & 3) == 1 && (control & 16);
     int reach = (int)ceilf(BATTLE_SPRITE_DEPTH / sShiftZoom) + 1;
-    int top = (int)lroundf((sScenePut.oy - sOffY) / sZoom), bottom = 112;
+    int top = (int)lroundf((sScenePut.oy - sOffY) / sZoom), bottom = BATTLE_SCENE_BOTTOM;
     int left = VIEW_LEFT - reach, right = VIEW_RIGHT + reach;
 
     sSlotCount = 0;
@@ -6270,6 +7154,9 @@ static void BattleTextCompose(bool drawnClear)
  * Both eyes of a battle (see BATTLE_BACK_DEPTH). `world` is the voxel
  * battle's finished world, NULL for the 2D battle.
  */
+/* The stereo battle's scene composed whole, its sprites at the scenery's depth. */
+static bool sHudFlatScene;
+
 static void RenderBattleStereo(uint32_t clear, float slider, C3D_Tex *world)
 {
     const Tex3DS_SubTexture logical = {CTR_GAME_WIDTH, CTR_GAME_HEIGHT, 0, 1,
@@ -6291,11 +7178,13 @@ static void RenderBattleStereo(uint32_t clear, float slider, C3D_Tex *world)
     sSceneOn = NULL;
     sParallax = 0;
     sLayerShift = 0;
+    sHudFlatScene = false;
     BlendForget();
     /* The scene's placement first: the sprites are clipped to it. */
     sSceneCacheAllowed = true;
     BattleSceneCompose(BATTLE_STEREO_MARGIN, 16u);
     sSceneCacheAllowed = false;
+    HudCoverUpdate();
     any = BattleSprites(&furthest, &apart);
     /*
      * Backgrounds in front of a sprite - the intro's entry picture over the
@@ -6363,6 +7252,7 @@ static void RenderBattleStereo(uint32_t clear, float slider, C3D_Tex *world)
         any = false;
         front = 0;
         scenery = true;
+        sHudFlatScene = true;
     }
     else if (!apart)
     {
@@ -6378,6 +7268,7 @@ static void RenderBattleStereo(uint32_t clear, float slider, C3D_Tex *world)
                 RenderBattleScene(0);
                 C2D_SceneBegin(sLogical);
                 Blend(5, false, false);
+                HudDrawCrisp(HUD_SPRITE_DEPTH);
                 sLayerExclude = 63 & ~(1u | 32u | BattleBoxLayers());
                 if (!(Reg(0) & 128)) Compose();
                 sLayerExclude = 0;
@@ -6410,7 +7301,18 @@ static void RenderBattleStereo(uint32_t clear, float slider, C3D_Tex *world)
         sEyeParallax = eye ? -slider : slider;
         if (world && textOnce) BattleWorldEye(target, world);
         else DrawnClear(picture, world ? 0 : clear, 0, 0, CTR_GAME_WIDTH, CTR_GAME_HEIGHT);
-        if (scenery) BattleScenePlace(picture, -sEyeParallax * BATTLE_BACK_DEPTH);
+        if (scenery)
+        {
+            float origin = sLayerOrigin;
+
+            BattleScenePlace(picture, -sEyeParallax * BATTLE_BACK_DEPTH);
+            /* The lines above the surface at the scenery's depth; the
+             * sprites are the slots', at their own, unless they are in the
+             * scene composed whole. */
+            sLayerOrigin = BattleSceneryShift();
+            BattleSkyCompose(!any);
+            sLayerOrigin = origin;
+        }
         if (any && !(Reg(0) & 128))
         {
             SlotsPlace(picture, false, false);
@@ -6419,6 +7321,13 @@ static void RenderBattleStereo(uint32_t clear, float slider, C3D_Tex *world)
                 SlotsPlace(picture, false, true);
                 SlotsPlace(picture, true, false);
             }
+        }
+        /* The info boxes over them at the screen's pixels: at their sprites'
+         * depth, or the scenery's when the sprites are composed with it. */
+        if (!(Reg(0) & 128))
+        {
+            SceneOn(picture);
+            HudDrawCrisp(sHudFlatScene ? HUD_SCENERY_DEPTH : HUD_SPRITE_DEPTH);
         }
         if (!textOnce)
         {
@@ -7148,11 +8057,14 @@ static void BattleIntroAtmosphere(const CtrVoxelBattleIntro *intro)
         uint32_t dark = C2D_Color32(8, 6, 34, (uint8_t)(fminf(shade, 1.0f) * 230.0f));
         uint32_t none = C2D_Color32(8, 6, 34, 0);
         float band = 64.0f, side = 96.0f;
+        /* Down to the text box, which covered the rest; the HD one floats
+         * with the scene showing round it, and is not there yet. */
+        float low = sStats.frames - sBoxShown <= 1 || sBoxHidden ? CTR_GAME_HEIGHT : bottom;
 
         C2D_DrawRectangle(0, 0, 0, w, band, dark, dark, none, none);
-        C2D_DrawRectangle(0, bottom - band, 0, w, band, none, none, dark, dark);
-        C2D_DrawRectangle(0, 0, 0, side, bottom, dark, none, dark, none);
-        C2D_DrawRectangle(w - side, 0, 0, side, bottom, none, dark, none, dark);
+        C2D_DrawRectangle(0, low - band, 0, w, band, none, none, dark, dark);
+        C2D_DrawRectangle(0, 0, 0, side, low, dark, none, dark, none);
+        C2D_DrawRectangle(w - side, 0, 0, side, low, none, dark, none, dark);
     }
 }
 
@@ -7284,6 +8196,7 @@ static void RenderBattleWorld(uint32_t clear, float slider)
     if (sScene) RenderBattleScene(0);
     C2D_SceneBegin(sLogical);
     Blend(5, false, false);
+    if (sScene) HudDrawCrisp(HUD_FLAT);
     /* After a scene composed on its own only the text box is left; without
      * its surface, everything but what the world stands in for. */
     sLayerExclude = sScene ? 63 & ~(1u | 32u | BattleBoxLayers()) : sWorldLayers;
@@ -8797,6 +9710,26 @@ void CtrVideo_Present(void)
         sFrameFlat |= voxel ? CTR_FLAT_NO_VOXEL
                     : sBattleWorld && worldWanted ? CTR_FLAT_NO_SURFACE
                     : planesMissing ? CTR_FLAT_NO_PLANES : CTR_FLAT_OTHER;
+    /* The battle's info boxes and text box (DrawBattleTextHd, HudDrawCrisp). */
+    HudFrame();
+    BoxFrame();
+    sHudCrisp = sHud && sScene && !bottom && !blank && !sTransition && !voxel && HudCrispPossible();
+    /* Why the boxes are drawn into the scene (magnified with it) when they
+     * are: each change, the first few hundred of a session. */
+    {
+        static int lastCrisp = -1;
+        static unsigned told;
+
+        if (sHud && (int)sHudCrisp != lastCrisp && told < 200)
+        {
+            ++told;
+            CtrLog_Write(CTR_LOG_VIDEO, "HUD boxes %s f=%lu covered=%d stereo=%d world=%d dispcnt=%04x winin=%04x winout=%04x bgcnt=%04x/%04x/%04x/%04x",
+                         sHudCrisp ? "at screen pixels" : "in the scene", (unsigned long)sStats.frames,
+                         sHudCovered, stereo, sBattleWorld, Reg(0), Reg(0x48), Reg(0x4A),
+                         Reg(8), Reg(0xa), Reg(0xc), Reg(0xe));
+            lastCrisp = sHudCrisp;
+        }
+    }
     PORT_PROF_BEGIN(layers);
     if (!voxel && !blank) LayersRender();
     /* Before anything is composed: it is drawn from within (ComposeBand). */
