@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "global.h"
+#include "voxel_tileset_fixture.h"
 
 #include "voxel_lighting.h"
 #include "voxel_atlas.h"

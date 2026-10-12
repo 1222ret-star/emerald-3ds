@@ -491,6 +491,7 @@ verify-voxel-trees: build/voxel_tree_test.exe
 	./build/voxel_tree_test.exe
 
 build/voxel_tree_test.exe: tests/voxel_tree_test.c src/voxel/voxel_tree.c \
+		tests/voxel_tileset_fixture.h \
 		src/voxel/voxel_mesh_builder.c src/voxel/voxel_sign.c \
 		src/voxel/voxel_tree.h src/voxel/voxel_mesh_builder.h \
 		src/voxel/voxel_world.h src/voxel/voxel_atlas.h src/voxel/voxel_regions.h \
@@ -511,6 +512,7 @@ verify-voxel-lighting: build/voxel_lighting_on_test.exe build/voxel_lighting_off
 LIGHTING_TEST_SRCS := tests/voxel_lighting_test.c src/voxel/voxel_lighting.c src/voxel/voxel_sign.c \
 	src/voxel/voxel_mesh_builder.c src/voxel/voxel_tree.c src/voxel/voxel_relief.c
 LIGHTING_TEST_HEADERS := src/voxel/voxel_lighting.h src/voxel/voxel_mesh_builder.h \
+	tests/voxel_tileset_fixture.h \
 	src/voxel/voxel_world.h src/voxel/voxel_regions.h src/voxel/voxel_atlas.h src/voxel/voxel_tree.h \
 	src/voxel/voxel_building.h
 build/voxel_lighting_on_test.exe: $(LIGHTING_TEST_SRCS) $(LIGHTING_TEST_HEADERS)
