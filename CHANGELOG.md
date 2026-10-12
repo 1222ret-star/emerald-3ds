@@ -22,6 +22,12 @@ New and improved:
   tables, nine-column naming rows and column positions, and 22-byte type names.
   The native Pokédex uses a decimal comma and French measurement alignment.
 
+Fixed:
+
+- Battles: with the speed multiplier at x2 and above, a Pokémon sent out of
+  its Poké Ball (yours or a trainer's) made no cry. The game cleared the cry
+  before the sound engine had started it.
+
 ## 0.3.1 — 2026-10-10
 
 New and improved:
