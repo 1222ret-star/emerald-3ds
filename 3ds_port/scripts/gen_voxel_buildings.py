@@ -31,6 +31,7 @@ import voxel_building as vb  # noqa: E402
 import voxel_building_specs as specs  # noqa: E402
 import voxel_props  # noqa: E402
 import voxel_relief_fixes  # noqa: E402
+import voxel_night
 
 PORT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 # A placement whose cells keep their own metatile under the model: the
@@ -1009,7 +1010,7 @@ def preview(model, out_dir, cams=None):
 
 # ── Export ───────────────────────────────────────────────────────────────
 
-MAGIC = b"VXB7"
+MAGIC = b"VXB8"
 
 
 def cell_heights(model):
@@ -1338,7 +1339,7 @@ def placement_patches(model, layout_json_entry_name, layouts, px, py, odd):
 
 
 def export(models, path):
-    """Write buildings.bin (VXB7).
+    """Write buildings.bin (VXB8).
 
     Geometry is stored once per model, texture coordinates in pixels of the
     model's own drawing. Textures are paged by map: each layout that places
@@ -1346,9 +1347,9 @@ def export(models, path):
     patches), and a page-model record tells where on that page a model's
     drawing went. The console loads the pages of the maps on screen only.
 
-      "VXB7", u16 pages, models, pageModels, placements, heightBytes, masks,
+      "VXB8", u16 pages, models, pageModels, placements, heightBytes, masks,
       u32 vertices, u16 variants, u16 0
-      pages       x 8:  u16 w, h; u32 file offset of its RGBA5551 texels
+      pages       x 8:  u16 w, h (bit 15: glass mask); u32 offset of RGBA5551 texels
       models      x 16: u8 w, h; u16 ground; u32 firstVertex, vertexCount, heights
       pageModels  x 8:  u16 model, page; i16 ox, oy (pixels)
       placements  x 16: u16 layout, pageModel, x, y, ground, extraCount;
@@ -1361,7 +1362,8 @@ def export(models, path):
       layout, metatile; u8 quarters, 0: a metatile of the tileset that
       layout draws it from, less those quarters - see ground_variants),
       padding to 4,
-      vertices x 24 (x, y, z, u, v, shade), then the pages' texels.
+      vertices x 24 (x, y, z, u, v, shade), then the pages' texels and,
+      for flagged pages only, w*h L8 glass-mask bytes in the same PICA order.
     """
     layouts_json = json.load(open(os.path.join(vb.ROOT, "data", "layouts", "layouts.json"),
                                   encoding="utf-8"))["layouts"]
@@ -1408,6 +1410,7 @@ def export(models, path):
     for rec in found:
         by_layout.setdefault(rec[0], []).append(rec)
     pages, page_models, placements, texels = [], [], [], []
+    glowing_pages = []
     for lid in sorted(by_layout):
         recs = by_layout[lid]
         used = sorted({r[1] for r in recs})
@@ -1423,15 +1426,29 @@ def export(models, path):
                              % (recs[0][6], tw, th, MAX_TEXTURE[0], MAX_TEXTURE[1]))
         page = len(pages)
         tex = bytearray(tw * th * 2)
+        glow = bytearray(tw * th)
         for key, img in images:
             ox, oy = spots[key]
             apx = img.load()
+            window_pixels = None
+            if key[0] == "m":
+                model = models[key[1]]
+                rectangles = voxel_night.NIGHT_WINDOWS.get(model.name, ())
+                full_mask = voxel_night.window_mask(model.art, rectangles)
+                window_pixels = Image.frombytes("L", model.art.size, bytes(full_mask)).crop(crops[model.name])
+                if rectangles and not any(full_mask):
+                    raise ValueError("%s has no glass pixels in its authored windows" % model.name)
             for y in range(img.size[1]):
                 for x in range(img.size[0]):
                     r_, g_, b_, a_ = apx[x, y]
                     value = (r_ >> 3) << 11 | (g_ >> 3) << 6 | (b_ >> 3) << 1 | int(a_ >= 128)
                     struct.pack_into("<H", tex, 2 * texel_offset(ox + x, oy + y, tw), value)
+                    if window_pixels is not None:
+                        glow[texel_offset(ox + x, oy + y, tw)] = window_pixels.getpixel((x, y))
         pages.append((tw, th))
+        glowing_pages.append(any(glow))
+        if glowing_pages[-1]:
+            tex += glow
         texels.append(tex)
         pm_of = {}
         for k in used:
@@ -1485,8 +1502,8 @@ def export(models, path):
     body += struct.pack("<%df" % len(verts), *verts)
     offset = len(head) + table_size + len(body)
     table = bytearray()
-    for (tw, th), tex in zip(pages, texels):
-        table += struct.pack("<HHI", tw, th, offset)
+    for (tw, th), tex, glowing in zip(pages, texels, glowing_pages):
+        table += struct.pack("<HHI", tw, th | (0x8000 if glowing else 0), offset)
         offset += len(tex)
     blob = head + table + body + b"".join(texels)
     os.makedirs(os.path.dirname(path), exist_ok=True)

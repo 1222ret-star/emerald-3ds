@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Experimental follow-up: berry growth shares clock acceleration, with
+  fractional bonus-minute carry, continuous speed changes and save-bound clock
+  persistence. Sleep/offline time stays at 1X; daily RTC events remain original.
+- Correct Spanish clock accents, add display-only EVENING / TARDE, separate
+  enemy/wild battle prefixes from names and translate modern party EXP text.
+- Experimental follow-up: clock-driven voxel sun and cast shadows, with
+  15-game-minute direction updates through the existing chunk budget,
+  retained caster caches, and no additional shadow rendering pass.
+- Experimental follow-up: two-hour eased visual transitions and authored
+  amber window emission on shared exterior voxel houses (including Petalburg),
+  disabled with day/night and excluded from interiors. No new encounter bands.
 - Opt-in ORIGINAL / TIMED grass encounters on eleven Hoenn routes, shared
   by random encounters, Sweet Scent and new visible wild spawns, with original
   levels/rates and unchanged water, caves, facilities and special encounters.
@@ -10,8 +21,8 @@
 
 - Optional outdoor morning, day, sunset and night lighting in classic 2D and
   voxel mode, disabled by default and configurable from ENHANCEMENTS.
-- Independent visual clock speeds from 1X to 120X, without accelerating
-  Emerald's RTC events or modifying the save format.
+- Independent clock speeds from 1X to 120X, without accelerating
+  Emerald's daily RTC events or modifying the GBA save format.
 - Spanish labels for the touch-screen settings tabs, enhancements, cheats,
   option values and give-items menu; English labels and saved settings stay
   unchanged.

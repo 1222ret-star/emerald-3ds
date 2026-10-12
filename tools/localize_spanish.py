@@ -27,6 +27,23 @@ def encoded(data: bytes) -> str:
     return ",".join("0x%02X" % byte for byte in data)
 
 
+def localize_port_battle_text(text: str) -> str:
+    replacements = {
+        "sText_PkmnTeamGainedEXP": r'_("¡El resto del equipo ganó\npuntos de experiencia!\p")',
+        "sText_WildPkmnPrefix": '_("salvaje ")',
+        "sText_FoePkmnPrefix": '_("enemigo ")',
+        "sText_FoePkmnPrefix2": '_("enemigo ")',
+        "sText_FoePkmnPrefix3": '_("enemigo ")',
+        "sText_FoePkmnPrefix4": '_("enemigo ")',
+    }
+    for name, replacement in replacements.items():
+        pattern = r"(static const u8 " + name + r"\[\] = )[^;]+;"
+        text, count = re.subn(pattern, lambda match: match[1] + replacement + ";", text)
+        if count != 1:
+            raise ValueError("Missing or duplicate battle text: " + name)
+    return text
+
+
 def stage(tree: Path, rom_path: Path) -> None:
     manifest = json.loads(gzip.decompress((ROOT / "tools/locales/spanish.json.gz").read_bytes()))
     rom = load_rom(rom_path)
@@ -81,6 +98,8 @@ def stage(tree: Path, rom_path: Path) -> None:
             else:
                 raise ValueError("Unknown edit kind: " + kind)
             text = text[:start] + replacement + text[end:]
+        if relative == "src/battle_message.c":
+            text = localize_port_battle_text(text)
         writes[path] = text.encode()
 
     for relative, offset, size in manifest["graphics"]:

@@ -8,6 +8,8 @@
 #include "3ds_log.h"
 #include "3ds_input.h"
 
+int64_t CtrPlatform_WallSeconds(void);
+
 /* SDK-free boundary: game translation units never include libctru headers. */
 typedef struct {
     float frameMs, workMs, peakWorkMs;

@@ -44,6 +44,7 @@ SOURCES := src/main_3ds.c src/3ds_log.c src/3ds_platform.c src/3ds_input.c src/3
 SOURCES += src/3ds_data.c src/3ds_pak.c src/3ds_settings.c src/3ds_prof.c
 SOURCES += src/3ds_video.c src/3ds_video_decode.c src/3ds_bottom_screen.c
 SOURCES += src/3ds_daynight.c
+SOURCES += src/3ds_clock_store.c
 SOURCES += src/3ds_encounters.c
 LIBS := -lcitro2d -lcitro3d $(LIBS)
 OBJECTS := $(patsubst src/%.c,build/%.o,$(SOURCES))
@@ -53,7 +54,7 @@ GAMEFLAGS += -iquote include -iquote ../include -iquote ../include/constants -iq
 VOXEL ?= 1
 CPPFLAGS += -DCTR_VOXEL_ENABLED=$(VOXEL)
 GAMEFLAGS += -DCTR_VOXEL_ENABLED=$(VOXEL)
-# Baked fixed-sun lighting and contact shadows, targeting Old 3DS.
+# Baked clock-driven lighting and contact shadows, targeting Old 3DS.
 VOXEL_LIGHTING ?= 1
 ifneq ($(VOXEL_LIGHTING),0)
 ifneq ($(VOXEL_LIGHTING),1)
@@ -184,6 +185,8 @@ build/input_test.exe: tests/input_test.c src/3ds_input_decode.c include/3ds_inpu
 
 verify: verify-video
 verify: verify-daynight
+verify: verify-clock-store
+verify: verify-night-windows
 verify: verify-encounters
 .PHONY: verify-encounters
 verify-encounters: build/encounters_test.exe
@@ -194,8 +197,20 @@ build/encounters_test.exe: tests/encounters_test.c src/3ds_encounters.c include/
 	$(HOSTCC) -std=c99 -O2 -Wall -Wextra -Werror -Iinclude tests/encounters_test.c src/3ds_encounters.c -o $@
 
 .PHONY: verify-daynight
+.PHONY: verify-night-windows
+verify-night-windows:
+	"$(PYTHON)" tests/voxel_night_test.py --cc "$(HOSTCC)" --assets romfs/voxel/buildings.bin
+
 verify-daynight: build/daynight_test.exe
 	./build/daynight_test.exe
+
+.PHONY: verify-clock-store
+verify-clock-store: build/clock_store_test$(EXESUFFIX)
+	./build/clock_store_test$(EXESUFFIX)
+
+build/clock_store_test$(EXESUFFIX): tests/clock_store_test.c src/3ds_clock_store.c src/3ds_daynight.c src/3ds_pak.c include/3ds_clock_store.h include/3ds_daynight.h
+	@mkdir -p build
+	$(HOSTCC) -std=c99 -O2 -Wall -Wextra -Werror -Drename=CtrTestRename -Iinclude tests/clock_store_test.c src/3ds_clock_store.c src/3ds_daynight.c src/3ds_pak.c -lm -o $@
 
 build/daynight_test.exe: tests/daynight_test.c src/3ds_daynight.c include/3ds_daynight.h include/3ds_platform.h
 	@mkdir -p build

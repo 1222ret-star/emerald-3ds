@@ -1,4 +1,4 @@
-/* Fixed sun, baked into chunk colours; no extra terrain GPU pass. */
+/* Clock-driven sun, baked into chunk colours; no extra terrain GPU pass. */
 #ifndef CTR_VOXEL_LIGHTING_H
 #define CTR_VOXEL_LIGHTING_H
 
@@ -10,10 +10,15 @@
 #endif
 
 #if CTR_VOXEL_LIGHTING
-/* Sun in the northwest; shadows travel southeast. Y is height. The sun is
- * along (-DX, 1, -DZ): 45 degrees up. */
-#define VOXEL_SUN_DX 0.85f
-#define VOXEL_SUN_DZ 0.55f
+/* The legacy sun is northwest; AUTO follows the clock. Y is height. */
+typedef struct
+{
+    float dx, dz, strength;
+    uint32_t key;
+} VoxelSun;
+extern VoxelSun gVoxelSun;
+#define VOXEL_SUN_DX (gVoxelSun.dx)
+#define VOXEL_SUN_DZ (gVoxelSun.dz)
 #define VOXEL_LIGHT_REACH 8
 /* The light of what the sun does not reach: a cast shadow, and a face turned
  * away from the sun. The same number, so a wall and the shadow it casts on
@@ -26,6 +31,7 @@
  * were read from changes - a live tile, the set of maps or their origins -
  * and needed at no other time: the caches outlive builds and frames. */
 void VoxelLighting_Reset(void);
+bool VoxelLighting_SetSun(float dx, float dz, float strength, uint32_t key);
 uint32_t VoxelLighting_Hash(int x0, int z0, int x1, int z1);
 float VoxelLighting_Sample(float x, float y, float z);
 /* Rays cast so far (samples not found in the cache), for the build logs. */

@@ -4,9 +4,19 @@ Pokémon Emerald 3Ds Dual Screen funciona con la ROM española limpia de
 **Pokémon Esmeralda (España, BPES)**, con sus textos y gráficos. La traducción
 no se distribuye: sale de tu propia ROM, en tu ordenador o en tu navegador.
 
-Probado en una 3DS física con las funciones actuales (6 de octubre de 2026).
+El usuario confirmó el funcionamiento de la última compilación en su 3DS
+física el 12 de octubre de 2026, sin detallar resultados por escenario.
 
 ## Instalar
+
+La vista experimental de luces suaves usa el mismo código en los dos idiomas:
+transiciones de dos horas de juego y cristales cálidos en casas voxel
+compatibles, incluidas las de Ciudad Petalia. Se activa con **MEJORAS →
+DIA / NOCHE → AUTO** y respeta **VELOC. RELOJ**. No cambia los horarios de
+encuentros ni la partida. Las farolas y los cristales luminosos en el modo
+clásico 2D siguen pendientes. El usuario confirmó esta compilación en consola
+y autorizó incorporarla a la PR #57. Consulta el
+[alcance y procedimiento](DAY_NIGHT.md#experimental-follow-up-softer-transitions-and-warm-windows).
 
 Igual que la versión inglesa: el builder web y el de Windows aceptan las dos
 ROM y eligen solos el idioma. Cada release incluye las dos variantes: el
@@ -71,7 +81,18 @@ El ciclo opcional de día/noche y la velocidad del reloj aparecen como
 `DIA / NOCHE` y `VELOC. RELOJ`; las opciones binarias muestran `NO` y `SI`.
 `POKéMON SALV.` permite elegir `ORIGINAL` o `POR HORARIO`, de forma
 independiente del tinte. `VER RELOJ` añade hora, franja y velocidad al pie del
-mapa inferior; las franjas se muestran como `MANANA`, `DIA` y `NOCHE`.
+mapa inferior; las franjas se muestran como `MAÑANA` (04:00–09:59),
+`DÍA` (10:00–15:59), `TARDE` (16:00–19:59) y `NOCHE` (20:00–03:59).
+El indicador admite los glifos Ñ e Í del juego. TARDE es una subdivisión
+visual de DÍA; no modifica las tablas de encuentros. La versión experimental
+acelera también el crecimiento de las bayas, conservando sus reglas originales.
+Los eventos diarios siguen el RTC real. Al volver a 1X se mantiene la hora
+acumulada; con la consola suspendida o la aplicación cerrada transcurre tiempo
+a 1X. La fase y las fracciones pendientes se guardan junto a la partida en
+`emerald3ds.clock` (y, si existe, `emerald3ds.clock.bak`). Copia esos archivos
+junto con `emerald3ds.sav` para conservar también el estado del reloj.
+El mensaje del reparto de experiencia moderno está traducido y los prefijos
+de Pokémon enemigos/salvajes incluyen separación antes del nombre.
 Las dos opciones nuevas están desactivadas de forma predeterminada.
 
 ## Autoría

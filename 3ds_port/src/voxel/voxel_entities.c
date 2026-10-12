@@ -751,6 +751,8 @@ static void EmitCastShadow(VoxelBuilder *shadows, const VoxelSpriteSlot *slot, u
                            float worldX, float worldZ, float rightX, float rightZ, float stretch,
                            float light, float lift)
 {
+    if (gVoxelSun.strength == 0.0f)
+        return;
     unsigned baseX = (index % VOXEL_SPRITE_COLUMNS) * VOXEL_SPRITE_SLOT_DIM;
     unsigned baseY = (index / VOXEL_SPRITE_COLUMNS) * VOXEL_SPRITE_SLOT_DIM;
     float u0 = baseX / (float)VOXEL_SPRITE_ATLAS_DIM;
@@ -782,7 +784,7 @@ static void EmitCastShadow(VoxelBuilder *shadows, const VoxelSpriteSlot *slot, u
         return;
     if (strength > 1.0f)
         strength = 1.0f;
-    strength *= VOXEL_CAST_SHADOW_ALPHA;
+    strength *= VOXEL_CAST_SHADOW_ALPHA * gVoxelSun.strength;
     VoxelBuilder_Quad(shadows,
         &(VoxelVertex){ax,      ya, az + za,      u0, v1, strength},
         &(VoxelVertex){bx,      yb, bz + zb,      u1, v1, strength},
@@ -799,6 +801,8 @@ static void EmitCastShadow(VoxelBuilder *shadows, const VoxelSpriteSlot *slot, u
 static void EmitDecalShadow(VoxelBuilder *shadows, const VoxelSpriteSlot *slot, unsigned index,
                             float cx, float cz, float height, float light)
 {
+    if (gVoxelSun.strength == 0.0f)
+        return;
     unsigned baseX = (index % VOXEL_SPRITE_COLUMNS) * VOXEL_SPRITE_SLOT_DIM;
     unsigned baseY = (index / VOXEL_SPRITE_COLUMNS) * VOXEL_SPRITE_SLOT_DIM;
     float u0 = baseX / (float)VOXEL_SPRITE_ATLAS_DIM;
@@ -816,7 +820,7 @@ static void EmitDecalShadow(VoxelBuilder *shadows, const VoxelSpriteSlot *slot, 
         return;
     if (strength > 1.0f)
         strength = 1.0f;
-    strength *= VOXEL_CAST_SHADOW_ALPHA;
+    strength *= VOXEL_CAST_SHADOW_ALPHA * gVoxelSun.strength;
     VoxelBuilder_Quad(shadows,
         &(VoxelVertex){x - halfW, y, z + halfH, u0, v1, strength},
         &(VoxelVertex){x + halfW, y, z + halfH, u1, v1, strength},

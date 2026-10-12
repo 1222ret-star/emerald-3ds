@@ -89,7 +89,7 @@ interface on the bottom screen replaces the START menu. Enable the optional
 | **Native 3DS homebrew** | Runs directly on the console's ARM11 using libctru, Citro2D and Citro3D, without an emulator. |
 | **Two screens, one adventure** | The game on top, with a dedicated touch interface below in place of the START menu. |
 | **Optional voxel overworld** | Modelled buildings, trees, signposts and terrain relief, with adjustable camera angle and zoom. |
-| **Optional day/night lighting** | Morning, daylight, sunset and night outdoors in both 2D and voxel mode, with an independently adjustable visual clock. |
+| **Optional day/night lighting** | Eased morning, daylight, sunset and night outdoors in both 2D and voxel mode, an independently adjustable visual clock, and experimental moving solar shadows and warm windows on supported voxel houses. |
 | **Built from your own cartridge** | The builder generates the game data locally from your own dump. No ROM content is distributed. |
 
 ### A new perspective on Hoenn
@@ -116,13 +116,14 @@ original colours. Voxel battle scenery follows the outdoor lighting.
 follows Emerald's local clock, including the time set at the start of the
 game. Higher speeds advance a separate feature clock: 60X completes a day
 in 24 real minutes and 120X in 12 minutes. Game speed does not accelerate
-this clock, and berries, daily events and save data are unaffected.
+this clock. The experimental follow-up also accelerates berry growth;
+daily events and the GBA save format remain original.
 
-The settings survive a restart. The accelerated clock starts from the game's
-local time each session, pauses during console sleep, and retains its current
-phase when switching between accelerated speeds. Selecting 1X synchronizes
-it with the game's clock; disabling all clock consumers and re-enabling one
-also resynchronizes it.
+The settings survive a restart. Initially, the accelerated clock starts from
+the game's local time. Saving also preserves its accumulated offset and pending
+berry fractions in an auxiliary file. Changing speeds, returning to 1X or
+disabling the visual consumers keeps the offset instead of resetting it.
+Console sleep and offline time advance at 1X, not the selected accelerated rate.
 
 **WILD POKEMON → TIMED** optionally changes selected grass slots by morning,
 day and night on routes 101–104, 110, 116–117, 119–121 and 123.
@@ -134,6 +135,10 @@ Random encounters, Sweet Scent and new visible Pokémon share the schedule.
 name on the bottom MAP screen. It is OFF by default. The clock, encounters
 and lighting work independently and share the selected clock speed.
 See the [day/night test guide](docs/DAY_NIGHT.md) before publishing a build.
+The experimental follow-up also accelerates berry growth and preserves the
+clock offset and pending fractions alongside the save. Daily events remain
+on the original RTC; sleep/offline time advances at 1X. Back up the auxiliary
+`emerald3ds.clock` and `.clock.bak` files together with `emerald3ds.sav`.
 
 ### Recommended: use the website
 

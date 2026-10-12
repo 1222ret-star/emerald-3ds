@@ -42,6 +42,11 @@ uint64_t CtrPlatform_Milliseconds(void)
     return svcGetSystemTick() / (SYSCLOCK_ARM11 / 1000);
 }
 
+int64_t CtrPlatform_WallSeconds(void)
+{
+    return (int64_t)time(NULL);
+}
+
 uint64_t CtrPlatform_Ticks(void)
 {
     return svcGetSystemTick();

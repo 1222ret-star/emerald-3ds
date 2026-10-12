@@ -1356,7 +1356,17 @@ static const u8 *Ascii(const char *text)
         char c = *text;
         u8 v;
 
-        if (c >= 'A' && c <= 'Z') v = CHAR_A + (c - 'A');
+        if ((u8)c == 0xC3 && (u8)text[1] == 0x91)
+        {
+            v = CHAR_N_TILDE;
+            ++text;
+        }
+        else if ((u8)c == 0xC3 && (u8)text[1] == 0x8D)
+        {
+            v = CHAR_I_ACUTE;
+            ++text;
+        }
+        else if (c >= 'A' && c <= 'Z') v = CHAR_A + (c - 'A');
         else if (c >= 'a' && c <= 'z') v = CHAR_a + (c - 'a');
         else if (c >= '0' && c <= '9') v = CHAR_0 + (c - '0');
         else if (c == '/') v = CHAR_SLASH;
@@ -3980,7 +3990,8 @@ static void DrawRegionName(const ViewState *s)
 static void DrawMapClock(const ViewState *s)
 {
     static const char *const phases[] = {
-        CTR_TEXT("MORNING", "MANANA"), CTR_TEXT("DAY", "DIA"), CTR_TEXT("NIGHT", "NOCHE")
+        CTR_TEXT("MORNING", "MAÑANA"), CTR_TEXT("DAY", "DÍA"),
+        CTR_TEXT("EVENING", "TARDE"), CTR_TEXT("NIGHT", "NOCHE")
     };
     char time[8], speed[8];
     int top = NAME_Y + 18, bottom = NAME_Y + NAME_H;
@@ -3999,7 +4010,10 @@ static void DrawMapClock(const ViewState *s)
         strcpy(speed, "--");
     }
     DrawStrIn(&sSmall, Ascii(time), NAME_X + 4, NAME_X + 65, top, bottom, TXT_DARK, TXT_LIGHT);
-    DrawStrIn(&sSmall, Ascii(s->clockValid ? phases[s->clockPhase] : "--"),
+    unsigned phase = s->clockPhase == CTR_TIME_NIGHT ? 3u
+                   : s->clockPhase == CTR_TIME_MORNING ? 0u
+                   : s->clockMinute >= 16u * 60u ? 2u : 1u;
+    DrawStrIn(&sSmall, Ascii(s->clockValid ? phases[phase] : "--"),
               NAME_X + 66, NAME_X + 168, top, bottom, TXT_DARK, TXT_LIGHT);
     DrawStrIn(&sSmall, Ascii(speed), NAME_X + 169, NAME_X + NAME_W - 4, top, bottom, TXT_DARK, TXT_LIGHT);
 }

@@ -928,9 +928,16 @@ typedef struct
     unsigned loaded;    /* texels copied so far; w*h when ready */
     C3D_Tex tex;
     uint32_t used;      /* frame last needed */
+    C3D_Tex glow;
+    bool glowValid;
     uint64_t requested; /* tick it was asked for, for the log */
 } BuildingPageSlot;
 static BuildingPageSlot sPageSlots[VOXEL_BUILDING_PAGES];
+extern uint8_t __C3D_Context[];
+#define C3DI_CONTEXT_FLAGS 0x20u
+#define C3DI_CONTEXT_TEX 0x118u
+#define C3DI_FLAG_TEX(unit) (1u << (23 + (unit)))
+static C3D_Tex *sGlowBound;
 
 enum { STREAM_IDLE, STREAM_READING, STREAM_DONE, STREAM_FAILED };
 
@@ -986,6 +993,10 @@ static void PageTexInit(C3D_Tex *tex, void *data, unsigned w, unsigned h)
 
 static void PageFree(BuildingPageSlot *slot)
 {
+    if (slot->glow.data != NULL)
+        C3D_TexDelete(&slot->glow);
+    memset(&slot->glow, 0, sizeof(slot->glow));
+    slot->glowValid = false;
     VoxelArena_Free(&sPageArena, slot->tex.data);
     memset(&slot->tex, 0, sizeof(slot->tex));
     slot->page = -1;
@@ -1016,6 +1027,22 @@ static struct
     int32_t failed;     /* the last payload that would not read */
 } sAssetAhead;
 
+static bool ReadPageSlice(BuildingPageSlot *slot, unsigned first, unsigned count, uint16_t *dest)
+{
+    if (!VoxelBuildings_ReadPage((unsigned)slot->page, first, count, dest))
+        return false;
+    if (slot->glowValid)
+    {
+        uint8_t *mask = (uint8_t *)slot->glow.data + first;
+
+        if (!VoxelBuildings_ReadGlow((unsigned)slot->page, first, count, mask))
+            slot->glowValid = false;
+        else
+            GSPGPU_FlushDataCache(mask, count);
+    }
+    return true;
+}
+
 static void StreamWorker(void *arg)
 {
     (void)arg;
@@ -1026,8 +1053,7 @@ static void StreamWorker(void *arg)
             break;
         if (sStream.state == STREAM_READING)
         {
-            bool ok = VoxelBuildings_ReadPage((unsigned)sStream.page, sStream.first,
-                                              sStream.count, sStream.buffer);
+            bool ok = ReadPageSlice(sStream.slot, sStream.first, sStream.count, sStream.buffer);
 
             /* Written from this core's cache: out to memory for the GPU's
              * copy before the render thread is told. */
@@ -1293,6 +1319,16 @@ static void WantPage(int page, uint32_t keep, bool quiet)
         PageFree(drop);
     }
     victim->page = page;
+    if (victim->glow.data != NULL)
+        C3D_TexDelete(&victim->glow);
+    memset(&victim->glow, 0, sizeof(victim->glow));
+    victim->glowValid = VoxelBuildings_PageHasGlow((unsigned)page)
+                     && C3D_TexInit(&victim->glow, (u16)w, (u16)h, GPU_L8);
+    if (victim->glowValid)
+    {
+        C3D_TexSetFilter(&victim->glow, GPU_NEAREST, GPU_NEAREST);
+        C3D_TexSetWrap(&victim->glow, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+    }
     victim->loaded = 0;
     victim->used = ring ? FramesAgo(keep / 2u) : sFrame;
     victim->requested = svcGetSystemTick();
@@ -1356,8 +1392,7 @@ static void StreamPages(void)
         if (sAtlasUploadPending || AtlasJobBusy() || sAtlasStaging == NULL
          || (next = NextPageSlot()) == NULL || !CtrVideo_TryVoxelUpload())
             return;
-        if (!VoxelBuildings_ReadPage((unsigned)next->page, next->loaded, SliceOf(next),
-                                     sAtlasStaging))
+        if (!ReadPageSlice(next, next->loaded, SliceOf(next), sAtlasStaging))
         {
             MarkBadPage(next->page);
             next->page = -1;
@@ -1404,8 +1439,7 @@ static void StreamPages(void)
     else
     {
         /* Picked up at the top of the next frame, like the worker's result. */
-        sStream.state = VoxelBuildings_ReadPage((unsigned)sStream.page, sStream.first,
-                                                sStream.count, sStream.buffer)
+        sStream.state = ReadPageSlice(sStream.slot, sStream.first, sStream.count, sStream.buffer)
                       ? STREAM_DONE : STREAM_FAILED;
     }
 }
@@ -1733,7 +1767,7 @@ bool CtrVoxel_Init(void)
     sReady = true;
     CtrLog_Write(CTR_LOG_VIDEO, "VOXEL stream policy 7: drafts for holes, hashed chunk lookup");
     CtrLog_Write(CTR_LOG_VIDEO, "VOXEL lighting: %s",
-                 CTR_VOXEL_LIGHTING ? "fixed sun + baked shadows + cast sprite shadows" : "disabled");
+                 CTR_VOXEL_LIGHTING ? "clock sun + cached shadows + cast sprite shadows" : "disabled");
     CtrLog_Write(CTR_LOG_VIDEO,
                  "VOXEL init: %u staging + %u billboard vertices (%lu KiB linear), up to %u VRAM "
                  "atlases of %lu KiB (%ux%u, %u slots), page stream %s, linear free=%lu, VRAM free=%lu",
@@ -1813,6 +1847,8 @@ void CtrVoxel_Shutdown(void)
     sHaveFog = sHaveGloom = sOwnsFog = false;
     for (unsigned i = 0; i < VOXEL_BUILDING_PAGES; ++i)
     {
+        if (sPageSlots[i].glow.data != NULL)
+            C3D_TexDelete(&sPageSlots[i].glow);
         memset(&sPageSlots[i], 0, sizeof(sPageSlots[i]));
         sPageSlots[i].page = -1;
     }
@@ -4465,6 +4501,15 @@ bool CtrVoxel_Update(void)
         }
     }
 
+#if CTR_VOXEL_LIGHTING
+    {
+        const CtrDayNightSun *sun = CtrDayNight_GetSun();
+
+        if (VoxelLighting_SetSun(sun->dx, sun->dz, sun->strength, sun->key))
+            ++sEpoch;
+    }
+#endif
+
     VoxelWorld_GetLocation(&mapGroup, &mapNum);
     /*
      * Two different positions on purpose. The camera follows the interpolated
@@ -5138,11 +5183,6 @@ static void DappleFrame(void)
  * bit 23 + unit), and only once the slot is seen to hold the dapples: under
  * any other layout the unit stays on, which costs a little and draws the same.
  */
-extern uint8_t __C3D_Context[];
-#define C3DI_CONTEXT_FLAGS 0x20u
-#define C3DI_CONTEXT_TEX 0x118u
-#define C3DI_FLAG_TEX(unit) (1u << (23 + (unit)))
-
 static void ReleaseDappleUnit(void)
 {
     static bool warned;
@@ -5674,6 +5714,49 @@ static void TerrainTexEnv(const VoxelLight *dapples)
     C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
 }
 
+static void ReleaseGlowUnit(void)
+{
+    uint32_t *flags = (uint32_t *)(void *)(__C3D_Context + C3DI_CONTEXT_FLAGS);
+    C3D_Tex **bound = (C3D_Tex **)(void *)(__C3D_Context + C3DI_CONTEXT_TEX);
+
+    if (sGlowBound == NULL)
+        return;
+    if (bound[2] == sGlowBound)
+    {
+        bound[2] = NULL;
+        *flags |= C3DI_FLAG_TEX(2);
+    }
+    else
+        C3D_TexBind(2, &sTreeAtlas);
+    sGlowBound = NULL;
+}
+
+static void BuildingGlowEnv(C3D_Tex *mask, float strength)
+{
+    C3D_TexEnv *env;
+
+    TerrainTexEnv(NULL);
+    if (mask == NULL || strength <= 0.0f)
+    {
+        ReleaseGlowUnit();
+        return;
+    }
+    C3D_TexBind(2, mask);
+    sGlowBound = mask;
+    env = C3D_GetTexEnv(1);
+    C3D_TexEnvSrc(env, C3D_Alpha, GPU_TEXTURE2, GPU_CONSTANT, GPU_CONSTANT);
+    C3D_TexEnvOpAlpha(env, GPU_TEVOP_A_SRC_R, GPU_TEVOP_A_SRC_ALPHA, GPU_TEVOP_A_SRC_ALPHA);
+    C3D_TexEnvFunc(env, C3D_Alpha, GPU_MODULATE);
+    C3D_TexEnvColor(env, (uint32_t)(strength * 255.0f + 0.5f) << 24);
+    env = C3D_GetTexEnv(2);
+    C3D_TexEnvSrc(env, C3D_RGB, GPU_CONSTANT, GPU_PREVIOUS, GPU_PREVIOUS);
+    C3D_TexEnvOpRgb(env, GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_ALPHA);
+    C3D_TexEnvFunc(env, C3D_RGB, GPU_INTERPOLATE);
+    C3D_TexEnvSrc(env, C3D_Alpha, GPU_TEXTURE0, GPU_TEXTURE0, GPU_TEXTURE0);
+    C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
+    C3D_TexEnvColor(env, 0xFFA0D8FFu);
+}
+
 static void HazeTexEnv(uint32_t colour)
 {
     C3D_TexEnv *env = C3D_GetTexEnv(3);
@@ -5981,6 +6064,8 @@ void CtrVoxel_Draw(C3D_RenderTarget *target, float eyeOffset)
     for (unsigned pass = 0; pass < VOXEL_ATLAS_PAGES + 2u; ++pass)
     {
         const C3D_Tex *boundTex = NULL;
+        bool glowing = pass == VOXEL_ATLAS_PAGES + 1u && !indoor
+                    && CtrDayNight_Get()->glow > 0.0f;
 
         C3D_AlphaTest(true, GPU_GREATER, 0);
 
@@ -6010,11 +6095,20 @@ void CtrVoxel_Draw(C3D_RenderTarget *target, float eyeOffset)
             {
                 boundTex = tex;
                 C3D_TexBind(0, tex);
+                if (glowing)
+                {
+                    BuildingPageSlot *page = FindPage(chunk->buildingPage);
+
+                    BuildingGlowEnv(page != NULL && page->glowValid ? &page->glow : NULL,
+                                    CtrDayNight_Get()->glow);
+                }
             }
             BindVertices(chunk->vram);
             C3D_DrawArrays(GPU_TRIANGLES, (int)first, (int)count);
         }
     }
+    ReleaseGlowUnit();
+    TerrainTexEnv(dapples ? &light : NULL);
 
     /* The reflections, cast shadows and the player's silhouette take no
      * dapples; the unit stays bound for the sprites and the rays, and is

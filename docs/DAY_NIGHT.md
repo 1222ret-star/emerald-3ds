@@ -4,8 +4,9 @@
 
 The lighting, timed land encounters and bottom-screen clock are independent,
 opt-in features. They introduce no NPC schedules, music changes or new assets.
-They do not modify the RTC,
-berry updates, daily events, game save layout or data-pack schema.
+The experimental follow-up also accelerates berry growth using the shared
+clock. It does not modify the RTC, daily-event calendar, GBA save layout or
+data-pack schema.
 
 In OPTION → ENHANCEMENTS:
 
@@ -19,29 +20,53 @@ In OPTION → ENHANCEMENTS:
 The port persists `day_night=0|1` and `clock_speed=0..5` in its existing
 SD settings file, along with `timed_encounters=0|1` and `show_clock=0|1`.
 Unknown enable values disable their feature; unknown speed values select 1X.
-The shared clock runs whenever at least one consumer is enabled. Lighting
+The shared clock runs whenever at least one consumer is enabled, a speed
+above 1X is selected, or an accelerated clock offset has been retained. Lighting
 remains unchanged when DAY / NIGHT is OFF, even with timed encounters enabled.
 
 ## Clock behaviour
 
-1X reads Emerald's effective local clock, including the saved local-time
+Initially, 1X reads Emerald's effective local clock, including the saved local-time
 offset. The bridge calculates a temporary time instead of rewriting
 `gLocalTime` or the game's RTC. It samples at most once per second.
 
 Accelerated rates use elapsed monotonic milliseconds, never game frames.
 They start from local game time, retain their phase when changing accelerated
-rates, wrap at midnight, and pause over console sleep/suspension. At 24X a
-day takes one hour; at 60X, 24 minutes; at 120X, 12 minutes. Selecting 1X
-resynchronizes to local time. Disabling all three consumers and re-enabling
-one also resynchronizes; toggling one while another remains on retains phase.
-The accelerated phase is session-only; only the selected options persist.
+rates, and wrap at midnight. At 24X a day takes one hour; at 60X, 24 minutes;
+at 120X, 12 minutes. After acceleration, selecting 1X keeps the accumulated
+offset and advances normally instead of jumping back to the system hour.
+Changing lighting, encounters or clock visibility does not discard that offset.
+During sleep or while the app is closed, time advances at 1X, not the selected
+accelerated rate. The original daily events continue to use the real RTC.
+
+## Berry growth and persistence
+
+Berry growth receives the original RTC minutes plus only the additional
+`(rate - 1)` time generated while playing. This prevents double-counting the
+real minutes, including across midnight. Sub-minute fractions are retained
+when changing rates; the original watering, yield, regrowth and expiry rules
+still apply. Trees whose original `stopGrowth` flag is set remain stopped.
+The normal overworld callback checks for pending bonus minutes; at 120X this
+requires at most about two tree scans per real second, not a scan per frame.
+Menus and battles accumulate time for the next normal field update.
+
+Successful normal/Hall-of-Fame and completed link saves also write a 40-byte
+`SD:/3ds/emerald3ds/emerald3ds.clock` file with phase, pending bonus milliseconds,
+wall-time anchor, a CRC of the save image and a record CRC. A temporary file
+and `.clock.bak` recovery file support filesystems without rename-overwrite.
+Loading or soft-resetting restores only state matching the loaded save image;
+a new game resets it. Missing, corrupt or mismatched state safely falls back
+to the original RTC without modifying the `.sav` or granting bonus growth.
+Keep `.sav`, `.clock` and `.clock.bak` together when backing up/restoring a save.
+If writing the auxiliary file fails, the game save remains usable, but clock
+offset/fraction persistence is not guaranteed; the failure is logged.
 
 ## Bottom-screen indicator
 
-SHOW CLOCK displays `HH:MM`, MORNING / DAY / NIGHT and the selected rate
+SHOW CLOCK displays `HH:MM`, MORNING / DAY / EVENING / NIGHT and the selected rate
 in a compact plate below the location name on the MAP screen. It does not
 overlap the map, right-hand buttons, menus or battle UI. Spanish builds show
-MANANA / DIA / NOCHE. The name plate uses the small font while the clock is
+MAÑANA / DÍA / TARDE / NOCHE. The name plate uses the small font while the clock is
 visible; disabling it restores the original layout. Redraws track minutes,
 not frames or seconds, and clock-only changes repaint only the footer.
 An unavailable clock displays `--:--` and timed encounters fall back to ORIGINAL.
@@ -51,6 +76,11 @@ An unavailable clock displays `--:--` and timed encounters fall back to ORIGINAL
 WILD POKEMON → TIMED (Spanish: POKéMON SALV. → POR HORARIO) switches
 selected grass slots on eleven Hoenn routes using the same effective clock:
 morning 04:00–09:59, day 10:00–19:59, night 20:00–03:59.
+The clock display splits the day band at 16:00 into DAY / EVENING
+(Spanish: MAÑANA / DÍA / TARDE / NOCHE). This is display-only;
+encounter tables still use the original three bands.
+Clock acceleration applies to this display, lighting, solar shadows and timed
+encounters and berry growth, but not to the original daily events.
 This is a custom, conservative Hoenn schedule, not HGSS encounter data.
 Slots are zero-based; their weights remain Emerald's original weights.
 
@@ -91,14 +121,14 @@ The proposed schedule is inspired by, not an exact reproduction of, HGSS:
 
 | Visual time | Lighting |
 | --- | --- |
-| 00:00–03:30 | Cool blue night |
-| 03:30–04:00 | Smooth transition to morning |
-| 04:00–09:30 | Warm morning |
-| 09:30–10:00 | Smooth transition to daylight |
-| 10:00–16:30 | Original daylight colours |
-| 16:30–17:00 | Smooth transition to sunset |
-| 17:00–19:30 | Warm sunset |
-| 19:30–20:00 | Smooth transition to night |
+| 00:00–02:00 | Cool blue night |
+| 02:00–04:00 | Eased transition to morning |
+| 04:00–08:00 | Warm morning |
+| 08:00–10:00 | Eased transition to daylight |
+| 10:00–15:00 | Original daylight colours |
+| 15:00–17:00 | Eased transition to sunset |
+| 17:00–18:00 | Warm sunset |
+| 18:00–20:00 | Eased transition to night |
 | 20:00–24:00 | Cool blue night |
 
 Only towns, cities, routes and ocean routes receive the effect. Interiors,
@@ -110,17 +140,136 @@ Classic 2D multiplies the world layers and non-screen-space sprites during
 composition, before applying detected palette fades. BG0 text/windows and
 tagged screen-space sprites are excluded. Source palettes and cached tile
 textures remain unchanged. Voxel lighting modifies existing per-draw colour
-grades, distance haze, sunlight rays, motes and dapples; it does not rebuild
-meshes or atlases as time advances. Sun direction and baked shadows remain
-fixed. Night does not introduce illuminated windows or lamps.
+grades, distance haze, sunlight rays, motes and dapples. The PR #57 follow-up
+also updates cached voxel meshes for a moving sun as described below;
+classic 2D artwork shadows remain fixed.
+Encounter time bands keep their original boundaries; the clock display splits
+DÍA at 16:00 to show TARDE. The eased visual transitions start earlier.
+
+## Experimental follow-up: softer transitions and warm windows
+
+This follow-up is included in PR #57 after the user's physical-3DS acceptance
+on 2026-10-12. Its two-game-hour transitions use smoothstep interpolation, with
+zero slope at either end, instead of the original linear 30-minute ramps.
+At 120X a complete transition takes 60 real seconds rather than 15.
+
+### Clock-driven voxel shadows
+
+The experimental sun moves from east in the morning to west in the evening
+between 04:00 and 20:00 on the same effective clock. Building, tree and prop
+shadows fall in the opposite direction; character shadows and building-face
+lighting share that direction. Shadows are longer near dawn/dusk and shorter
+at midday. Direct sunlight fades near the horizon and is absent at night,
+while contact shading remains. This is an artistic bounded solar path, not
+an astronomical latitude/season simulation. Warm windows do not cast new
+shadows or illuminate nearby ground.
+
+For Old 3DS, the sun advances in 15-game-minute steps (7.5 real seconds at
+120X), not a full shadow rebuild each frame. A changed solar key invalidates
+the affected outdoor mesh signatures; the existing budgeted chunk scheduler
+refreshes visible/stale chunks while retaining their previous meshes until
+replacements are ready. In-progress old-sun jobs are discarded by the epoch
+check, and offscreen chunks refresh on demand. Caster classification caches
+are retained; only ray-result caches expire. There are no new shadow textures,
+framebuffers, draw passes or shader instructions. Direction changes are
+discrete and chunk updates are staggered: this is not continuous per-pixel
+shadow motion, and its visual pacing still needs console testing.
+
+Disabling day/night restores the legacy northwest sun even when the clock
+or timed encounters remain enabled. Indoors and invalid RTC also retain
+the legacy behaviour. Classic 2D uses its original artwork shadows and only
+receives the global colour transitions; dynamic cast shadows are voxel-only.
+
+In voxel mode, authored exterior glass panes gradually light up amber during
+sunset and fade out towards morning. Coverage starts with Petalburg's shared
+four- and five-cell houses, Oldale's houses, Littleroot's two houses and lab,
+and Route 104's flower shop. Reused copies of those building models receive
+the same effect. Frames, roofs, signs, doors and ground are excluded.
+This does not claim coverage for every Hoenn building. Street lamps and
+classic 2D window emission are not implemented in this preview; classic 2D
+does receive the softer global transitions.
+
+Window light follows `day_night` and the shared effective clock, without a
+new setting. With lighting disabled, indoors, or without a valid RTC, its
+strength is zero even if the clock or timed encounters remain enabled.
+Existing daylight textures are never recoloured or rebuilt as time advances.
+The mask is streamed with each building page and sampled in the existing
+building pass before haze and palette fades; no extra geometry or draw pass
+is added. Building draws with active emission omit sunlight dapples.
+
+Generated building files use VXB8: page height bit 15 marks an L8 glass mask
+immediately following that page's RGBA5551 pixels, in the same PICA order.
+Unmarked pages have no mask. The reader still accepts VXB7 without emission.
+At most four masks are resident, bounded by the existing page cache. They
+use linear memory, not the reserved world VRAM; allocation or mask-read
+failure falls back to an ordinary unlit building. Rebuild the engine and pack
+together: the old pack does not contain these masks.
+
+Preview hardware regression checklist (not individually reported):
+
+- Back up the save, auxiliary clock files, settings and previous working executable/pack.
+- In Petalburg, enable voxel mode, day/night AUTO, clock and 120X. Watch
+  sunset and dawn for at least a full transition each.
+- Check that only window panes glow and retain their crossbars; rotate the
+  camera, walk past the houses and cross the Route 102/104 borders.
+- Compare a house's ground shadow at morning, midday and evening. Confirm
+  that its direction reverses, its length shrinks at midday, and direct
+  shadows fade at night. Stay still across several 15-minute clock steps,
+  then move and cross map borders to check cache refreshes and frame pacing.
+- Open dialogue and menus, enter/exit a house, and trigger a palette fade;
+  lights must not show through roofs, remain after a fade, or tint interiors.
+- Disable day/night while leaving the clock or timed encounters on. Return
+  to 1X, then sleep/resume the console. Verify continuity and 1X sleep progress.
+- Repeat in Spanish and English, and check frame pacing on physical hardware.
+
+Local preview validation (2026-10-12): English and Spanish embedded-data and
+engine-only builds passed, with 34 required game symbols and no strong
+undefined symbol. Clock, encounters, authored masks, VXB7/VXB8 page readers,
+mocked emission-stage/texture-unit cleanup, input, video and pack-parser
+tests passed. Solar tests cover the 120X update cadence, suspend/resume,
+disabled/indoor/invalid-RTC fallback and 56,700 ray samples against a full
+point-by-point oracle, including reversed directions and zero axes. They
+also verify caster-cache reuse and mesh-signature invalidation. Lighting
+ON/OFF tests pass on macOS and in both staged builds; clock and ray tests
+pass ASan/UBSan. Mask/reader/render-state tests passed ASan/UBSan; both generated
+building files contain 14 glowing pages and no glow on transparent pixels.
+The existing map-footer raster and voxel scheduling harnesses also passed.
+All delivered pack entries passed CRC checks, with matching engine ABI:
+English `83aad755`, Spanish `a1ef398c`. Delivered SMDH files match the metadata
+embedded in each 3DSX; the Spanish preview title/description are localized.
+The berry-clock follow-up builds and links in both languages. Clock and storage
+tests pass on macOS (also ASan/UBSan) and in both Linux staging trees. Native
+berry-update tests pass in both trees for all rates, midnight, speed changes,
+duplicate calls and original watering/stopped-tree/expiry behaviour. Storage
+tests reject mismatched/corrupt records and cover backup recovery and write
+failure without mutating the save image. On 2026-10-12 the user confirmed that
+the latest supplied build works on their physical 3DS and authorized uploading
+these follow-up changes to PR #57. No console model or itemized results were
+provided; this records general hardware acceptance, not individual checklist passes.
+
+The broad terrain mesh harness could not link because its existing fixture
+does not supply `gTileset_Dewford`, which the unchanged tree code references.
+That fixture was not altered. Automated validation is not a full-suite pass or
+a GPU performance measurement; hardware acceptance is the user's report above.
 
 ## Automated validation
 
 - `make -C 3ds_port verify-daynight`: rate validation, midnight rollover,
   smooth phase boundaries, elapsed-time/frame-count independence, invalid
   settings, outdoor exclusions, sleep/resume and RTC failure fallback.
+- `make -C 3ds_port verify-night-windows`: authored glass masks, unchanged
+  source art, real VXB7/VXB8 readers, streamed slices, missing-mask fallback,
+  bounds checks and opaque-only generated masks, with ASan/UBSan.
 - `make -C 3ds_port verify-encounters`: phase boundaries and route/slot/species
   guards in the pure resolver.
+- `make -C 3ds_port verify-clock-store`: paired-save CRC, fractional progress,
+  corrupt/missing/mismatched records, replacement without overwrite, backup
+  recovery, backwards RTC and failed writes without game-save mutation.
+- `python3 3ds_port/tests/berry_clock_test.py --tree build/upstream`: the
+  production minute-update and growth functions, all six rates across midnight,
+  no double credit, speed changes, original watering/stopped-tree/expiry rules.
+  Repeat with the Spanish tree. A synthetic four-hour stage takes two real
+  minutes at 120X.
 - `python3 3ds_port/tests/encounter_tables_test.py --tree build/upstream`:
   production rules against pinned map data, every phase and original fallback,
   with unchanged input tables, levels and rates under ASan/UBSan.
@@ -136,7 +285,7 @@ fixed. Night does not introduce illuminated windows or lamps.
 
 ## Hardware validation and acceptance checklist
 
-### Local validation status (2026-10-12)
+### PR #57 baseline validation status (2026-10-12)
 
 - Default 3DS development and engine-only release builds: passed in the
   existing devkitPro Docker image using Python 3.12.
@@ -174,9 +323,10 @@ fixed. Night does not introduce illuminated windows or lamps.
   physical 3DS on 2026-10-12 and authorized opening the PR. The console model
   and an itemized checklist were not supplied, so this records user acceptance,
   not a claim that every scenario below was individually verified.
-- Follow-up scope: configurable time bands, gentler perceived lighting
-  transitions and illuminated windows/lamps are not included in this version.
-  The user approved publishing the current tested implementation unchanged.
+- The user also confirmed the latest softer-lighting, window, moving-shadow
+  and persistent berry-clock follow-up works on their physical 3DS on
+  2026-10-12 and authorized updating the existing PR #57. No itemized hardware
+  results or performance measurements were supplied.
 
 ### Procedure
 
@@ -201,16 +351,17 @@ Do not replace a release executable while keeping an incompatible data pack.
    doors, warps, Fly and fade-to-black/fade-to-white transitions.
 7. Test classic battles, voxel battle scenery, battle intro/exit and moves
    replacing the battle background. Battle text and Pokémon must not tint.
-8. Switch accelerated rates: no phase reset. Switch to 1X: resynchronize.
-   Disable all clock consumers and re-enable to confirm resynchronization.
+8. Switch accelerated rates and return to 1X: no phase reset.
+   Disable visual clock consumers and re-enable: the offset stays intact.
    Toggle only the lighting while SHOW CLOCK is ON and confirm phase continuity.
    Use game fast-forward and
    verify the visual clock still advances at the selected clock rate.
-9. Close/reopen the lid and use HOME/suspend. Accelerated lighting must not
-   jump by the slept interval; 1X must refresh to local time after resume.
-10. Restart and soft-reset. All four options persist, but accelerated phase
-    restarts from local time. Confirm saves, berries and daily events are
-    unchanged. Check FPS on Old 3DS if available.
+9. Close/reopen the lid and use HOME/suspend. The effective clock and berries
+   must receive only real elapsed time at 1X, not accelerated sleeping hours.
+10. Save, restart and soft-reset. Options, saved phase and pending fractions
+    persist; unsaved bonus progress rolls back with the save. Test a restored
+    `.sav` without its clock files: original RTC fallback, no free bonus growth.
+    Daily events stay on the real calendar. Check FPS on Old 3DS if available.
 11. Enable SHOW CLOCK at 1X and 120X. Check the MAP footer, midnight, phase
     boundaries, location changes and tapping the map; switch to other screens
     and battles to verify there is no overlay. Disable it to restore the name plate.
@@ -218,6 +369,10 @@ Do not replace a release executable while keeping an incompatible data pack.
     with lighting OFF as well as AUTO. Test random encounters, Sweet Scent,
     visible wild spawns, Repel and attraction abilities. Existing visible mons
     must not reroll when the time band or encounter setting changes.
+13. Plant and water berries at 120X. Compare stage duration against the species'
+    original hours: one real minute equals two growth hours. Save midway, reload,
+    switch to 6X and 1X, and confirm there is no restart or repeated growth credit.
+    Check visible growth while standing on the route and after menus/battles.
 13. Verify unaffected rare slots, caves, Surf, fishing, Feebas, Rock Smash,
     Battle Frontier, roamers and scripted encounters. ORIGINAL must restore
     the original species distribution immediately for new spawns/encounters.

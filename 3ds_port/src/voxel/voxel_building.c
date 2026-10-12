@@ -3,9 +3,9 @@
  * scripts/gen_voxel_buildings.py writes the file and documents the models.
  *
  * Layout (little endian):
- *   "VXB7", u16 pages, models, pageModels, placements, heightBytes, masks,
+ *   "VXB8" (also reads VXB7 without glow), u16 pages, models, pageModels, placements, heightBytes, masks,
  *   u32 vertices, u16 variants, u16 0
- *   pages       x 8:  u16 w, h; u32 file offset of its RGBA5551 texels
+ *   pages       x 8:  u16 w, h (bit 15: L8 glow after RGBA5551); u32 texel offset
  *   models      x 16: u8 w, h; u16 ground; u32 firstVertex, vertexCount, heights
  *   pageModels  x 8:  u16 model, page; i16 ox, oy (pixels)
  *   placements  x 16: u16 layout, pageModel, x, y, ground, extraCount;
@@ -48,6 +48,7 @@ typedef struct
 {
     uint16_t w, h;
     uint32_t offset;
+    bool glow;
 } BuildingPage;
 
 typedef struct
@@ -71,6 +72,7 @@ typedef struct
 
 static BuildingPage *sPages;
 static unsigned sPageCount;
+static bool sGlowFormat;
 static BuildingModel *sModels;
 static unsigned sModelCount;
 static BuildingPageModel *sPageModels;
@@ -148,8 +150,14 @@ static bool TakePage(unsigned i, const uint8_t *r)
 {
     sPages[i].w = (uint16_t)U16(r);
     sPages[i].h = (uint16_t)U16(r + 2);
+    sPages[i].glow = sGlowFormat && (sPages[i].h & 0x8000u) != 0;
+    if (sGlowFormat)
+        sPages[i].h &= 0x7FFFu;
     sPages[i].offset = U32(r + 4);
-    return true;
+    return sPages[i].w >= 8 && sPages[i].w <= 1024
+        && sPages[i].h >= 8 && sPages[i].h <= 1024
+        && (sPages[i].w & (sPages[i].w - 1u)) == 0
+        && (sPages[i].h & (sPages[i].h - 1u)) == 0;
 }
 
 static bool TakeModel(unsigned i, const uint8_t *r)
@@ -205,8 +213,9 @@ bool VoxelBuildings_Init(void)
         return false;
     }
     if (fread(header, 1, sizeof(header), file) != sizeof(header)
-     || memcmp(header, "VXB7", 4) != 0)
+     || (memcmp(header, "VXB7", 4) != 0 && memcmp(header, "VXB8", 4) != 0))
         goto done;
+    sGlowFormat = memcmp(header, "VXB8", 4) == 0;
     sPageCount = U16(header + 4);
     sModelCount = U16(header + 6);
     sPageModelCount = U16(header + 8);
@@ -326,7 +335,8 @@ bool VoxelBuildings_PageSize(unsigned page, unsigned *width, unsigned *height)
 
 bool VoxelBuildings_ReadPage(unsigned page, unsigned first, unsigned count, uint16_t *dest)
 {
-    if (page >= sPageCount || first + count > (unsigned)sPages[page].w * sPages[page].h)
+    if (page >= sPageCount || first > (unsigned)sPages[page].w * sPages[page].h
+     || count > (unsigned)sPages[page].w * sPages[page].h - first)
         return false;
     if (sPageFile == NULL)
     {
@@ -342,6 +352,24 @@ bool VoxelBuildings_ReadPage(unsigned page, unsigned first, unsigned count, uint
     /* On the reading thread, off the render thread's frame. */
     VoxelGrade_Texels(dest, count);
     return true;
+}
+
+bool VoxelBuildings_PageHasGlow(unsigned page)
+{
+    return page < sPageCount && sPages[page].glow;
+}
+
+bool VoxelBuildings_ReadGlow(unsigned page, unsigned first, unsigned count, uint8_t *dest)
+{
+    unsigned pixels;
+
+    if (!VoxelBuildings_PageHasGlow(page) || sPageFile == NULL)
+        return false;
+    pixels = (unsigned)sPages[page].w * sPages[page].h;
+    if (first > pixels || count > pixels - first)
+        return false;
+    return fseek(sPageFile, (long)(sPages[page].offset + pixels * 2u + first), SEEK_SET) == 0
+        && fread(dest, 1, count, sPageFile) == count;
 }
 
 /* The placements of one layout, which the generator sorted by layout. */

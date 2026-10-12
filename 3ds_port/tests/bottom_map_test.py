@@ -49,6 +49,8 @@ typedef uint8_t u8; typedef uint16_t u16; typedef bool bool8;
 #define LABEL_FG(x) (x)
 #define LABEL_SH(x) (x)
 #define CTR_TEXT(english, spanish) spanish
+#define CTR_TIME_MORNING 0
+#define CTR_TIME_NIGHT 2
 #define TXT_WHITE 5
 #define TXT_DARK 6
 #define TXT_LIGHT 7
@@ -137,6 +139,8 @@ int main(void) {
     a.clockShown=0;b=a;b.clockShown=1;b.clockValid=1;b.clockRate=120;b.clockMinute=1439;b.clockPhase=2;CheckFooter(a,b);
     a=b;b.clockMinute=0;CheckFooter(a,b);a=b;b.clockRate=1;CheckFooter(a,b);
     a=b;b.clockValid=0;CheckFooter(a,b);a=b;b.clockShown=0;CheckFooter(a,b);
+    a.clockShown=1;a.clockValid=1;a.clockPhase=1;a.clockMinute=959;
+    b=a;b.clockMinute=960;CheckFooter(a,b);
     b.pressed=1;assert(!MapCursorOnlyMoved(&b,&a));b=a;b.enabled=1;assert(!MapCursorOnlyMoved(&b,&a));
     b=a;b.mode=2;assert(!MapCursorOnlyMoved(&b,&a));b=a;b.mapsec=MAPSEC_NONE;assert(!MapCursorOnlyMoved(&b,&a));
     puts("PASS bottom map: partial/full canvas and framebuffer equivalence, region changes with clock, invalid clock, picked marker, unrelated state fallback");
