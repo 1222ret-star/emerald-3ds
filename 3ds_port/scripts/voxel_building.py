@@ -1451,11 +1451,13 @@ class ProjLathe:
     """A small turned thing (a bollard) as a smooth surface of revolution on
     an elliptical plan, its drawing projected (see ProjDome). `profile`
     lists (y, radius) from the foot up; the plan is `squash` as deep as
-    wide; a lid closes the top ring. `seg` points round."""
+    wide; a lid closes the top ring. `seg` points round. `offset`: the
+    texture's rows read that far down (a band of the part's own pixels,
+    own_bands)."""
 
-    def __init__(self, name, cx, cz, profile, squash=1.0, seg=12):
+    def __init__(self, name, cx, cz, profile, squash=1.0, seg=12, offset=0.0):
         self.name, self.cx, self.cz, self.profile = name, cx, cz, profile
-        self.squash, self.seg = squash, seg
+        self.squash, self.seg, self.offset = squash, seg, float(offset)
 
     def emit(self, mesh):
         # the polygon round each ring circumscribes it: the drawing's outline
@@ -1469,7 +1471,7 @@ class ProjLathe:
                 a = 2 * math.pi * i / self.seg
                 x = self.cx + r * math.cos(a)
                 z = self.cz + r * self.squash * math.sin(a)
-                out.append((x, y, z, x, z - y))
+                out.append((x, y, z, x, z - y + self.offset))
             return out
         tag = self.name + "~proj"
         rings = [ring(y, r) for (y, r) in self.profile]
@@ -1483,6 +1485,105 @@ class ProjLathe:
                     mesh.poly(quad, 1.0, tag)
         if self.profile[-1][1] > 1e-6:
             mesh.poly(rings[-1], 1.0, tag)
+
+
+class ProjCanopy:
+    """A parasol's canopy: a shallow cone on a round plan, from its rim
+    (radius `r` at `y_rim`) up to its crown (`y_top` over `cx`, `cz`), its
+    drawing projected (see ProjDome) from `offset` rows down - the canopy's
+    own pixels grown past their outline (own_bands), so that no face of it
+    samples a hole. Shallower than the view, it shows only its top at 45
+    degrees, and there its outline is the rim's.
+
+    The drawing's rings are flatter than deep (as a bollard's are), a round
+    rim stood past the drawing at the front: the rim's front half is lifted
+    `front` (by the square of its angle's sine), which ends it where the
+    drawing does and leaves the plan round. Underneath, a flatter cone up
+    to the pole at `y_under`, which the 45-degree view never sees (the
+    console's camera does, low down), darker. `seg` points round."""
+
+    def __init__(self, name, cx, cz, r, y_rim, y_top, front=0.0, y_under=None, offset=0.0,
+                 seg=16):
+        self.name, self.cx, self.cz, self.r = name, cx, cz, r
+        self.y_rim, self.y_top, self.front = y_rim, y_top, front
+        self.y_under = y_rim + 1.0 if y_under is None else y_under
+        self.offset, self.seg = float(offset), seg
+
+    def emit(self, mesh):
+        # the polygon circumscribes the circle: the drawing's outline stays
+        # covered
+        r = self.r / math.cos(math.pi / self.seg)
+
+        def P(x, y, z):
+            return (x, y, z, x, z - y + self.offset)
+        rim = []
+        for i in range(self.seg):
+            a = 2 * math.pi * i / self.seg
+            s = math.sin(a)
+            rim.append(P(self.cx + r * math.cos(a), self.y_rim + self.front * max(0.0, s) ** 2,
+                         self.cz + r * s))
+        top, under = P(self.cx, self.y_top, self.cz), P(self.cx, self.y_under, self.cz)
+        n = self.seg
+        for i in range(n):
+            a, b = rim[i], rim[(i + 1) % n]
+            mesh.tri(b, a, top, SHADE_ART, self.name + "~proj")
+            mesh.tri(a, b, under, SHADE_BACK, self.name + ".under~behind~proj")
+
+
+class ProjSection:
+    """A thing whose side outline (`section`, (z, y) points) runs across
+    from x0 to x1 - a sun lounger's frame, a mat - every face with its
+    drawing projected (see ProjDome), its transparency cutting the outline:
+    the faces the 45-degree view looks at and the undersides and backs
+    behind them alike (those darker), or the console would show a
+    back through a front's cut corner. The ends, edge on to that view,
+    read it `grown` rows down (the drawing grown past its outline,
+    Mound.with_ring), where no texel is a hole. With `uv`, every face takes
+    that one texel instead (a strut the drawing never shows, in its frame's
+    colour). A face the view grazes - the cosine to it under `graze` (a
+    pillow's back, round) - is a sliver at 45 degrees and wide from
+    anywhere else: it reads the grown band too, or the drawing's rounded
+    corners there would be holes in it."""
+
+    def __init__(self, name, section, x0, x1, grown=0.0, uv=None, graze=0.0):
+        self.name, self.sec = name, [tuple(map(float, p)) for p in section]
+        self.x0, self.x1, self.grown, self.uv = float(x0), float(x1), float(grown), uv
+        self.graze = graze
+
+    def emit(self, mesh):
+        sec, x0, x1 = self.sec, self.x0, self.x1
+        n = len(sec)
+        area = sum(sec[i][0] * sec[(i + 1) % n][1] - sec[(i + 1) % n][0] * sec[i][1] for i in range(n))
+
+        def P(x, y, z, cut):
+            if self.uv is not None:
+                return (x, y, z) + tuple(self.uv)
+            return (x, y, z, x, z - y + (0.0 if cut else self.grown))
+        for i in range(n):
+            (za, ya), (zb, yb) = sec[i], sec[(i + 1) % n]
+            L = math.hypot(zb - za, yb - ya)
+            if L < 1e-6:
+                continue
+            nz, ny = (yb - ya) / L, -(zb - za) / L
+            if area < 0:
+                nz, ny = -nz, -ny
+            seen = ny + nz > 1e-6
+            cut = not seen or (ny + nz) / math.sqrt(2) >= self.graze
+            q = [P(x0, ya, za, cut), P(x1, ya, za, cut), P(x1, yb, zb, cut), P(x0, yb, zb, cut)]
+            shade = SHADE_ART if seen else SHADE_BACK
+            tag = self.name + ("~proj" if seen else ".back~behind~proj")
+            PlanPrism._tri(mesh, (q[0], q[1], q[2]), (0.0, ny, nz), shade, tag)
+            PlanPrism._tri(mesh, (q[0], q[2], q[3]), (0.0, ny, nz), shade, tag)
+        # the ends, edge on at 45 degrees: the drawing's own edge columns
+        # (just inside them), grown
+        for x, nx, xs in ((x0, -1.0, x0 + 0.01), (x1, 1.0, x1 - 0.01)):
+            for (a, b, c) in triangulate(sec):
+                tri = []
+                for (z, y) in (sec[a], sec[b], sec[c]):
+                    pt = P(xs, y, z, False)
+                    tri.append((x,) + pt[1:])
+                PlanPrism._tri(mesh, tri, (nx, 0.0, 0.0), SHADE_EAST if nx > 0 else SHADE_WEST,
+                               self.name + ".end~behind~proj")
 
 
 class ProjHull:

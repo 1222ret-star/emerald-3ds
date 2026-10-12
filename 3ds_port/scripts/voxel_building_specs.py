@@ -36,7 +36,7 @@ side eave, so no gable wall of plaster ever shows.
 
 import math
 
-from voxel_building import (Band, ProjDome, ProjHull, ProjLathe, BakedLathe, VoxelLathe, Card, Grown, PlanHip, PlanPrism, PlanPyramid, PlatePrism, SectionPrism, Cylinder, Frustum, HeightSolid, HipRoof, Mound, PlainWall, Prism, Proj,
+from voxel_building import (Band, ProjCanopy, ProjDome, ProjHull, ProjLathe, ProjSection, BakedLathe, VoxelLathe, Card, Grown, PlanHip, PlanPrism, PlanPyramid, PlatePrism, SectionPrism, Cylinder, Frustum, HeightSolid, HipRoof, Mound, PlainWall, Prism, Proj,
                             Strip, Tile, Vault, Volume, Walls, clip, own_bands, _unit, strip_face,
                             SHADE_ART, SHADE_BACK, SHADE_EAST, SHADE_WEST)
 
@@ -1623,37 +1623,98 @@ def sootopolis_flat_house(art):
                   2 * art.size[1])], Mound.with_ring(art, ())
 
 
-# Route 109's beach parasol (art 32x48): a round canopy, drawn as a disc
-# seen from above (v 0-30), on a pole (v 30-40) over its shadow on the sand
-# (v 27-47). The canopy stands 22 high over the shadow's middle (z 37):
-# a horizontal disc is drawn as itself at 45 degrees, so the drawing holds
-# together. Three solids, each off its own pixels: the canopy a shallow cone
-# lifted along the ray, the pole, the shadow a disc on the sand.
+# Route 109's beach parasol (art 32x48): a round canopy (v 3-31) on a pole
+# (v 32-39). The pole's foot is its last row: it stands at z 38.5. The
+# canopy's rim, drawn as a ring 32 wide round v 19, is 19.25 high over it,
+# its hub (v 13, where the panels meet) 6 higher. Its shadow drawn on the
+# sand (v 27-47, these colours) is the ground's (`ground_rgb`): the sand
+# lies plain under it and the console casts the canopy's own shadow.
 PARASOL_SHADOW = {(205, 156, 82), (213, 180, 106), (222, 205, 131)}
 
 
 def parasol(art):
+    """Two parts of smooth faces, each with the drawing projected from a
+    band of its own pixels (own_bands): the canopy a shallow cone, round
+    (ProjCanopy: its rim lifted 3.5 at the front, where the drawing ends
+    higher than a round rim would - exact at 45 degrees) and closed
+    underneath; the pole a thin turned post up into it. (Solids of height
+    fields had stood the canopy in fins and its drawn shadow in a mound.)"""
     tex = Mound.with_ring(art, ())
     px = art.load()
-    H = art.size[1]
+    W, H = art.size
 
     def own(u, v):
         if px[u, v][3] < 128:
             return None
-        if px[u, v][:3] in PARASOL_SHADOW:
-            return "shadow"
         return "canopy" if v <= 31 else "pole"
     tex, band = own_bands(tex, H, {n: (lambda n: lambda u, v: own(u, v) == n)(n)
-                                   for n in ("canopy", "pole", "shadow")})
-    parts = []
-    for name, vol, lift, st in (
-            ("canopy", Volume().lathe(16, 15, [(0, 15.5), (1.5, 15.5), (3, 9), (5, 2), (5.5, 0)]), 22, 2),
-            ("pole", Volume().box(13.5, 18.5, 0, 23, 36, 38), 0, 1),
-            ("shadow", Volume().slab(16, 37, 16.5, 11.5, 0, 0.3, p=2.8), 0, 4)):
-        parts.append(HeightSolid(name, tex, H, vol, depth=(0.0, float(H)), step=st, mirror_z=37 - lift,
-                                 mask=(lambda n: lambda u, v: own(u, v) not in (None, n))(name),
-                                 lift=lift, band=band[name]))
+                                   for n in ("canopy", "pole")})
+    # each band cut to the drawing where the part's edge is drawn: the
+    # canopy's to its own pixels (its polygon stands a pixel past the drawn
+    # stair here and there), the pole's round foot (its last row) to its own
+    tpx = tex.load()
+    for v in range(H):
+        for u in range(W):
+            o = own(u, v)
+            if o != "canopy":
+                tpx[u, v + band["canopy"] * H] = (0, 0, 0, 0)
+            if v == 39 and o != "pole":
+                tpx[u, v + band["pole"] * H] = (0, 0, 0, 0)
+    return [ProjCanopy("canopy", 16, 38.5, 16.2, 19.25, 25.25, front=3.5, y_under=20.5,
+                       offset=band["canopy"] * H, seg=24),
+            ProjLathe("pole", 16, 38.5, [(0, 2), (21, 2)], seg=8, offset=band["pole"] * H)], tex
+
+
+def sun_lounger(art):
+    """Route 109's sun lounger (art 16x48, drawn v 9-37, x 1-14): a frame
+    on four legs, open underneath. The seat (the footrest and the middle
+    cushion, v 20-33) flat 5 high, 2 thick, its front (v 34-35, the rail
+    between the legs) at z 39; the back (v 9-19) a cushion raised 40
+    degrees from the hinge (z 24.5), 7.5 long, 1.2 thick; the front legs
+    (v 35-37: x 1-5 and 10-14) stand at z 38, the back ones are struts
+    under the back, inside its drawn outline, in the frame's colour (the
+    drawing never shows them). Every face takes the drawing projected
+    (ProjSection): exact at 45 degrees, and from the side a lounger, not a
+    block (a height field had stood it on the sand whole)."""
+    H = art.size[1]
+    tex = Mound.with_ring(art, ())
+    a = math.radians(40)
+    t, L = 1.2, 7.5
+    hz, top = 24.5, 5.0
+    ez, ey = hz - L * math.cos(a), top + L * math.sin(a)
+    nz, ny = math.sin(a), math.cos(a)
+    seat = top - 2
+    # where the back's underside meets the seat's
+    k = (top - t * ny - seat) / math.sin(a)
+    frame = [(39, seat), (39, top), (hz, top), (ez, ey), (ez - t * nz, ey - t * ny),
+             (hz - t * nz + k * math.cos(a), seat)]
+
+    def under_back(z):
+        """The height of the back's underside over z."""
+        return top - t * ny + (hz - t * nz - z) * math.tan(a)
+    parts = [ProjSection("frame", frame, 1, 14, grown=2 * H)]
+    for (x0, x1) in ((1, 5), (10, 14)):
+        parts.append(ProjSection("leg", [(36.5, 0), (38, 0), (38, seat), (36.5, seat)], x0, x1,
+                                 grown=2 * H))
+    for (x0, x1) in ((2, 3.5), (11.5, 13)):
+        parts.append(ProjSection("strut", [(20.5, 0), (21.5, 0), (21.5, under_back(21.5)),
+                                           (20.5, under_back(20.5))], x0, x1, uv=(1.5, 20.5)))
     return parts, tex
+
+
+def beach_mat(art):
+    """Route 109's air mattress (art 16x48, drawn v 9-36, x 0-16), flat on
+    the sand: its tubes 2 thick (the front, v 35-36, at z 37), the pillow
+    across its head a tube 2.5 round on the same floor, 4.5 high (v 9-15).
+    Every face takes the drawing projected (ProjSection); the pillow's back,
+    which the view grazes, reads the grown band (`graze`): the drawing
+    rounds the pillow's top corners, and they were holes from the side."""
+    H = art.size[1]
+    r, y0 = 2.5, 2.0
+    zc = 9 + y0 + r * math.sqrt(2)      # the pillow's top at 45 degrees is row 9
+    arc = [(zc + r * math.cos(math.pi * k / 8), y0 + r * math.sin(math.pi * k / 8)) for k in range(9)]
+    sec = [(37, 0), (37, y0)] + arc + [(zc - r, 0)]
+    return [ProjSection("mat", sec, 0, 16, grown=2 * H, graze=0.6)], Mound.with_ring(art, ())
 
 
 def abandoned_ship(art):
@@ -3145,62 +3206,56 @@ SPECS = [
         # Route 109's beach parasols (red, blue and green: found by their own
         # pixels from this one when the drawing matches)
         "name": "parasol",
-        # a coarser grid for its round parts (2026-10-10: the console's
-        # budgets), the drawing still projected wherever the view sees it
-        "lod": (6, 6, 3),
         "layout": "LAYOUT_ROUTE109",
         "rect": (9, 6, 2, 3),
         "ground": [0x124],
         "ground_px": True,
+        "ground_rgb": PARASOL_SHADOW,
         "parts_art": parasol,
         "exact": [(0, 0, 32, 48)],
     },
     {
         "name": "parasol_blue",
-        # a coarser grid for its round parts (2026-10-10: the console's
-        # budgets), the drawing still projected wherever the view sees it
-        "lod": (6, 6, 3),
         "layout": "LAYOUT_ROUTE109",
         "rect": (18, 4, 2, 3),
         "ground": [0x124],
         "ground_px": True,
+        "ground_rgb": PARASOL_SHADOW,
         "parts_art": parasol,
         "exact": [(0, 0, 32, 48)],
     },
     {
         "name": "parasol_green",
-        # a coarser grid for its round parts (2026-10-10: the console's
-        # budgets), the drawing still projected wherever the view sees it
-        "lod": (6, 6, 3),
         "layout": "LAYOUT_ROUTE109",
         "rect": (13, 14, 2, 3),
         "ground": [0x124],
         "ground_px": True,
+        "ground_rgb": PARASOL_SHADOW,
         "parts_art": parasol,
         "exact": [(0, 0, 32, 48)],
     },
     {
-        # a sun lounger (art 16x48, v 8-37): its back raised to the north
-        # (v 8-18), the seat and footrest 4 high, the feet below
+        # a sun lounger (art 16x48, v 9-37): a frame on legs, its back
+        # raised to the north
         "name": "sun_lounger",
         "layout": "LAYOUT_ROUTE109",
         "rect": (17, 8, 1, 3),
         "ground": [0x124],
         "ground_px": True,
-        "parts_art": small_round("lounger", Volume().profile(
-            [(17, 0), (17, 9), (21, 13), (25, 5), (37, 5), (37, 0)], 1, 15), depth=48.0),
+        "parts_art": sun_lounger,
         "exact": [(0, 0, 16, 48)],
     },
     {
-        # a round bin (art 16x48, v 9-36): a drum with its lid
-        "name": "beach_bin",
+        # an air mattress (art 16x48, v 9-36), flat on the sand
+        "name": "beach_mat",
         "layout": "LAYOUT_ROUTE109",
         "rect": (9, 9, 1, 3),
         "ground": [0x124],
         "ground_px": True,
-        "parts_art": small_round("bin", Volume().lathe(8, 31, [(0, 7), (20, 7), (21, 6), (21.5, 0)]),
-                                 depth=48.0),
+        "parts_art": beach_mat,
         "exact": [(0, 0, 16, 48)],
+        # the pillow's square top corners (row 9), which the drawing rounds
+        "tolerance": 5,
     },
     {
         # the Abandoned Ship; the rock beside its bow is the sea's (a prop)

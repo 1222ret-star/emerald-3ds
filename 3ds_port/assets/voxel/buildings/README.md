@@ -197,10 +197,29 @@ column, which is what left steps and fins on `HeightSolid` flanks:
 - `ProjHull`: a boat - outside, then a deck along its sheer, or open with
   its rim, inside, floor and boxes standing in it (the sailboats' hulls,
   now exact; the rowboat, 272 smooth triangles for 682 in steps).
+- `ProjCanopy`: a parasol's canopy, a shallow cone on a round plan closed
+  underneath. The drawing's rings are flatter than deep, so a round rim
+  stands past the drawing at the front; the rim's front half is lifted
+  (`front`) until the outline is the drawn one and the plan stays round
+  (Route 109's parasols: 70 triangles for 314, exact). Their shadow drawn
+  on the sand is the ground's (`ground_rgb`): the sand lies plain under
+  them and the console casts the canopy's own.
+- `ProjSection`: a side outline (z, y) run across from x0 to x1, every face
+  projected; the faces the view does not see read the grown band. A sun
+  lounger's frame (seat, raised back, thin legs, open underneath: 68 for
+  426), an air mattress with its pillow (44 for 256). A face the view
+  grazes (`graze`) reads the grown band too: the drawing's rounded corners
+  there were holes from the side.
 - Cards: a thing that is thin in the drawing's own plane is one flat face:
   a sailboat's sails and mast (`SailCards`, the hull's `HeightSolid` told by
   `mask` that their pixels are not its own), an awning's or a stall's legs,
   the fan club's door posts.
+
+A thing of several parts (a canopy over its pole) gives
+each part a band of its own pixels (`own_bands`, `offset` on the part), so
+that a face no drawing shows never takes another part's colours; a band is
+cut back to the drawing where the part's edge is drawn (the canopy to its
+own pixels, the pole's round foot).
 
 Fit the shape's parameters to the outline by search (`ortho_check` on a
 grid of values: the smallest shape with no pixel missing). The game's camera
@@ -315,7 +334,9 @@ the generator prints, for each placement, the cells its ground still is not:
   (the ship's bottom row on the shallows' edge) wants `patch_cells`; a
   model on two materials, the one its front shows (`ground_fixed`: the Battle
   Factory's platform, not the sea of its back corners). A drawn shadow (a
-  stall's darker paving) is left: the console casts its own.
+  stall's darker paving) is left: the console casts its own. One drawn
+  in colours the thing never has (a parasol's on the sand) is cleared from
+  its drawing (`ground_rgb`), so that no part models it.
 - `patched N`: most of the patch's pixels, N of them, colours the ground has
   none of. The patch hides the ground in the GBA's view; the game's camera
   sees a line of it along the patch's edges (`under`): `ground_fixed` to the
