@@ -9461,7 +9461,13 @@ static const char *const sFpsGlyphs[] =
     "111101111101111", "111101111001111",
     "111100111100100", /* F */
     "111101111100100", /* P */
+    "001001010100100", /* / */
 };
+/* Game frames a second, hidden ones included (CtrPlatform_FrameCount): the
+ * game's speed, beside the pictures a second the counter always showed.
+ * With real-time pacing (3ds_platform.c) the two differ on a slow frame. */
+static float sGameFps;
+static uint64_t sGameFpsMark;
 
 /*
  * The field's poison step (fldeff_misc.c, Task_FieldPoisonEffect) is a mosaic
@@ -9490,17 +9496,17 @@ static void DrawPoisonVeil(C3D_RenderTarget *target, unsigned alpha)
 
 static void DrawFps(C3D_RenderTarget *target)
 {
-    unsigned fps = (unsigned)(sStats.fps + 0.5f);
-    unsigned glyphs[8], count = 0;
-    char digits[4];
-    int length = snprintf(digits, sizeof(digits), "%u", fps > 999 ? 999 : fps);
+    unsigned fps = (unsigned)(sStats.fps + 0.5f), game = (unsigned)(sGameFps + 0.5f);
+    unsigned glyphs[12], count = 0;
+    char digits[8];
+    int length = snprintf(digits, sizeof(digits), "%u/%u", fps > 999 ? 999 : fps, game > 999 ? 999 : game);
 
     glyphs[count++] = 10;   /* F */
     glyphs[count++] = 11;   /* P */
     glyphs[count++] = 5;    /* S, which is a 5 */
     glyphs[count++] = ~0u;  /* space */
     for (int i = 0; i < length; ++i)
-        glyphs[count++] = (unsigned)(digits[i] - '0');
+        glyphs[count++] = digits[i] == '/' ? 12u : (unsigned)(digits[i] - '0');
 
     /* Whatever path composed the frame, the counter draws with the 2D
      * program and no depth test, as RenderVoxel's UI pass does. */
@@ -10142,7 +10148,11 @@ void CtrVideo_Present(void)
     uint64_t now = CtrPlatform_Milliseconds();
     if (now - sFpsStart >= 1000)
     {
+        uint64_t gameFrames = CtrPlatform_FrameCount();
+
         sStats.fps = sFpsFrames * 1000.0f / (now - sFpsStart);
+        sGameFps = (gameFrames - sGameFpsMark) * 1000.0f / (now - sFpsStart);
+        sGameFpsMark = gameFrames;
         sFpsStart = now;
         sFpsFrames = 0;
     }

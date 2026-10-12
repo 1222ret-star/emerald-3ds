@@ -22,6 +22,13 @@ New and improved:
   tables, nine-column naming rows and column positions, and 22-byte type names.
   The native Pokédex uses a decimal comma and French measurement alignment.
 
+- OPTIONS > ENHANCEMENTS has REAL-TIME PACING (off by default): the sound
+  engine mixes on the DSP's clock instead of once per shown frame, so a
+  frame the console takes too long over (a town loading, a busy scene in 3D)
+  no longer makes the music click; and the game keeps real time, running a
+  hidden frame when it has fallen a frame behind the display, so only the
+  picture skips a step. The FPS counter shows pictures/game frames a second.
+
 Fixed:
 
 - Battles: with the speed multiplier at x2 and above, a Pokémon sent out of
