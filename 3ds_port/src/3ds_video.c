@@ -7677,15 +7677,23 @@ static void DioramaTap(int y0, int rows, bool top, float dx, float dy, float alp
     C2D_DrawImageAt((C2D_Image){&sSurface, &region}, 1, y0, 0, &tint, 1, 1);
 }
 
+/* The strength chosen in OPTIONS: 1 is the full blur, the taps' own alphas. */
+static float DioramaStrength(void)
+{
+    return CtrSettings_VoxelBlurStrength() / 100.0f;
+}
+
 static void VoxelDiorama(void)
 {
+    float strength = DioramaStrength();
+
     SurfaceFilter(GPU_LINEAR);
     /* Half a texel either way: two 2x2 averages on either side of each
      * pixel, together centred on it - a blur that does not shift the picture. */
-    DioramaTap(0, DIORAMA_TOP, true, 0.5f, 0.5f, 0.67f);
-    DioramaTap(0, DIORAMA_TOP, true, -0.5f, -0.5f, 0.50f);
-    DioramaTap(CTR_GAME_HEIGHT - DIORAMA_BOTTOM, DIORAMA_BOTTOM, false, 0.5f, 0.5f, 0.60f);
-    DioramaTap(CTR_GAME_HEIGHT - DIORAMA_BOTTOM, DIORAMA_BOTTOM, false, -0.5f, -0.5f, 0.45f);
+    DioramaTap(0, DIORAMA_TOP, true, 0.5f, 0.5f, 0.67f * strength);
+    DioramaTap(0, DIORAMA_TOP, true, -0.5f, -0.5f, 0.50f * strength);
+    DioramaTap(CTR_GAME_HEIGHT - DIORAMA_BOTTOM, DIORAMA_BOTTOM, false, 0.5f, 0.5f, 0.60f * strength);
+    DioramaTap(CTR_GAME_HEIGHT - DIORAMA_BOTTOM, DIORAMA_BOTTOM, false, -0.5f, -0.5f, 0.45f * strength);
     SurfaceFilter(GPU_NEAREST);
 }
 
@@ -8025,11 +8033,13 @@ static void RenderVoxelEye(int eye, float bloom)
         {
             /* VoxelDiorama's taps: sampling half a texel off is drawing the
              * picture half a pixel the other way. */
+            float strength = DioramaStrength();
+
             SurfaceFilter(GPU_LINEAR);
-            CtrVoxel_StereoDraw(eye, &sSurface, VOXEL_STEREO_TOP, -0.5f, -0.5f, 0.67f);
-            CtrVoxel_StereoDraw(eye, &sSurface, VOXEL_STEREO_TOP, 0.5f, 0.5f, 0.50f);
-            CtrVoxel_StereoDraw(eye, &sSurface, VOXEL_STEREO_BOTTOM, -0.5f, -0.5f, 0.60f);
-            CtrVoxel_StereoDraw(eye, &sSurface, VOXEL_STEREO_BOTTOM, 0.5f, 0.5f, 0.45f);
+            CtrVoxel_StereoDraw(eye, &sSurface, VOXEL_STEREO_TOP, -0.5f, -0.5f, 0.67f * strength);
+            CtrVoxel_StereoDraw(eye, &sSurface, VOXEL_STEREO_TOP, 0.5f, 0.5f, 0.50f * strength);
+            CtrVoxel_StereoDraw(eye, &sSurface, VOXEL_STEREO_BOTTOM, -0.5f, -0.5f, 0.60f * strength);
+            CtrVoxel_StereoDraw(eye, &sSurface, VOXEL_STEREO_BOTTOM, 0.5f, 0.5f, 0.45f * strength);
             SurfaceFilter(GPU_NEAREST);
         }
         if (bloom > 0.005f)
