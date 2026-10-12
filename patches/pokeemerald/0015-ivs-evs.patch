@@ -37,7 +37,7 @@ diff --git a/src/pokemon_summary_screen.c b/src/pokemon_summary_screen.c
  static void PrintRightColumnStats(void);
  static void PrintExpPointsNextLevel(void);
  static void PrintBattleMoves(void);
-@@ -729,6 +742,14 @@
+@@ -729,6 +742,19 @@
  static const u8 sMemoNatureTextColor[] = _("{COLOR LIGHT_RED}{SHADOW GREEN}");
  static const u8 sMemoMiscTextColor[] = _("{COLOR WHITE}{SHADOW DARK_GRAY}"); // This is also affected by palettes, apparently
  static const u8 sStatsLeftColumnLayout[] = _("{DYNAMIC 0}/{DYNAMIC 1}\n{DYNAMIC 2}\n{DYNAMIC 3}");
@@ -46,13 +46,18 @@ diff --git a/src/pokemon_summary_screen.c b/src/pokemon_summary_screen.c
 +// SKILLS page's stats into the Pokemon's IVs, then its EVs, then back.
 +enum { STATS_MODE_STATS, STATS_MODE_IVS, STATS_MODE_EVS, STATS_MODE_COUNT };
 +static const u8 sStatsLeftColumnLayoutIvEv[] = _("{DYNAMIC 0}\n{DYNAMIC 2}\n{DYNAMIC 3}");
++#if GAME_LANGUAGE == LANGUAGE_SPANISH
++static const u8 sText_SkillsIVs[] = _("IV  (0-31)");
++static const u8 sText_SkillsEVs[] = _("EV  (0-255)");
++#else
 +static const u8 sText_SkillsIVs[] = _("IVs  (0-31)");
 +static const u8 sText_SkillsEVs[] = _("EVs  (0-255)");
++#endif
 +#endif
  static const u8 sStatsRightColumnLayout[] = _("{DYNAMIC 0}\n{DYNAMIC 1}\n{DYNAMIC 2}");
  static const u8 sMovesPPLayout[] = _("{PP}{DYNAMIC 0}/{DYNAMIC 1}");
  
-@@ -1434,6 +1455,13 @@
+@@ -1434,6 +1460,13 @@
              sum->spdef = GetMonData(mon, MON_DATA_SPDEF2);
              sum->speed = GetMonData(mon, MON_DATA_SPEED2);
          }
@@ -66,7 +71,7 @@ diff --git a/src/pokemon_summary_screen.c b/src/pokemon_summary_screen.c
          break;
      case 3:
          GetMonData(mon, MON_DATA_OT_NAME, sum->OTName);
-@@ -1687,6 +1715,11 @@
+@@ -1687,6 +1720,11 @@
      {
          ChangeSummaryPokemon(taskId, y < 88 ? -1 : 1);
      }
@@ -78,7 +83,7 @@ diff --git a/src/pokemon_summary_screen.c b/src/pokemon_summary_screen.c
      else
      {
          ChangePage(taskId, x < 164 ? -1 : 1);
-@@ -1721,6 +1754,11 @@
+@@ -1721,6 +1759,11 @@
          }
          else if (JOY_NEW(A_BUTTON))
          {
@@ -90,7 +95,7 @@ diff --git a/src/pokemon_summary_screen.c b/src/pokemon_summary_screen.c
              if (sMonSummaryScreen->currPageIndex != PSS_PAGE_SKILLS)
              {
                  if (sMonSummaryScreen->currPageIndex == PSS_PAGE_INFO)
-@@ -3606,12 +3644,44 @@
+@@ -3606,12 +3649,44 @@
      PrintTextOnWindow(AddWindowFromTemplateList(sPageSkillsTemplate, PSS_DATA_WINDOW_SKILLS_RIBBON_COUNT), text, x, 1, 0, 0);
  }
  
@@ -135,7 +140,7 @@ diff --git a/src/pokemon_summary_screen.c b/src/pokemon_summary_screen.c
  
      ConvertIntToDecimalStringN(currentHPString, sMonSummaryScreen->summary.currentHP, STR_CONV_MODE_RIGHT_ALIGN, 3);
      ConvertIntToDecimalStringN(maxHPString, sMonSummaryScreen->summary.maxHP, STR_CONV_MODE_RIGHT_ALIGN, 3);
-@@ -3638,9 +3708,22 @@
+@@ -3638,9 +3713,22 @@
  
  static void BufferRightColumnStats(void)
  {
@@ -158,7 +163,7 @@ diff --git a/src/pokemon_summary_screen.c b/src/pokemon_summary_screen.c
  
      DynamicPlaceholderTextUtil_Reset();
      DynamicPlaceholderTextUtil_SetPlaceholderPtr(0, gStringVar1);
-@@ -3653,6 +3736,25 @@
+@@ -3653,6 +3741,25 @@
  {
      PrintTextOnWindow(AddWindowFromTemplateList(sPageSkillsTemplate, PSS_DATA_WINDOW_SKILLS_STATS_RIGHT), gStringVar4, 2, 1, 0, 0);
  }

@@ -24,6 +24,9 @@ New and improved:
 
 Fixed:
 
+- Battles: with the speed multiplier at x2 and above, a Pokémon sent out of
+  its Poké Ball (yours or a trainer's) made no cry. The game cleared the cry
+  before the sound engine had started it.
 - Battle transitions: the Poké Balls rolling across the screen (trainers on
   routes) and the other transitions that draw only their own layer over the
   field were a GBA-sized box in a corner of the screen; they fill it now, at

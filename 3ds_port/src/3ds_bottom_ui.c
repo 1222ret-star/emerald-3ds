@@ -208,6 +208,16 @@ static void CopyCache(int which)
             memset(sCanvas, 0, sizeof(sCanvas));
         return;
     }
+    /* Whole columns side by side are one run: a single copy (a page of the
+     * options redraws the whole area left of the column). */
+    if (sClipY0 == 0 && sClipY1 == H && sClipX0 < sClipX1)
+    {
+        if (sCache[which])
+            memcpy(sCanvas + sClipX0 * H, sCache[which] + sClipX0 * H, (size_t)(sClipX1 - sClipX0) * H * sizeof(u16));
+        else
+            memset(sCanvas + sClipX0 * H, 0, (size_t)(sClipX1 - sClipX0) * H * sizeof(u16));
+        return;
+    }
     /* A column runs bottom-to-top: rows [y0, y1) are one contiguous run. */
     for (int x = sClipX0; x < sClipX1; ++x)
     {
@@ -3232,6 +3242,13 @@ static u8 PlayerRegionPosition(u8 *outX, u8 *outY)
     return mapsec;
 }
 
+/* trainer_card.c's GetRubyTrainerStars as Emerald fills it in. */
+static u8 CardStars(void)
+{
+    return (GetGameStat(GAME_STAT_ENTERED_HOF) != 0) + (HasAllHoennMons() != 0)
+         + (CountPlayerMuseumPaintings() >= CONTEST_CATEGORIES_COUNT);
+}
+
 static void SnapshotCard(ViewState *s)
 {
     static u16 dex, frames;
@@ -3248,9 +3265,7 @@ static void SnapshotCard(ViewState *s)
     {
         dex = !s->hasDex ? 0 : IsNationalPokedexEnabled() ? GetNationalPokedexCount(FLAG_GET_CAUGHT)
                                                          : GetHoennPokedexCount(FLAG_GET_CAUGHT);
-        /* trainer_card.c's GetRubyTrainerStars as Emerald fills it in. */
-        stars = (GetGameStat(GAME_STAT_ENTERED_HOF) != 0) + (HasAllHoennMons() != 0)
-              + (CountPlayerMuseumPaintings() >= CONTEST_CATEGORIES_COUNT);
+        stars = CardStars();
     }
     s->dex = dex;
     s->stars = stars;
@@ -3330,6 +3345,24 @@ static void SnapshotPartyPanel(ViewState *s)
 
 #endif
 
+/* Every option's value as the OPTIONS screen shows it: the snapshot's, and
+ * the cell pictures made ahead (WarmOptionCells) read the same. */
+static void ReadOptionValues(u8 options[OPTION_ROWS])
+{
+    options[0] = gSaveBlock2Ptr->optionsTextSpeed;
+    options[1] = gSaveBlock2Ptr->optionsBattleSceneOff;
+    options[2] = gSaveBlock2Ptr->optionsBattleStyle;
+    options[3] = gSaveBlock2Ptr->optionsSound;
+    options[4] = gSaveBlock2Ptr->optionsButtonMode;
+    options[5] = gSaveBlock2Ptr->optionsWindowFrameType;
+    options[OPT_FPS] = CtrSettings_ShowFps();
+    options[OPT_VOXEL] = CtrSettings_Voxel();
+    options[OPT_VOXEL_PITCH] = CtrSettings_VoxelPitch();
+    options[OPT_VOXEL_ZOOM] = CtrSettings_VoxelZoom();
+    options[OPT_VOXEL_BLUR] = CtrSettings_VoxelBlurStrength();
+    options[OPT_VOXEL_BATTLE] = CtrSettings_VoxelBattle();
+}
+
 static void Snapshot(ViewState *s, u8 mode, u8 pressed)
 {
     memset(s, 0, sizeof(*s));
@@ -3407,13 +3440,7 @@ static void Snapshot(ViewState *s, u8 mode, u8 pressed)
             CopyText(s->text, sizeof(s->text), sSaveMessage);
             break;
         case SCR_OPTION:
-            s->options[0] = gSaveBlock2Ptr->optionsTextSpeed;
-            s->options[1] = gSaveBlock2Ptr->optionsBattleSceneOff;
-            s->options[2] = gSaveBlock2Ptr->optionsBattleStyle;
-            s->options[3] = gSaveBlock2Ptr->optionsSound;
-            s->options[4] = gSaveBlock2Ptr->optionsButtonMode;
-            s->options[5] = gSaveBlock2Ptr->optionsWindowFrameType;
-            s->options[OPT_FPS] = CtrSettings_ShowFps();
+            ReadOptionValues(s->options);
             s->optPage = sOptPage;
             s->optSub = sOptSub;
             for (unsigned row = 0; sOptPage != CTR_EXTRAS_OPTIONS && row < ARRAY_COUNT(s->extras); ++row)
@@ -3423,11 +3450,6 @@ static void Snapshot(ViewState *s, u8 mode, u8 pressed)
                 if (extra)
                     s->extras[row] = ExtraShownValue(extra);
             }
-            s->options[OPT_VOXEL] = CtrSettings_Voxel();
-            s->options[OPT_VOXEL_PITCH] = CtrSettings_VoxelPitch();
-            s->options[OPT_VOXEL_ZOOM] = CtrSettings_VoxelZoom();
-            s->options[OPT_VOXEL_BLUR] = CtrSettings_VoxelBlur();
-            s->options[OPT_VOXEL_BATTLE] = CtrSettings_VoxelBattle();
             if (sInside == INSIDE_OPTIONS)
                 s->optFocus = sOptFocus;
             break;
@@ -3574,7 +3596,40 @@ static void DrawSquares(const ViewState *s)
  * unpressed, in every background cache, and a redraw only paints the chosen,
  * pressed and focused buttons over it. The caches are repainted when which
  * entries exist changes, or the player's name does.
+ *
+ * Painted once, into CACHE_MENU, and copied: the column (x >= COL_X, one run
+ * of (W - COL_X) * H in this layout) is the same in CACHE_MENU, CACHE_MAP and
+ * CACHE_CARD. Nothing else writes there: BuildMapCache copies the whole of
+ * CACHE_MENU and keeps its map and frame left of MAP_WIN_X1 + 3 (235); the
+ * card's layers stay left of CW (CARD_X 0, 30 tiles, its pictures inside) and
+ * its column is CACHE_MENU's copied (CardCacheStep). Same pixels under the
+ * same buttons give the same column, so the copy is what painting each cache
+ * gave: the first column at game start painted 32 buttons, now 16. The
+ * canvas is still painted: what a section draws there is not bounded (a long
+ * line of text may run past CW), so its column is not provably the caches'.
  */
+#define COL_PIXELS ((size_t)(W - COL_X) * H)
+
+#ifdef CTR_BOTTOM_CACHE_AUDIT
+/* The column painted into a cache as it was before, against the copy. */
+static void AuditColumnCopy(const ViewState *s, int which)
+{
+    static u16 painted[W * H];
+    static unsigned same;
+    u16 *dst = sDst;
+
+    memcpy(painted, sCache[which], sizeof(painted));
+    sDst = painted;
+    for (int i = 0; i < SCR_COUNT; ++i)
+        DrawColumnButton(s, i, (s->enabled >> i) & 1 ? PLATE_NORMAL : PLATE_OFF);
+    sDst = dst;
+    if (memcmp(painted + COL_X * H, sCache[CACHE_MENU] + COL_X * H, COL_PIXELS * sizeof(u16)) != 0)
+        CtrLog_Write(CTR_LOG_ERROR, "CONTRACT bottom column copied into cache %d differs from painting it", which);
+    else
+        CtrLog_Write(CTR_LOG_VIDEO, "bottom column copy: same as painting cache %d (%u)", which, ++same);
+}
+#endif
+
 static void DrawColumn(const ViewState *s)
 {
     static int cachedMask = -1;
@@ -3582,6 +3637,7 @@ static void DrawColumn(const ViewState *s)
 
     if (cachedMask != s->enabled || memcmp(cachedName, s->name, sizeof(cachedName)) != 0)
     {
+        static const u8 copies[] = {CACHE_MAP, CACHE_CARD};
         u16 *canvas = sDst;
         int clip[4] = {sClipX0, sClipY0, sClipX1, sClipY1};
 
@@ -3591,13 +3647,33 @@ static void DrawColumn(const ViewState *s)
         sClipX0 = sClipY0 = 0;
         sClipX1 = W;
         sClipY1 = H;
-        for (int c = 0; c < CACHE_COUNT; ++c)
+        if (sCache[CACHE_MENU])
         {
-            if (!sCache[c] || c == CACHE_WIDE || c == CACHE_BATTLE)
-                continue;
-            sDst = sCache[c];
+            sDst = sCache[CACHE_MENU];
             for (int i = 0; i < SCR_COUNT; ++i)
                 DrawColumnButton(s, i, (s->enabled >> i) & 1 ? PLATE_NORMAL : PLATE_OFF);
+        }
+        for (unsigned k = 0; k < ARRAY_COUNT(copies); ++k)
+        {
+            int c = copies[k];
+
+            if (!sCache[c])
+                continue;
+            if (!sCache[CACHE_MENU])
+            {
+                /* No column to copy from: painted as it always was. */
+                sDst = sCache[c];
+                for (int i = 0; i < SCR_COUNT; ++i)
+                    DrawColumnButton(s, i, (s->enabled >> i) & 1 ? PLATE_NORMAL : PLATE_OFF);
+                continue;
+            }
+#ifdef CTR_BOTTOM_CACHE_AUDIT
+            /* A card cache not made yet (or half made) has no column of its
+             * own: its last step copies CACHE_MENU's, so it is not compared. */
+            if (c != CACHE_CARD || sCardCacheKey != -1)
+                AuditColumnCopy(s, c);
+#endif
+            memcpy(sCache[c] + COL_X * H, sCache[CACHE_MENU] + COL_X * H, COL_PIXELS * sizeof(u16));
         }
         sClipX0 = clip[0];
         sClipY0 = clip[1];
@@ -4060,33 +4136,142 @@ static void CardPals(Pal *pals, u8 stars, u8 gender)
     pals[4] = sRes.starPal;
 }
 
-/* The card's background stripes and front, by star count and gender. */
-static void BuildCardCache(u8 stars, u8 gender)
+/* The card's background stripes and front, by star count and gender, as much
+ * of them as the clip holds (sDst the card's cache, sOX 0). Only the tile
+ * columns that meet the clip are walked: a tile outside it draws nothing, so
+ * the layers come out as a whole drawing's would, in the same order. */
+static void DrawCardLayers(u8 stars, u8 gender, const Pal *pals)
 {
-    Pal pals[5];
+    int tx0 = sClipX0 / 8, tx1 = (sClipX1 + 7) / 8;
+    int fx0 = (sClipX0 - CARD_X) / 8, fx1 = (sClipX1 - CARD_X + 7) / 8;
 
-    if (!sCache[CACHE_CARD] || sCardCacheKey == stars * 2 + gender)
-        return;
-    sCardCacheKey = stars * 2 + gender;
-    CardPals(pals, stars, gender);
-    memcpy(sCache[CACHE_CARD], sCache[CACHE_MENU], sizeof(sCanvas));
-    sDst = sCache[CACHE_CARD];
+    if (tx1 > CW / 8) tx1 = CW / 8;
+    if (fx0 < 0) fx0 = 0;
+    if (fx1 > 30) fx1 = 30;
     FillRect(0, 0, CW, H, pals[0].c[0]);
     if (sRes.cardBg)
         for (int ty = 0; ty < H / 8; ++ty)
-            for (int tx = 0; tx < CW / 8; ++tx)
+            for (int tx = tx0; tx < tx1; ++tx)
                 DrawMapEntry(sRes.cardTiles, sRes.cardTileCount, sRes.cardBg[(ty % 20) * 30 + (tx % 30)],
                              tx * 8, ty * 8, pals);
     if (sRes.cardFront)
         for (int ty = 0; ty < 20; ++ty)
-            for (int tx = 0; tx < 30; ++tx)
+            for (int tx = fx0; tx < fx1; ++tx)
                 DrawMapEntry(sRes.cardTiles, sRes.cardTileCount, sRes.cardFront[ty * 30 + tx],
                              CARD_X + tx * 8, CARD_Y + ty * 8, pals);
     if (sRes.trainerPic[gender])
         DrawSprite(sRes.trainerPic[gender], 8, 8, CARD_X + 20 * 8, CARD_Y + 5 * 8, sRes.trainerPicPal[gender].c);
     for (int i = 0; i < stars; ++i)
         DrawMapEntry(sRes.cardTiles, sRes.cardTileCount, 0x4000 | 143, CARD_X + (15 + i) * 8, CARD_Y + 7 * 8, pals);
-    sDst = sCanvas;
+}
+
+/*
+ * The card's cache was made in the frame the card first opened: 16.5 ms on an
+ * Old 3DS, most of it a copy of the whole screen from CACHE_MENU. Left of the
+ * column the flat fill paints every pixel ([0, CW) x [0, H), opaque) before
+ * the layers go on, so only the column is copied now. And it is made ahead,
+ * on frames the field leaves idle (WarmCardCache): a vertical strip of
+ * CARD_STRIP_W columns at a time, every layer within the strip in the order a
+ * whole drawing has them, then the column. Strips do not overlap, so together
+ * they are the whole drawing. The card opened mid-build finishes the steps
+ * left, it never starts again; sCardCacheKey is set only once all are done.
+ */
+#define CARD_STRIP_W 8
+#define CARD_STRIPS (CW / CARD_STRIP_W)   /* then one more step: the column */
+static struct
+{
+    int key;        /* stars * 2 + gender of the card being made, -1 none */
+    u8 next;        /* its next step, 0..CARD_STRIPS; past it the card is whole */
+    bool8 sliced;   /* some of its steps were taken ahead (CTR_BOTTOM_CACHE_AUDIT) */
+} sCardBuild = {-1, 0, FALSE};
+/* What the last opening of the card spent finishing its cache, for the log. */
+static float sCardBuildMs;
+
+static void CardCacheStep(u8 stars, u8 gender, const Pal *pals, int step)
+{
+    if (step >= CARD_STRIPS)
+    {
+        memcpy(sCache[CACHE_CARD] + COL_X * H, sCache[CACHE_MENU] + COL_X * H, (size_t)(W - COL_X) * H * sizeof(u16));
+        return;
+    }
+    sClipX0 = step * CARD_STRIP_W;
+    sClipX1 = sClipX0 + CARD_STRIP_W;
+    sClipY0 = 0;
+    sClipY1 = H;
+    DrawCardLayers(stars, gender, pals);
+}
+
+#ifdef CTR_BOTTOM_CACHE_AUDIT
+/* A card made in strips against the same card made whole, as it was made
+ * before: the whole screen copied from CACHE_MENU, then every layer at once.
+ * The whole one is what the cache keeps. */
+static void AuditCardCache(u8 stars, u8 gender, const Pal *pals)
+{
+    static u16 sliced[W * H];
+    static unsigned same;
+
+    memcpy(sliced, sCache[CACHE_CARD], sizeof(sliced));
+    memcpy(sCache[CACHE_CARD], sCache[CACHE_MENU], sizeof(sCanvas));
+    sClipX0 = sClipY0 = 0;
+    sClipX1 = W;
+    sClipY1 = H;
+    DrawCardLayers(stars, gender, pals);
+    if (memcmp(sliced, sCache[CACHE_CARD], sizeof(sliced)) != 0)
+        CtrLog_Write(CTR_LOG_ERROR, "CONTRACT bottom card cache made in strips differs from a whole build");
+    else
+        CtrLog_Write(CTR_LOG_VIDEO, "bottom card cache: strips same as a whole build (%u)", ++same);
+}
+#endif
+
+/* Steps of the card's cache, until it is whole or, with a slice (ms from
+ * start), until the slice is spent. */
+static void CardCacheSteps(u8 stars, u8 gender, uint64_t start, float slice)
+{
+    Pal pals[5];
+    u16 *dst = sDst;
+    int key = stars * 2 + gender, ox = sOX, clip[4] = {sClipX0, sClipY0, sClipX1, sClipY1};
+
+    if (sCardBuild.key != key)
+    {
+        /* Another card: from its first step the cache holds no card at all. */
+        sCardCacheKey = -1;
+        sCardBuild.key = key;
+        sCardBuild.next = 0;
+        sCardBuild.sliced = FALSE;
+    }
+    if (slice > 0.0f)
+        sCardBuild.sliced = TRUE;
+    CardPals(pals, stars, gender);
+    sDst = sCache[CACHE_CARD];
+    sOX = 0;
+    while (sCardBuild.next <= CARD_STRIPS
+        && (slice <= 0.0f || CtrPlatform_TickMs(CtrPlatform_Ticks() - start) < slice))
+        CardCacheStep(stars, gender, pals, sCardBuild.next++);
+    if (sCardBuild.next > CARD_STRIPS)
+    {
+#ifdef CTR_BOTTOM_CACHE_AUDIT
+        if (sCardBuild.sliced)
+            AuditCardCache(stars, gender, pals);
+#endif
+        sCardCacheKey = key;
+    }
+    sDst = dst;
+    sOX = ox;
+    sClipX0 = clip[0];
+    sClipY0 = clip[1];
+    sClipX1 = clip[2];
+    sClipY1 = clip[3];
+}
+
+/* The card's cache for these stars and gender, whole: what is left of it. */
+static void BuildCardCache(u8 stars, u8 gender)
+{
+    uint64_t start = CtrPlatform_Ticks();
+
+    if (!sCache[CACHE_CARD] || sCardCacheKey == stars * 2 + gender)
+        return;
+    CardCacheSteps(stars, gender, start, 0.0f);
+    sCardBuildMs = CtrPlatform_TickMs(CtrPlatform_Ticks() - start);
 }
 
 static void DrawTrainerCard(const ViewState *s)
@@ -4165,10 +4350,13 @@ static const u8 *OptionValue(int row, u8 value)
     case 4: return value == 0 ? gText_ButtonTypeNormal : value == 1 ? gText_ButtonTypeLR : gText_ButtonTypeLEqualsA;
     case OPT_FPS:
     case OPT_VOXEL: return value ? gText_BattleSceneOn : gText_BattleSceneOff;
-    case OPT_VOXEL_BLUR:
     case OPT_VOXEL_BATTLE: return value ? gText_BattleSceneOn : gText_BattleSceneOff;
     case OPT_VOXEL_PITCH: return Number(value, 2, STR_CONV_MODE_LEFT_ALIGN);
+    case OPT_VOXEL_BLUR:
     case OPT_VOXEL_ZOOM:
+        /* Percentages; the blur's strength is OFF at 0 (the zoom never is). */
+        if (value == 0)
+            return gText_BattleSceneOff;
         StringCopy(frame, Number(value, 3, STR_CONV_MODE_LEFT_ALIGN));
         frame[StringLength(frame) + 1] = EOS;
         frame[StringLength(frame)] = CHAR_PERCENT;
@@ -4223,6 +4411,7 @@ static void DrawWindowFrame(u8 type, int x, int y, int wt, int ht, u16 fill)
 static struct
 {
     bool8 valid;
+    bool8 warmed;   /* made ahead (WarmOptionCells), not by a redraw */
     u32 key, used;
     u16 px[OPT_CELL_W * OPT_CELL_H];
 } sCellPics[CELL_PICS];
@@ -4266,20 +4455,29 @@ static bool8 CellPicDraw(u32 key, int x, int y)
     return FALSE;
 }
 
+/* The cell's picture as the canvas has it now, into slot `slot`. */
+static void CellPicStore(int slot, u32 key, int x, int y, bool8 warmed)
+{
+    int sx = x + sOX;
+
+    for (int cx = 0; cx < OPT_CELL_W; ++cx)
+        memcpy(sCellPics[slot].px + cx * OPT_CELL_H, sCanvas + (sx + cx) * H + (H - y - OPT_CELL_H),
+               OPT_CELL_H * sizeof(u16));
+    sCellPics[slot].key = key;
+    sCellPics[slot].used = ++sCellPicClock;
+    sCellPics[slot].valid = TRUE;
+    sCellPics[slot].warmed = warmed;
+}
+
 static void CellPicKeep(u32 key, int x, int y)
 {
-    int sx = x + sOX, oldest = 0;
+    int oldest = 0;
 
     /* The one least recently drawn makes room. */
     for (int i = 1; i < CELL_PICS && sCellPics[oldest].valid; ++i)
         if (!sCellPics[i].valid || sCellPics[i].used < sCellPics[oldest].used)
             oldest = i;
-    for (int cx = 0; cx < OPT_CELL_W; ++cx)
-        memcpy(sCellPics[oldest].px + cx * OPT_CELL_H, sCanvas + (sx + cx) * H + (H - y - OPT_CELL_H),
-               OPT_CELL_H * sizeof(u16));
-    sCellPics[oldest].key = key;
-    sCellPics[oldest].used = ++sCellPicClock;
-    sCellPics[oldest].valid = TRUE;
+    CellPicStore(oldest, key, x, y, FALSE);
 }
 
 static bool8 FitsCell(const u8 *str)
@@ -4290,6 +4488,19 @@ static bool8 FitsCell(const u8 *str)
     return ix1 - ix0 <= OPT_CELL_W - 2;
 }
 
+/* All a cell is drawn from (see CELL_PICS): its key in the picture cache. */
+static u32 CellKey(int x, int y, const u8 *name, const u8 *value, bool8 live, bool8 on, bool8 arrows)
+{
+    return Mix(Mix(Mix(Mix(Mix(Mix(Mix(Mix(MixStr(MixStr(0x811C9DC5u, name), value), x), y), sOX), live), on),
+                       arrows), (u32)(uintptr_t)sSmall.glyphs), (u32)(uintptr_t)sCache[CACHE_MENU]);
+}
+
+/* Whether a cell's picture may be kept at all, wherever it is drawn. */
+static bool8 CellKeepable(const u8 *name, const u8 *value)
+{
+    return sSmall.glyphs && FitsCell(name) && FitsCell(value);
+}
+
 static void DrawCellPlateBody(int x, int y, const u8 *name, const u8 *value, bool8 live, bool8 on, bool8 arrows);
 
 /*
@@ -4298,9 +4509,8 @@ static void DrawCellPlateBody(int x, int y, const u8 *name, const u8 *value, boo
  */
 static void DrawCellPlate(int x, int y, const u8 *name, const u8 *value, bool8 live, bool8 on, bool8 arrows)
 {
-    u32 key = Mix(Mix(Mix(Mix(Mix(Mix(Mix(Mix(MixStr(MixStr(0x811C9DC5u, name), value), x), y), sOX), live), on),
-                          arrows), (u32)(uintptr_t)sSmall.glyphs), (u32)(uintptr_t)sCache[CACHE_MENU]);
-    bool8 keep = CellWhole(x, y) && sSmall.glyphs && FitsCell(name) && FitsCell(value);
+    u32 key = CellKey(x, y, name, value, live, on, arrows);
+    bool8 keep = CellWhole(x, y) && CellKeepable(name, value);
 
 #ifdef CTR_BOTTOM_CACHE_AUDIT
     for (int i = 0; keep && i < CELL_PICS; ++i)
@@ -4314,10 +4524,15 @@ static void DrawCellPlate(int x, int y, const u8 *name, const u8 *value, bool8 l
             for (int cx = 0; cx < OPT_CELL_W && !differs; ++cx)
                 differs = memcmp(sCellPics[i].px + cx * OPT_CELL_H, sCanvas + (sx + cx) * H + (H - y - OPT_CELL_H),
                                  OPT_CELL_H * sizeof(u16)) != 0;
+            /* A picture made ahead is checked here too, at its first use:
+             * against the cell drawn on the screen itself. */
             if (differs)
-                CtrLog_Write(CTR_LOG_ERROR, "CONTRACT bottom option cell picture differs from a redraw");
-            else if ((++same & 63) == 1)
-                CtrLog_Write(CTR_LOG_VIDEO, "bottom option cells: same as a redraw (%u)", same);
+                CtrLog_Write(CTR_LOG_ERROR, "CONTRACT bottom option cell picture (%s) differs from a redraw",
+                             sCellPics[i].warmed ? "made ahead" : "kept");
+            else if ((++same & 63) == 1 || sCellPics[i].warmed)
+                CtrLog_Write(CTR_LOG_VIDEO, "bottom option cells: same as a redraw (%u%s)", same,
+                             sCellPics[i].warmed ? ", made ahead" : "");
+            sCellPics[i].warmed = FALSE;
             return;
         }
 #else
@@ -4441,6 +4656,18 @@ static void DrawOptionTabs(const ViewState *s)
     }
 }
 
+/* The options' names; six of them take Ascii's buffers until they are drawn. */
+static void OptionNames(const u8 *names[OPTION_ROWS])
+{
+    const u8 *const table[OPTION_ROWS] = {
+        gText_TextSpeed, gText_BattleScene, gText_BattleStyle, gText_Sound,
+        gText_ButtonMode, gText_Frame, Ascii(CTR_TEXT("SHOW FPS", "MOSTRAR FPS", "AFFICH. FPS")), Ascii("VOXEL 3D"),
+        Ascii(CTR_TEXT("3D ANGLE", "ANGULO 3D", "ANGLE 3D")), Ascii(CTR_TEXT("3D ZOOM", "ZOOM 3D", "ZOOM 3D")),
+        Ascii(CTR_TEXT("3D BLUR", "DESENFOQUE 3D", "FLOU 3D")), Ascii(CTR_TEXT("3D BATTLE", "COMBATE 3D", "COMBAT 3D"))};
+
+    memcpy(names, table, sizeof(table));
+}
+
 static void DrawOptions(const ViewState *s)
 {
     /* The tabs first: their labels take turns in Ascii's few buffers, which
@@ -4448,11 +4675,10 @@ static void DrawOptions(const ViewState *s)
     if (OptionPages())
         DrawOptionTabs(s);
 
-    const u8 *names[OPTION_ROWS] = {gText_TextSpeed, gText_BattleScene, gText_BattleStyle, gText_Sound,
-                                    gText_ButtonMode, gText_Frame, Ascii(CTR_TEXT("SHOW FPS", "MOSTRAR FPS", "AFFICH. FPS")), Ascii("VOXEL 3D"),
-                                    Ascii(CTR_TEXT("3D ANGLE", "ANGULO 3D", "ANGLE 3D")), Ascii(CTR_TEXT("3D ZOOM", "ZOOM 3D", "ZOOM 3D")),
-                                    Ascii(CTR_TEXT("3D BLUR", "DESENFOQUE 3D", "FLOU 3D")), Ascii(CTR_TEXT("3D BATTLE", "COMBATE 3D", "COMBAT 3D"))};
+    const u8 *names[OPTION_ROWS];
     bool8 voxel = OPTION_SHOWN > OPT_VOXEL && s->options[OPT_VOXEL];
+
+    OptionNames(names);
 
     if (s->optPage != CTR_EXTRAS_OPTIONS)
     {
@@ -5377,6 +5603,254 @@ static void WarmBattleMenus(void)
     sClipY1 = clip[3];
 }
 
+/*
+ * What an idle field frame may spend making a cache ahead: the slice
+ * WarmBattleMenus takes, what the last frame's work leaves, at most
+ * WARM_SLICE_MS. FALSE while that leaves less than WARM_MIN_MS, until the
+ * warm-up has been starved WARM_STARVED_FRAMES frames: then WARM_MIN_MS.
+ */
+static bool8 IdleSlice(unsigned *starved, float *slice)
+{
+    const CtrTiming *timing = CtrPlatform_GetTiming();
+
+    *slice = WARM_FRAME_MS - (timing->workMs - timing->bottomMs) - WARM_MARGIN_MS;
+    if (*slice > WARM_SLICE_MS)
+        *slice = WARM_SLICE_MS;
+    if (*slice < WARM_MIN_MS)
+    {
+        if (++*starved < WARM_STARVED_FRAMES)
+            return FALSE;
+        *slice = WARM_MIN_MS;
+    }
+    *starved = 0;
+    return TRUE;
+}
+
+/*
+ * The trainer card's cache, made ahead in strips (CardCacheSteps) on frames
+ * the field leaves the bottom screen idle, with the slice IdleSlice gives.
+ * Its stars walk the Pokédex, so they are counted again only every
+ * CARD_STARS_FRAMES; a card opened with others than these is made whole
+ * then, as it always was. TRUE while the card has steps left: the frame is
+ * the card's, the option cells wait (WarmOptionCells).
+ */
+#define CARD_STARS_FRAMES 256u
+
+static bool8 WarmCardCache(u8 mode)
+{
+    static u8 stars = 0xFF;
+    static u32 starsFrame;
+    static unsigned starved;
+    float slice;
+
+    if (mode != MODE_FIELD || sShown.mode != MODE_FIELD || sShown.inBattle || sShown.screen == SCR_CARD
+     || !sCache[CACHE_CARD] || sBuildBudget != 0xFF)
+        return FALSE;
+    if (stars == 0xFF || sFrames - starsFrame >= CARD_STARS_FRAMES)
+    {
+        stars = CardStars();
+        if (stars > 4)
+            stars = 4;
+        starsFrame = sFrames;
+    }
+    if (sCardCacheKey == stars * 2 + sShown.gender)
+        return FALSE;
+    if (IdleSlice(&starved, &slice))
+        CardCacheSteps(stars, sShown.gender, CtrPlatform_Ticks(), slice);
+    return TRUE;
+}
+
+/*
+ * The OPTIONS cells' pictures (CELL_PICS), made ahead on idle field frames,
+ * so the first visit to a page copies them instead of drawing a page of text
+ * cells (~5 ms in Azahar, two or three times that on an Old 3DS). Only the
+ * pictures the settings as they are now would show: each cell's arguments
+ * are worked out as DrawOptionCell and DrawExtraCell work them out (from the
+ * values the snapshot reads, ReadOptionValues and ExtraShownValue; nothing
+ * pressed; beside the column, sOX 0) and its key is CellKey's. It is drawn as
+ * a redraw draws it, DrawCellPlateBody into the canvas over CACHE_MENU's
+ * pixels (what CopyCache puts under a cell of the OPTIONS screen, the
+ * backdrop the key names), clipped to the cell; the canvas' own pixels there
+ * are put back after, so the screen and later partial redraws never see it.
+ * The audit build checks each picture made ahead at its first use, against
+ * the cell drawn on the screen (DrawCellPlate).
+ *
+ * Pages in order, the options' first, as many cells as CELL_PICS holds. A
+ * slot holding one of those pictures is never taken for another; with the
+ * screen open nothing is made (its pictures are the ones in use). Once all
+ * are there the settings are looked at again only every CELL_WARM_FRAMES.
+ */
+#define CELL_WARM_FRAMES 64u
+
+typedef struct
+{
+    int x, y;
+    const u8 *name, *value;
+    bool8 live, arrows;
+} CellArgs;
+
+/* The cell `row` of `page` as the screen would draw it now; FALSE for none,
+ * or one whose picture is never kept (the frame's: its own preview). The
+ * strings live in Ascii's and Number's rings: use them at once. */
+static bool8 OptionCellArgs(unsigned page, unsigned row, const u8 options[OPTION_ROWS], CellArgs *c)
+{
+    if (page == CTR_EXTRAS_OPTIONS)
+    {
+        const u8 *names[OPTION_ROWS];
+        bool8 voxel = OPTION_SHOWN > OPT_VOXEL && options[OPT_VOXEL];
+
+        if (row >= OPTION_ROWS || !OptionExists(row) || row == OPT_FRAME)
+            return FALSE;
+        OptionNames(names);
+        c->name = names[row];
+        c->value = OptionValue(row, options[row]);
+        c->live = OptionLive(row, voxel);
+        c->arrows = TRUE;
+    }
+    else
+    {
+        const CtrExtra *extra = PageExtra(page, row);
+
+        if (!extra)
+            return FALSE;
+        c->name = Ascii(extra->name);
+        if (extra->text)
+            c->value = extra->text();
+        else
+        {
+            /* The snapshot's extras[row], a u16 as there. */
+            u16 shown = ExtraShownValue(extra);
+
+            c->value = Ascii(extra->values ? extra->values[extra->count ? shown : 0] : "");
+        }
+        c->live = TRUE;
+        c->arrows = extra->count != 0 || extra->step != NULL;
+    }
+    OptionCell(row, &c->x, &c->y);
+    return TRUE;
+}
+
+/* One cell's picture, made into slot `slot`. */
+static void WarmOptionCell(int slot, u32 key, const CellArgs *c)
+{
+    static u16 under[OPT_CELL_W * OPT_CELL_H];
+    u16 *dst = sDst;
+    int clip[4] = {sClipX0, sClipY0, sClipX1, sClipY1};
+
+    for (int cx = 0; cx < OPT_CELL_W; ++cx)
+    {
+        size_t at = (size_t)(c->x + cx) * H + (H - c->y - OPT_CELL_H);
+
+        memcpy(under + cx * OPT_CELL_H, sCanvas + at, OPT_CELL_H * sizeof(u16));
+        memcpy(sCanvas + at, sCache[CACHE_MENU] + at, OPT_CELL_H * sizeof(u16));
+    }
+    sDst = sCanvas;
+    sClipX0 = c->x;
+    sClipY0 = c->y;
+    sClipX1 = c->x + OPT_CELL_W;
+    sClipY1 = c->y + OPT_CELL_H;
+    DrawCellPlateBody(c->x, c->y, c->name, c->value, c->live, FALSE, c->arrows);
+    CellPicStore(slot, key, c->x, c->y, TRUE);
+    for (int cx = 0; cx < OPT_CELL_W; ++cx)
+        memcpy(sCanvas + (size_t)(c->x + cx) * H + (H - c->y - OPT_CELL_H), under + cx * OPT_CELL_H,
+               OPT_CELL_H * sizeof(u16));
+    sDst = dst;
+    sClipX0 = clip[0];
+    sClipY0 = clip[1];
+    sClipX1 = clip[2];
+    sClipY1 = clip[3];
+}
+
+static void WarmOptionCells(u8 mode)
+{
+    static bool8 settled;
+    static u32 settledFrame;
+    static unsigned starved;
+    u32 keys[CELL_PICS];
+    u8 pages[CELL_PICS], rows[CELL_PICS], options[OPTION_ROWS];
+    int n = 0, ox = sOX;
+    uint64_t start;
+    float slice;
+    CellArgs c;
+
+    if (mode != MODE_FIELD || sShown.mode != MODE_FIELD || sShown.inBattle || sShown.screen == SCR_OPTION
+     || !sCache[CACHE_MENU] || sBuildBudget != 0xFF || !gSaveBlock2Ptr)
+        return;
+    if (settled && sFrames - settledFrame < CELL_WARM_FRAMES)
+        return;
+    if (!IdleSlice(&starved, &slice))
+        return;
+    start = CtrPlatform_Ticks();
+    ResolveFonts();
+    sOX = 0;
+    ReadOptionValues(options);
+    /* The pictures wanted, the options' page first. */
+    for (unsigned page = 0; page < CTR_EXTRAS_PAGES && n < CELL_PICS; ++page)
+    {
+        if (page != CTR_EXTRAS_OPTIONS && (!OptionPages() || !CtrExtras_PageUsed(page)))
+            continue;
+        for (unsigned row = 0; row < CELLS_PER_PAGE && n < CELL_PICS; ++row)
+        {
+            u32 key;
+            bool8 twice = FALSE;
+
+            if (!OptionCellArgs(page, row, options, &c) || !CellKeepable(c.name, c.value))
+                continue;
+            key = CellKey(c.x, c.y, c.name, c.value, c.live, FALSE, c.arrows);
+            for (int k = 0; k < n && !twice; ++k)
+                twice = keys[k] == key;
+            if (twice)
+                continue;
+            keys[n] = key;
+            pages[n] = page;
+            rows[n++] = row;
+        }
+    }
+    settled = TRUE;
+    for (int i = 0; i < n; ++i)
+    {
+        int slot = -1;
+
+        for (int k = 0; k < CELL_PICS && slot < 0; ++k)
+            if (sCellPics[k].valid && sCellPics[k].key == keys[i])
+                slot = k;
+        if (slot >= 0)
+            continue;
+        /* Settled only once every picture is made, by this frame or an
+         * earlier one: a cell whose text keeps changing then costs one
+         * picture every CELL_WARM_FRAMES, not one every frame. */
+        if (CtrPlatform_TickMs(CtrPlatform_Ticks() - start) >= slice)
+        {
+            settled = FALSE;
+            break;
+        }
+        /* An empty slot, or the least recently drawn of those holding none
+         * of the pictures wanted. There is one: this picture is missing and
+         * n <= CELL_PICS, so fewer than CELL_PICS slots hold wanted ones. */
+        for (int k = 0; k < CELL_PICS; ++k)
+        {
+            bool8 wanted = FALSE;
+
+            if (!sCellPics[k].valid)
+            {
+                slot = k;
+                break;
+            }
+            for (int j = 0; j < n && !wanted; ++j)
+                wanted = sCellPics[k].key == keys[j];
+            if (!wanted && (slot < 0 || sCellPics[k].used < sCellPics[slot].used))
+                slot = k;
+        }
+        /* The strings again: the keys' walk has reused the rings since. */
+        if (slot < 0 || !OptionCellArgs(pages[i], rows[i], options, &c))
+            continue;
+        WarmOptionCell(slot, keys[i], &c);
+    }
+    if (settled)
+        settledFrame = sFrames;
+    sOX = ox;
+}
+
 /* ------------------------------------------------------------------------ */
 /* Redraw and present                                                       */
 /* ------------------------------------------------------------------------ */
@@ -5495,9 +5969,10 @@ static void MapCacheTake(void)
 
 static void Render(const ViewState *s)
 {
-    bool8 cacheable = MapCacheable(s);
+    bool8 cacheable = MapCacheable(s), blitted = FALSE;
     uint64_t phase[6] = {CtrPlatform_Ticks()};
 
+    sCardBuildMs = 0.0f;
     ResolveFonts();
     if (cacheable && sMapCache.valid && memcmp(&sMapCache.state, s, sizeof(*s)) == 0)
     {
@@ -5595,26 +6070,39 @@ static void Render(const ViewState *s)
     /* Left of the column is the PokéNav's while the compositor draws it, and
      * the whole screen the boxes'. */
     if (!ClipIsFull())
+    {
         CtrBottom_BlitRect(sCanvas, sClipX0, sClipY0, sClipX1, sClipY1);
+        blitted = TRUE;
+    }
     else if (!CtrVideo_BottomWhole() && !sIntro.defer)
+    {
         CtrBottom_Blit(sCanvas, CtrVideo_BottomInUse() ? CW : 0, W);
+        blitted = TRUE;
+    }
+    phase[5] = CtrPlatform_Ticks();
     if (ClipIsFull())
+        sMapShotOk = cacheable && sAnimCount == 0 && !sRefineLabels && sIconsIn;
+    /* Whole redraws and partial ones alike (a page of the options is one):
+     * the backdrop's copy (with the card's cache finished in it), and the
+     * present split into its copy to the screen and its cache flush. */
     {
         static unsigned lines;
-        float total;
+        float total = CtrPlatform_TickMs(phase[5] - phase[0]);
+        uint64_t copy = 0, flush = 0;
 
-        sMapShotOk = cacheable && sAnimCount == 0 && !sRefineLabels && sIconsIn;
-        phase[5] = CtrPlatform_Ticks();
-        total = CtrPlatform_TickMs(phase[5] - phase[0]);
         if (total > CTR_RENDER_SLOW_MS && lines < CTR_RENDER_SLOW_LINES && s->mode == MODE_FIELD)
         {
+            if (blitted)
+                CtrBottom_LastBlitTicks(&copy, &flush);
             ++lines;
-            CtrLog_Write(CTR_LOG_VIDEO, "bottom render f=%lu screen=%u page=%u total=%.2f: backdrop=%.2f screen=%.2f "
-                         "column=%.2f icons=%.2f blit=%.2f ms",
-                         (unsigned long)sFrames, s->screen, s->optPage, total,
-                         CtrPlatform_TickMs(phase[1] - phase[0]), CtrPlatform_TickMs(phase[2] - phase[1]),
-                         CtrPlatform_TickMs(phase[3] - phase[2]), CtrPlatform_TickMs(phase[4] - phase[3]),
-                         CtrPlatform_TickMs(phase[5] - phase[4]));
+            CtrLog_Write(CTR_LOG_VIDEO, "bottom render f=%lu screen=%u page=%u part=%d,%d-%d,%d total=%.2f: "
+                         "backdrop=%.2f (card=%.2f) screen=%.2f column=%.2f icons=%.2f blit=%.2f "
+                         "(copy=%.2f flush=%.2f) ms",
+                         (unsigned long)sFrames, s->screen, s->optPage, sClipX0, sClipY0, sClipX1, sClipY1, total,
+                         CtrPlatform_TickMs(phase[1] - phase[0]), sCardBuildMs,
+                         CtrPlatform_TickMs(phase[2] - phase[1]), CtrPlatform_TickMs(phase[3] - phase[2]),
+                         CtrPlatform_TickMs(phase[4] - phase[3]), CtrPlatform_TickMs(phase[5] - phase[4]),
+                         CtrPlatform_TickMs(copy), CtrPlatform_TickMs(flush));
         }
     }
 }
@@ -5693,6 +6181,38 @@ static u8 BattleCursorHit(const ViewState *s, u8 cursor)
     return HIT_TARGET_OK;
 }
 
+/*
+ * The OPTIONS screen changed only in what the area left of the column is
+ * drawn from: the page and sub-page, the values, the option focus, a press
+ * that is not on the column, the ring's blink with no column item focused.
+ * The column reads none of these (DrawColumn, DrawSquares) and draws nothing
+ * left of CW, nor the options right of it, so a redraw of [0, CW) leaves the
+ * canvas what a whole one would paint. A page switch was a whole redraw and
+ * a whole-screen copy and present: ~10 ms on an Old 3DS.
+ */
+static bool8 OptionsAreaOnly(const ViewState *now, const ViewState *shown)
+{
+    static ViewState probe;
+    bool8 columnPress = (now->pressed >= HIT_COLUMN && now->pressed < HIT_COLUMN + COL_ITEMS)
+                     || (shown->pressed >= HIT_COLUMN && shown->pressed < HIT_COLUMN + COL_ITEMS);
+
+    /* Beside the column, not centred on the whole screen (Render's sOX). */
+    if (now->mode != MODE_FIELD || now->screen != SCR_OPTION || shown->screen != SCR_OPTION
+     || now->inBattle || now->bagView == BAG_VIEW_WHOLE)
+        return FALSE;
+    probe = *now;
+    probe.optPage = shown->optPage;
+    probe.optSub = shown->optSub;
+    probe.optFocus = shown->optFocus;
+    memcpy(probe.options, shown->options, sizeof(probe.options));
+    memcpy(probe.extras, shown->extras, sizeof(probe.extras));
+    if (!columnPress)
+        probe.pressed = shown->pressed;
+    if (now->focus == FOCUS_NONE)
+        probe.blink = shown->blink;
+    return memcmp(&probe, shown, sizeof(probe)) == 0;
+}
+
 /* The clip a redraw can be limited to, when the new view differs from the
  * shown one only in things that touch one part of the screen: the button lit
  * by a press or the battle cursor, an HP bar and its status, an option's
@@ -5717,7 +6237,16 @@ static bool8 DirtyRect(const ViewState *now, const ViewState *shown, Rect *r)
             if (i != OPT_VOXEL)
                 probe.options[i] = shown->options[i];
     if (memcmp(&probe, shown, sizeof(probe)) != 0)
-        return FALSE;
+    {
+        /* Another page or sub-page of the options (or its values, focus,
+         * press) with the column as it was: the area left of the column
+         * alone, whole. Not the whole screen copied and sent again. */
+        if (battle || !OptionsAreaOnly(now, shown))
+            return FALSE;
+        RectInit(r);
+        RectAdd(r, 0, 0, CW, H);
+        return TRUE;
+    }
 
     RectInit(r);
     if (battle)
@@ -6544,14 +7073,6 @@ static void ActivateOption(u8 id)
         PlaySE(SE_SELECT);
         return;
     }
-    if (row == OPT_VOXEL_BLUR)
-    {
-        if (!CtrSettings_Voxel())
-            return;
-        CtrSettings_SetVoxelBlur(!CtrSettings_VoxelBlur());
-        PlaySE(SE_SELECT);
-        return;
-    }
     if (row == OPT_VOXEL_BATTLE)
     {
         if (!CtrSettings_Voxel())
@@ -6560,14 +7081,16 @@ static void ActivateOption(u8 id)
         PlaySE(SE_SELECT);
         return;
     }
-    if (row == OPT_VOXEL_PITCH || row == OPT_VOXEL_ZOOM)
+    if (row == OPT_VOXEL_PITCH || row == OPT_VOXEL_ZOOM || row == OPT_VOXEL_BLUR)
     {
         if (!CtrSettings_Voxel())
             return;
         if (row == OPT_VOXEL_PITCH)
             CtrSettings_StepVoxelPitch(back ? -1 : 1);
-        else
+        else if (row == OPT_VOXEL_ZOOM)
             CtrSettings_StepVoxelZoom(back ? -1 : 1);
+        else
+            CtrSettings_StepVoxelBlur(back ? -1 : 1);
         PlaySE(SE_SELECT);
         return;
     }
@@ -7547,5 +8070,7 @@ void CtrBottom_Frame(void)
     }
     if (mode == MODE_BATTLE_INFO)
         WarmBattleMenus();
+    else if (!WarmCardCache(mode))
+        WarmOptionCells(mode);
     BottomProfile(frames, mode, ticks, 0);
 }

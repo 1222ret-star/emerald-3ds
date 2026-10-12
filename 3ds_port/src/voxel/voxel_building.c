@@ -132,6 +132,31 @@ static FrontCell sFrontCells[FRONT_SETS];
 /* Said once: a chunk with more static models than its list holds. */
 static bool sStaticsFullLogged;
 
+/*
+ * The placements of a layout by the rows they cover: bit i of band b is set
+ * when placement i's rectangle reaches a row of b (rows >> shift). A town has
+ * up to some two hundred placements - Slateport's fences, stalls and posts -
+ * and every cell a build or a ray asks about walked them all; a band holds a
+ * tenth of them. The bits are read lowest first, so the first placement that
+ * owns a cell still answers. Built when a layout is first asked about, for a
+ * few layouts at a time (a ray crosses into the map beside), and dropped with
+ * the placements. A layout of more placements than the bits hold is walked
+ * whole, as before.
+ */
+#define BAND_SLOTS 3u
+#define BAND_COUNT 32u
+#define BAND_WORDS 8u   /* placements: 32 bits a word */
+typedef struct
+{
+    int layout;         /* layout id + 1; 0: empty */
+    unsigned shift;
+    int rows;           /* past the last row any placement covers */
+    unsigned age;
+    uint32_t bits[BAND_COUNT][BAND_WORDS];
+} PlacementBands;
+static PlacementBands sBands[BAND_SLOTS];
+static unsigned sBandClock;
+
 static unsigned U16(const uint8_t *p) { return (unsigned)p[0] | ((unsigned)p[1] << 8); }
 static uint32_t U32(const uint8_t *p)
 {
@@ -317,6 +342,7 @@ void VoxelBuildings_Shutdown(void)
     sVertices = NULL;
     sPageCount = sModelCount = sPageModelCount = sPlacementCount = sVertexCount = 0;
     sLastLayout = -1;
+    memset(sBands, 0, sizeof(sBands));
     memset(sFrontCells, 0, sizeof(sFrontCells));
     sMaxTop = 0.0f;
     if (sPageFile != NULL)
@@ -430,18 +456,93 @@ int VoxelBuildings_PageOf(const VoxelMapInstance *inst)
     return p ? (int)sPageModels[p[0].pageModel].page : -1;
 }
 
+/* The bands of the layout `p` and `count` are the placements of (NULL when
+ * they do not fit), from a slot or built into the least recently used. */
+static const PlacementBands *LayoutBands(const VoxelMapInstance *inst,
+                                         const BuildingPlacement *p, unsigned count)
+{
+    PlacementBands *b = &sBands[0];
+    int rows = 0;
+
+    if (count > BAND_WORDS * 32u)
+        return NULL;
+    for (unsigned s = 0; s < BAND_SLOTS; ++s)
+    {
+        if (sBands[s].layout == inst->layoutId + 1)
+        {
+            sBands[s].age = ++sBandClock;
+            return &sBands[s];
+        }
+        if (sBands[s].age < b->age)
+            b = &sBands[s];
+    }
+    for (unsigned i = 0; i < count; ++i)
+    {
+        int end = (int)p[i].y + sModels[sPageModels[p[i].pageModel].model].h;
+
+        if (end > rows)
+            rows = end;
+    }
+    b->layout = inst->layoutId + 1;
+    b->age = ++sBandClock;
+    b->rows = rows;
+    b->shift = 0;
+    while (rows > 0 && (unsigned)(rows - 1) >> b->shift >= BAND_COUNT)
+        ++b->shift;
+    memset(b->bits, 0, sizeof(b->bits));
+    for (unsigned i = 0; i < count; ++i)
+    {
+        const BuildingModel *m = &sModels[sPageModels[p[i].pageModel].model];
+
+        if (m->h == 0)
+            continue;
+        for (unsigned band = p[i].y >> b->shift; band <= (p[i].y + m->h - 1u) >> b->shift; ++band)
+            b->bits[band][i / 32u] |= 1u << (i % 32u);
+    }
+    return b;
+}
+
 /* The model cell over world cell (x, y): the index of its height byte, or
  * -1. The first placement that owns the cell answers. */
 static long ModelCell(const VoxelMapInstance *inst, int x, int y, unsigned *placement)
 {
     unsigned count;
     const BuildingPlacement *p = LayoutPlacements(inst, &count);
+    const PlacementBands *bands;
     int lx, ly;
 
     if (p == NULL)
         return -1;
     lx = x - inst->originX;
     ly = y - inst->originY;
+    bands = LayoutBands(inst, p, count);
+    if (bands != NULL)
+    {
+        const uint32_t *band;
+
+        /* No placement reaches a row out of [0, rows). */
+        if (ly < 0 || ly >= bands->rows)
+            return -1;
+        band = bands->bits[(unsigned)ly >> bands->shift];
+        for (unsigned w = 0; w < BAND_WORDS; ++w)
+            for (uint32_t bits = band[w]; bits != 0; bits &= bits - 1u)
+            {
+                unsigned i = w * 32u + (unsigned)__builtin_ctz(bits);
+                const BuildingModel *m = &sModels[sPageModels[p[i].pageModel].model];
+                int cx = lx - p[i].x, cy = ly - p[i].y;
+                unsigned k;
+
+                if (cx < 0 || cy < 0 || cx >= m->w || cy >= m->h)
+                    continue;
+                k = m->heights + (unsigned)cy * m->w + (unsigned)cx;
+                if (sHeights[k] == 0xFF)
+                    continue;
+                if (placement != NULL)
+                    *placement = i;
+                return (long)k;
+            }
+        return -1;
+    }
     for (unsigned i = 0; i < count; ++i)
     {
         const BuildingModel *m = &sModels[sPageModels[p[i].pageModel].model];

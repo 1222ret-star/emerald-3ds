@@ -20,7 +20,11 @@
  * f32 x, y, z (world tiles); then count vertices of f32 x, y, z, u, v,
  * shade, positions in world tiles. Terrain uv are slots of a virtual atlas
  * (id i in slot i of a 64x64 grid), trees' of the tree atlas, models' of
- * their page. */
+ * their page.
+ *
+ * On stderr: the time the ground rows took (they cast the shadow rays, the
+ * phase that makes chunks slow on the console), for before/after timings;
+ * with -DSCENE_LIGHT_COUNTERS also the rays' steps and relief tests. */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -32,6 +36,30 @@
 #include "voxel_relief.h"
 #include "voxel_sign.h"
 #include "voxel_tree.h"
+#if CTR_VOXEL_LIGHTING
+#include "voxel_lighting.h"
+#endif
+
+#ifdef _WIN32
+#include <windows.h>
+static double Seconds(void)
+{
+    LARGE_INTEGER t, f;
+
+    QueryPerformanceCounter(&t);
+    QueryPerformanceFrequency(&f);
+    return (double)t.QuadPart / (double)f.QuadPart;
+}
+#else
+#include <time.h>
+static double Seconds(void)
+{
+    struct timespec t;
+
+    clock_gettime(CLOCK_MONOTONIC, &t);
+    return (double)t.tv_sec + t.tv_nsec * 1e-9;
+}
+#endif
 
 #define GRID 64u
 /* ctr_voxel.c: VOXEL_CHUNK, VOXEL_CHUNK_SCRATCH (with lighting),
@@ -118,6 +146,7 @@ int main(int argc, char **argv)
     uint16_t head[4];
     uint32_t chunks = 0, total = 0, dropped = 0;
     long countAt;
+    double groundSeconds = 0.0;
 
     if (argc != 3 || (in = fopen(argv[1], "rb")) == NULL)
         return 2;
@@ -169,9 +198,14 @@ int main(int argc, char **argv)
             b.lightingRefine = true;
 #endif
             VoxelMesh_BeginWindow(x0 - 1, y0 - VOXEL_CHUNK_MARGIN_NORTH, x1 + 1, y1 + 1);
-            for (int row = y0; row < y1; ++row)
-                for (int col = x0; col < x1; ++col)
-                    VoxelMesh_EmitGroundRow(&b, &sMap, col, col + 1, row);
+            {
+                double start = Seconds();
+
+                for (int row = y0; row < y1; ++row)
+                    for (int col = x0; col < x1; ++col)
+                        VoxelMesh_EmitGroundRow(&b, &sMap, col, col + 1, row);
+                groundSeconds += Seconds() - start;
+            }
             terrainCount = b.count;
             for (int row = y0; row < y1; ++row)
                 for (int col = x0; col < x1; ++col)
@@ -208,5 +242,14 @@ int main(int argc, char **argv)
     Put32(out, chunks);
     fclose(out);
     printf("%u chunks, %u vertices, %u triangles dropped\n", chunks, total, dropped);
+    fprintf(stderr, "ground %.3f ms", groundSeconds * 1000.0);
+#if CTR_VOXEL_LIGHTING
+    fprintf(stderr, ", %u rays", VoxelLighting_Rays());
+#ifdef SCENE_LIGHT_COUNTERS
+    fprintf(stderr, ", %u steps, %u surface tests", VoxelLighting_Steps(),
+            VoxelLighting_SurfaceTests());
+#endif
+#endif
+    fprintf(stderr, "\n");
     return 0;
 }

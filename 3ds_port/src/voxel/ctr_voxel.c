@@ -2400,6 +2400,8 @@ static struct
      * hardware is what says what to make cheaper next. */
     uint64_t phaseTicks[JOB_DONE + 1];
     unsigned rays;          /* shadow rays its build cast (VoxelLighting_Rays) */
+    unsigned steps;         /* ... the points they tested (VoxelLighting_Steps) */
+    unsigned surfaces;      /* ... and relief surface tests (VoxelLighting_SurfaceTests) */
     uint32_t firstFrame;
     /* Measured by JOB_PACK, a slice of vertices at a time: the chunk's gx0..
      * and gy0.. (VoxelChunk). */
@@ -3503,6 +3505,17 @@ static int CompareRequests(const void *a, const void *b)
 #define VOXEL_CROSSING_RESERVE_MS 5.0f
 #define VOXEL_CROSSING_NEAR 0.5f
 static bool sCrossingSoon;
+#if CTR_VOXEL_STEREO
+/*
+ * With the world in 3D (CtrVoxel_StereoBegin this frame) the next frame's GPU
+ * work is longer - both eyes' warps after the world - and on an Old 3DS the
+ * frames before a missed VBlank were those that had built 3.2 ms after the
+ * submit against 1.1 on others: the next frame then started its GPU late.
+ * The builds leave that much more of the frame alone while it lasts.
+ */
+#define VOXEL_STEREO_RESERVE_MS 2.5f
+static uint32_t sStereoBegunFrame;
+#endif
 /*
  * Inside any other frame, for a hole on screen (see sHolesOnly): what the
  * last frame left between the end of its GPU work and the VBlank - its
@@ -3564,6 +3577,24 @@ static unsigned LightRays(void)
 #endif
 }
 
+static unsigned LightSteps(void)
+{
+#if CTR_VOXEL_LIGHTING
+    return VoxelLighting_Steps();
+#else
+    return 0;
+#endif
+}
+
+static unsigned LightSurfaceTests(void)
+{
+#if CTR_VOXEL_LIGHTING
+    return VoxelLighting_SurfaceTests();
+#else
+    return 0;
+#endif
+}
+
 static void NoteBuildCost(VoxelChunk *chunk, const ChunkSite *site, float ms, uint32_t frames)
 {
     static unsigned sSlowLogged;
@@ -3574,10 +3605,10 @@ static void NoteBuildCost(VoxelChunk *chunk, const ChunkSite *site, float ms, ui
     {
         ++sSlowLogged;
         CtrLog_Write(CTR_LOG_VIDEO, "VOXEL slow chunk %d,%d of %d:%d%s: %.1f ms over %lu frames, "
-                     "%u verts, %u rays (ground %.1f trees %.1f models %.1f pack+upload %.1f)",
+                     "%u verts, %u rays %u steps %u surface (ground %.1f trees %.1f models %.1f pack+upload %.1f)",
                      site->cx, site->cy, site->inst->mapGroup, site->inst->mapNum,
                      site->border ? " border" : "", ms, (unsigned long)frames, chunk->count,
-                     sJob.rays,
+                     sJob.rays, sJob.steps, sJob.surfaces,
                      TicksMs(sJob.phaseTicks[JOB_GROUND] + sJob.phaseTicks[JOB_BORDER]),
                      TicksMs(sJob.phaseTicks[JOB_TREES] + sJob.phaseTicks[JOB_BORDER_TREES]),
                      TicksMs(sJob.phaseTicks[JOB_MODELS] + sJob.phaseTicks[JOB_STATICS]),
@@ -3718,7 +3749,7 @@ static unsigned RunJobs(uint64_t started, float holeMs, float aheadMs, bool inFr
         {
             int phase = sJob.phase;
             uint64_t sliceStart, ticks;
-            unsigned rays, misses;
+            unsigned rays, steps, surfaces, misses;
             int cellX = sJob.col, cellY = sJob.row;
 
             /*
@@ -3738,12 +3769,16 @@ static unsigned RunJobs(uint64_t started, float holeMs, float aheadMs, bool inFr
                 break;
             sliceStart = svcGetSystemTick();
             rays = LightRays();
+            steps = LightSteps();
+            surfaces = LightSurfaceTests();
             misses = CtrAssets_GetStats()->misses;
             JobStep();
             if (sJob.forView)
                 sRequestWait[sJob.waitIndex].progress = sFrame;
             ticks = svcGetSystemTick() - sliceStart;
             sJob.rays += LightRays() - rays;
+            sJob.steps += LightSteps() - steps;
+            sJob.surfaces += LightSurfaceTests() - surfaces;
             sJob.ticks += ticks;
             sJob.phaseTicks[phase] += ticks;
             NotePhaseCost(phase, TicksMs(ticks));
@@ -4082,6 +4117,10 @@ void CtrVoxel_AfterSubmit(uint64_t frameBeginTick)
     budget = VOXEL_FRAME_MS - TicksMs(started - frameBeginTick) - sOthersMs - VOXEL_AFTER_MARGIN_MS;
     if (sCrossingSoon)
         budget -= VOXEL_CROSSING_RESERVE_MS;
+#if CTR_VOXEL_STEREO
+    if (sStereoBegunFrame == sFrame + 1)
+        budget -= VOXEL_STEREO_RESERVE_MS;
+#endif
     budget = Clamp(budget, 0.0f, VOXEL_AFTER_MAX_MS);
     sStats.afterBudgetMs = budget;
     if (budget < VOXEL_AFTER_STARVED_MS)
@@ -5378,6 +5417,12 @@ static void MakeRays(void)
  * light in the air lies over everything. The fade environment still applies,
  * so a fade to black takes the rays with it.
  */
+#ifdef CTR_F8_LOAD
+/* Phase F8's load (see VOXEL_MOTES_ROOM): the rays drawn this many times. */
+static unsigned sRayLayers = 1;
+static uint32_t sF8Drawn[2];
+#endif
+
 static void DrawRays(const VoxelLight *light, const VoxelLight *unlit)
 {
     float angle = C3D_AngleFromDegrees(VOXEL_RAY_ANGLE);
@@ -5423,7 +5468,13 @@ static void DrawRays(const VoxelLight *light, const VoxelLight *unlit)
     C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE, GPU_ZERO, GPU_ONE);
     BindVertices(sRays);
+#ifdef CTR_F8_LOAD
+    for (unsigned layer = 0; layer < sRayLayers; ++layer)
+        C3D_DrawArrays(GPU_TRIANGLES, 0, (int)sRayCount);
+    ++sF8Drawn[1];
+#else
     C3D_DrawArrays(GPU_TRIANGLES, 0, (int)sRayCount);
+#endif
     C3D_DepthTest(true, GPU_GREATER, GPU_WRITE_ALL);
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD,
                    GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_ZERO, GPU_ONE);
@@ -5443,6 +5494,19 @@ static void DrawRays(const VoxelLight *light, const VoxelLight *unlit)
  * has finished by then (the frame begins by waiting for it).
  */
 #define VOXEL_MOTES 32
+/*
+ * Phase F8's measurement of the room left for effects (-DCTR_F8_LOAD, never a
+ * player's build): every 600 frames of the voxel world the dust's count and
+ * how many times the rays are drawn over themselves step through 32/64/128
+ * and x1/x2/x3, logged, so the console's profile gives what each load costs.
+ */
+#ifdef CTR_F8_LOAD
+#define VOXEL_MOTES_ROOM 128
+static unsigned sMoteCount = VOXEL_MOTES;
+#else
+#define VOXEL_MOTES_ROOM VOXEL_MOTES
+#define sMoteCount VOXEL_MOTES
+#endif
 #define VOXEL_MOTE_VERTICES 12
 #define VOXEL_MOTE_HALF_X 11.0f /* tiles each side of the camera's target */
 #define VOXEL_MOTE_HALF_Z 9.0f
@@ -5455,7 +5519,7 @@ static void DrawRays(const VoxelLight *light, const VoxelLight *unlit)
 
 static void MakeMotes(void)
 {
-    sMotes = linearAlloc(VOXEL_MOTES * VOXEL_MOTE_VERTICES * sizeof(VoxelGpuVertex));
+    sMotes = linearAlloc(VOXEL_MOTES_ROOM * VOXEL_MOTE_VERTICES * sizeof(VoxelGpuVertex));
     if (sMotes == NULL)
         CtrLog_Write(CTR_LOG_ERROR, "VOXEL: no linear memory for the sunlit dust");
 }
@@ -5503,7 +5567,7 @@ static void DrawMotes(const C3D_Mtx *view, const VoxelLight *light, const VoxelL
     VoxelGpuVertex *v = sMotes;
     C3D_TexEnv *env;
 
-    for (unsigned i = 0; i < VOXEL_MOTES; ++i)
+    for (unsigned i = 0; i < sMoteCount; ++i)
     {
         float phase = MoteRandom(i, 1) * 6.2832f;
         /* Where it has drifted to in the anchored world, then brought into
@@ -5533,7 +5597,7 @@ static void DrawMotes(const C3D_Mtx *view, const VoxelLight *light, const VoxelL
         MoteVertex(&v[11], x + ux, y + uy, z + uz, 0.0f);
         v += VOXEL_MOTE_VERTICES;
     }
-    GSPGPU_FlushDataCache(sMotes, VOXEL_MOTES * VOXEL_MOTE_VERTICES * sizeof(VoxelGpuVertex));
+    GSPGPU_FlushDataCache(sMotes, sMoteCount * VOXEL_MOTE_VERTICES * sizeof(VoxelGpuVertex));
 
     SetModelView(view, originX, originZ);
     SetGrade(unlit);
@@ -5554,7 +5618,10 @@ static void DrawMotes(const C3D_Mtx *view, const VoxelLight *light, const VoxelL
     C3D_DepthTest(true, GPU_GREATER, GPU_WRITE_COLOR);
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_SRC_ALPHA, GPU_ONE, GPU_ZERO, GPU_ONE);
     BindVertices(sMotes);
-    C3D_DrawArrays(GPU_TRIANGLES, 0, VOXEL_MOTES * VOXEL_MOTE_VERTICES);
+    C3D_DrawArrays(GPU_TRIANGLES, 0, sMoteCount * VOXEL_MOTE_VERTICES);
+#ifdef CTR_F8_LOAD
+    ++sF8Drawn[0];
+#endif
     C3D_DepthTest(true, GPU_GREATER, GPU_WRITE_ALL);
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD,
                    GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_ZERO, GPU_ONE);
@@ -6615,6 +6682,25 @@ void CtrVoxel_Draw(C3D_RenderTarget *target, float eyeOffset)
         FadeFor(false);
         DrawFogBanks(&view, &light, cave, fog);
     }
+#ifdef CTR_F8_LOAD
+    {
+        static uint32_t frames, phase = ~0u;
+        static const unsigned motes[3] = {32, 64, 128};
+
+        if (frames++ % 600 == 0)
+        {
+            if (phase != ~0u)
+                CtrLog_Write(CTR_LOG_VIDEO, "F8 load done: motes=%u rays=x%u drawn in %lu/%lu frames", sMoteCount,
+                             sRayLayers, (unsigned long)sF8Drawn[0], (unsigned long)sF8Drawn[1]);
+            phase = (phase + 1) % 9;
+            sMoteCount = motes[phase % 3];
+            sRayLayers = 1 + phase / 3;
+            sF8Drawn[0] = sF8Drawn[1] = 0;
+            CtrLog_Write(CTR_LOG_VIDEO, "F8 load motes=%u rays=x%u from voxel frame %lu", sMoteCount, sRayLayers,
+                         (unsigned long)frames);
+        }
+    }
+#endif
     /* Before the rays, which leave the orthographic projection behind. */
     if (sMotes != NULL && light.motes > 0.005f)
         DrawMotes(&view, &light, &unlit);
@@ -6860,6 +6946,9 @@ void CtrVoxel_StereoSample(const C3D_RenderTarget *surface)
 
 void CtrVoxel_StereoBegin(float slider, int blurTop, int blurBottom)
 {
+#if CTR_VOXEL_STEREO
+    sStereoBegunFrame = sFrame + 1;
+#endif
     sStereoSlider = slider;
     sStereoBlurTop = blurTop;
     sStereoBlurBottom = blurBottom;

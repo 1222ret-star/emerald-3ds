@@ -8,8 +8,8 @@
  * from it: the port's own art (romfs:/battle/hud.bin, gen_battle_hud.py), the
  * game's font at 1:1, and the game's own small labels ("HP", "EXP", the
  * status pills' letters, localized in the Spanish game) traced smooth at the
- * screen's 1.4x. A palette fade of the box's sprites is followed by fading
- * the picture the same way.
+ * screen's 1.4x. A palette fade of the box's sprites is measured here and
+ * applied by the compositor as a tint, the picture left as it is.
  *
  * Positions are those of the GBA's box, in its sprite's pixels, times
  * CTR_BATTLE_ZOOM, so the picture covers what the sprites did.
@@ -184,10 +184,25 @@ static void LoadArt(void)
         CtrLog_Write(CTR_LOG_ERROR, "battle hud: battle/hud.bin incomplete");
 }
 
+static void MakeLabels(const uint16_t *boxTileVram);
+
 bool CtrBattleHud_Ready(void)
 {
     LoadArt();
     return sArtReady;
+}
+
+/*
+ * The art read and the labels traced ahead of the first box's picture, as
+ * the first battle makes its boxes (CtrBattleHud_BoxCreated), under the
+ * battle's opening. Not at start-up: its 200 KB taken there left the intro
+ * with 3D 0.3 ms dearer on the console (runs I-L). The EXP label, from the
+ * player's box in VRAM, is traced at its first picture, small.
+ */
+void CtrBattleHud_Prepare(void)
+{
+    if (CtrBattleHud_Ready())
+        MakeLabels(NULL);
 }
 
 const uint32_t *CtrBattleHud_BoxArt(bool middle, int *x, int *y, int *w, int *h)
@@ -215,6 +230,13 @@ static inline uint32_t Over(uint32_t dst, uint32_t src, unsigned coverage)
     if (sa == 0)
         return dst;
     da = dst & 0xFF;
+    /* What the general case below gives, without its divisions (the ARM11
+     * has none in hardware): over nothing, the source at its coverage; an
+     * opaque source, the source. */
+    if (da == 0)
+        return (src & ~0xFFu) | sa;
+    if (sa == 255)
+        return src | 0xFF;
     oa = sa + da * (255 - sa) / 255;
     if (oa == 0)
         return 0;
@@ -629,8 +651,6 @@ static void Compose(int index)
     Slot *slot = &sSlots[index];
     const Layout *layout = &sLayouts[slot->kind];
     uint32_t *pic = sPixels[index];
-    float fade;
-    uint32_t fadeColour;
     int barX = Px(layout->barX), barY = Px(layout->barY);
     bool numbers = layout->numbers && gBattleSpritesDataPtr
                 && gBattleSpritesDataPtr->battlerData[slot->battler].hpNumbersNoBars;
@@ -717,24 +737,6 @@ static void Compose(int index)
             }
         }
     }
-
-    /* The palette fade the box's sprites are under. */
-    FadeOf(slot, &fade, &fadeColour);
-    if (fade > 0)
-        for (int i = 0; i < CTR_HUD_W * CTR_HUD_H; ++i)
-        {
-            uint32_t c = pic[i], out = c & 0xFF;
-
-            if (!out)
-                continue;
-            for (int shift = 24; shift >= 8; shift -= 8)
-            {
-                float a = (c >> shift) & 0xFF, b = (fadeColour >> shift) & 0xFF;
-
-                out |= (uint32_t)(a + (b - a) * fade + 0.5f) << shift;
-            }
-            pic[i] = out;
-        }
 }
 
 /* ------------------------------------------------------------------------ */
@@ -759,7 +761,10 @@ void CtrBattleHud_BoxCreated(unsigned char healthboxSpriteId, unsigned char batt
         return;
     /* The first box of a battle: the last battle's are gone. */
     if (battler == 0)
+    {
         CtrBattleHud_Clear();
+        CtrBattleHud_Prepare();
+    }
     slot = &sSlots[battler];
     box = &sBoxes[battler];
     memset(slot, 0, sizeof(*slot));
@@ -941,8 +946,12 @@ const CtrHudBox *CtrBattleHud_Boxes(void)
 
         if (!sBoxes[i].used)
             continue;
-        /* What can change without the game telling: the fade, the doubles' numbers. */
-        signature = FadeOf(slot, &fade, &fadeColour) * 3u;
+        /* What can change without the game telling: the doubles' numbers, the
+         * box's palette. The palette fade is the compositor's tint, not a new
+         * picture: one each step would be the whole box drawn again. */
+        signature = (FadeOf(slot, &fade, &fadeColour) >> 16) * 3u;
+        sBoxes[i].fade = fade;
+        sBoxes[i].fadeColour = fadeColour;
         if (sLayouts[slot->kind].numbers && gBattleSpritesDataPtr)
             signature += gBattleSpritesDataPtr->battlerData[slot->battler].hpNumbersNoBars;
         if (slot->dirty || signature != slot->signature)
