@@ -886,6 +886,12 @@ void CtrBattleHud_SetSafariBalls(unsigned char id, unsigned char balls)
  * Its y2 only: the intro's slide across is the game's. Only the trainer's own
  * picture (the battler's sprite, still the trainer before anything is sent
  * out), and only while y2 is what this put there; 0 lets it go.
+ *
+ * The lift is always even. When the slide across ends while the trainer is
+ * still lifted, the game takes y2 for the multi battle's vertical slide
+ * (SpriteCB_TrainerSlideVertical: two pixels a frame until y2 is exactly 0)
+ * and the picture is let go here; an odd y2 would step past 0 and go on up
+ * for ever, and the intro with it (CompleteOnBattlerSpriteCallbackDummy).
  */
 void CtrBattleHud_LiftPlayerTrainer(int lift)
 {
@@ -894,6 +900,7 @@ void CtrBattleHud_LiftPlayerTrainer(int lift)
     u8 id = gBattlerSpriteIds[GetBattlerAtPosition(B_POSITION_PLAYER_LEFT)];
     struct Sprite *sprite;
 
+    lift = (lift + 1) & ~1;
     if (lift == 0 && sOwned == 0xFF)
         return;
     if (sOwned != 0xFF && sOwned != id)
@@ -908,6 +915,10 @@ void CtrBattleHud_LiftPlayerTrainer(int lift)
     if (!sprite->inUse || sprite->template != &gMultiuseSpriteTemplate
         || (sprite->callback != SpriteCB_TrainerSlideIn && sprite->callback != SpriteCallbackDummy))
     {
+        /* Taken by the game's vertical slide with the lift still on it: an
+         * even y2 reaches 0 on its own. */
+        if (sOwned == id && sprite->inUse && (sprite->y2 & 1))
+            sprite->y2 += 1;
         sOwned = 0xFF;
         return;
     }

@@ -107,7 +107,7 @@ void CtrAudio_Shutdown(void)
     if (sWorker != NULL)
     {
         ndspSetCallback(NULL, NULL);
-        if (!sClock)
+        if (!(sClock && sReady))
             LightEvent_Wait(&sIdle);
         sWorkerQuit = true;
         LightEvent_Signal(&sKick);
@@ -308,12 +308,19 @@ static void Worker(void *arg)
         LightEvent_Wait(&sKick);
         if (sWorkerQuit)
             break;
-        if (sClock)
+        /* Without the DSP (CtrAudio_Init failed: an emulator without its
+         * firmware) there is no clock to follow and nothing to queue; the
+         * engine then runs once per shown frame as below, so that what the
+         * game asks of it - a cry's end, a fanfare's - still comes. */
+        if (sClock && sReady)
         {
+            /* The game thread never waits in this mode, but leaves the idle
+             * event set so that leaving it finds the worker idle. */
+            LightEvent_Signal(&sIdle);
             /* Up to the target depth, one frame per DSP frame at the most
              * each: the next callback brings the rest, with the queue's
              * statuses updated in between. */
-            if (sReady && QueuedBuffers() < CTR_AUDIO_TARGET_DEPTH && svcGetSystemTick() >= idleUntil)
+            if (QueuedBuffers() < CTR_AUDIO_TARGET_DEPTH && svcGetSystemTick() >= idleUntil)
             {
                 uint32_t before = sStats.frames;
 
@@ -376,7 +383,7 @@ bool CtrAudio_StartWorker(void (*mix)(void))
 
 bool CtrAudio_Kick(void)
 {
-    if (sClock)
+    if (sClock && sReady)
     {
         /* The DSP's callback wakes the worker; the game thread never waits. */
         LightEvent_Signal(&sKick);

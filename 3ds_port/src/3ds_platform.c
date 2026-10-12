@@ -243,10 +243,12 @@ static bool PaceBehind(uint64_t now)
     return elapsed - sPaceFrames >= 1.0f;
 }
 
-/* The setting, read once a frame; the sound engine follows it. */
+/* The setting, read once a frame; the sound engine follows it. The field
+ * only: the voxel world is what costs the frame there, and a battle's own
+ * timing (its intro's slides, its cries) is best left as the GBA's. */
 static void PaceUpdate(void)
 {
-    bool on = CtrSettings_GetInt(PACE_KEY, 0) != 0;
+    bool on = CtrSettings_GetInt(PACE_KEY, 0) != 0 && !CtrVideo_InBattle();
 
     if (on != sPace)
     {

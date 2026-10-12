@@ -15,6 +15,9 @@
 #include "3ds_battle_hud.h"
 #include "../compat/port_prof.h"
 
+/* A battle is on, transition and all (CtrVideo_InBattle, at the end). */
+static bool sInBattle;
+
 /* Public queue passed by libctru, never a cast of Citro3D's private context.
  * Uploads reserve worst-case split+copy entries and leave the compositor's
  * clears, postprocessing, battle layers and final transfers room to finish. */
@@ -9686,6 +9689,7 @@ void CtrVideo_Present(void)
     sCentred = sCentredRequested != CTR_CENTRED_NONE && !sStage;
     sCentredScreen = sCentred ? sCentredRequested : CTR_CENTRED_NONE;
     sBattle = sBattleRequested && !sStage && !sCentred;
+    sInBattle = sBattleRequested;
     sTransition = sTransitionRequested && sLineRegs && !sStage && !sCentred && !sBattle;
     sZoom = sBattle ? CTR_BATTLE_ZOOM : 1.0f;
     /* GBA (120, 112) - the middle of the scene's bottom edge - on screen (200, 192). */
@@ -10252,3 +10256,5 @@ void CtrVideo_Shutdown(void)
     memset(&sSurface, 0, sizeof(sSurface));
     memset(&sAtlas, 0, sizeof(sAtlas));
 }
+
+bool CtrVideo_InBattle(void) { return sInBattle; }

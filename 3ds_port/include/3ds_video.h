@@ -273,4 +273,8 @@ uint16_t CtrVideo_RGBA5551(uint16_t color);
 unsigned CtrVideo_ObjTile(unsigned base, unsigned x, unsigned y,
                           unsigned width, bool color256, bool mapping1d);
 int32_t CtrVideo_AffineReference(uint32_t value);
+/* A battle is on (its transition included): OPTIONS' REAL-TIME PACING is
+ * for the field, where the voxel world costs the frame (3ds_platform.c). */
+bool CtrVideo_InBattle(void);
+
 #endif
