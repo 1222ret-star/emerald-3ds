@@ -4781,7 +4781,7 @@ bool CtrVoxel_Update(void)
         sStats.spriteUpdates += VoxelEntities_Emit(&sprites, (uint16_t *)sSpriteAtlas.data,
                                                    &sCamera, shadowBuilder, &reflections);
         sReflectionVertices = reflections.count;
-        sStats.reflections = reflections.count / VOXEL_REFLECTION_VERTICES;
+        sStats.reflections = reflections.count / 6u;   /* quads (EmitReflection: a strip each) */
         PackDynamic(dynamic + VOXEL_REFLECTION_FIRST, reflections.count,
                     sDynamic + VOXEL_REFLECTION_FIRST);
         if (reflections.dropped != 0)
