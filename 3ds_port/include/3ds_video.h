@@ -112,6 +112,11 @@ void CtrVideo_MarkVoxelWeatherOam(unsigned first, unsigned end);
  * compositor repeats it over the whole view (src/sprite.c). */
 void CtrVideo_ClearFogOam(void);
 void CtrVideo_MarkFogOam(unsigned first, unsigned end);
+/* Weather the GBA lays over its 240x160 screen, carried over the whole view:
+ * one picture on a 64-pixel lattice (ash, the sandstorm), or particles that
+ * wrap round the screen (rain, snow, sand swirls, bubbles). Cleared with the
+ * fog's (CtrVideo_ClearFogOam). */
+void CtrVideo_MarkWeatherOam(unsigned first, unsigned end, bool lattice);
 void CtrVideo_NotifyTilesetAnimWrite(const void *dest, unsigned bytes);
 /*
  * A write the game made through its BIOS copies (3ds_prof_wrap.c): VRAM,
@@ -134,6 +139,9 @@ void CtrVideo_RequestPlaneRelease(void);
  * screen with the space around it filled from its own art. See docs/ARCHITECTURE.md.
  */
 void CtrVideo_SetStage(bool stage);
+/* Every layer of the stage fades into the margins, scrolling or not (the
+ * cable car). */
+void CtrVideo_SetStageFaded(bool faded);
 /* Whether a field move's banner is up: BG0 then wraps across the whole
  * screen instead of being the text band (src/field_effect.c). */
 void CtrVideo_SetFieldBanner(bool banner);
