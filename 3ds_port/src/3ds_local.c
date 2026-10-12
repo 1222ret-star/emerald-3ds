@@ -21,6 +21,13 @@
  * a second or two, and the game must not stop meanwhile. The game's side (the
  * adapter, the counters' script) only queues messages, reads events and the
  * table of players, under a lock.
+ *
+ * The thread sleeps until there is something to do: a frame came in (the
+ * bind's event), the game queued a message (sL.wake), or WAIT_MS passed
+ * (messages to send again, players coming and going). It used to look every
+ * 2 ms, 500 requests a second to the wireless service even with nothing to
+ * read; on an Old 3DS that service shares the system core with the GPU's,
+ * and a link battle dropped to 30 fps.
  */
 #include <3ds.h>
 #include <stdbool.h>
@@ -55,9 +62,13 @@ static const char kMagic[4] = {'E', 'M', '3', 'L'};
 #define OUT_QUEUE 128     /* messages to one system not yet acknowledged */
 #define MSG_MAX 168       /* the largest message: an advert, or 160 bytes of data */
 #define RESEND_MS 100     /* unacknowledged this long: sent again */
+#define ACK_DELAY_MS 30   /* an ack alone waits this long for a message to ride on */
 #define EVENT_QUEUE 512
 #define FRAME_MAX 1400    /* a UDS data frame takes 0x5C6 bytes */
 #define THREAD_STACK 0x4000
+#define WAIT_MS 20        /* the thread looks this often while a message waits for its ack */
+#define IDLE_MS 100       /* and this often otherwise (and reads, should no event come) */
+#define STATS_MS 10000    /* its counts go to the log this often */
 
 enum
 {
@@ -110,6 +121,7 @@ struct Node
     /* Messages from it. */
     uint16_t expect;
     bool ackDue;
+    uint32_t ackDueMs; /* since when */
 };
 
 static struct
@@ -143,6 +155,10 @@ static struct
 
     struct LocalEvent events[EVENT_QUEUE];
     uint16_t eventHead, eventCount;
+
+    Handle wake; /* the game queued something */
+    /* What the thread did since the last log line. */
+    struct { uint32_t wakes, pulls, framesIn, framesOut, resent, sinceMs; } stats;
 } sL;
 
 static uint8_t sFrame[UDS_DATAFRAME_MAXSIZE];
@@ -296,6 +312,8 @@ static void HandleFrame(uint16_t from, const uint8_t *frame, size_t size)
         pos += MSG_HEADER;
         if (pos + len > end)
             break;
+        if (!n->ackDue)
+            n->ackDueMs = LocalLink_Milliseconds();
         n->ackDue = true;
         if (seq == n->expect)
         {
@@ -323,6 +341,7 @@ static void SendFrame(uint16_t to, uint32_t bodyLen)
     h->reserved = 0;
     memset(sFrame + sizeof(*h) + bodyLen, 0, size - sizeof(*h) - bodyLen);
     ret = udsSendTo(to, DATA_CHANNEL, UDS_SENDFLAG_Default, sFrame, size);
+    sL.stats.framesOut++;
     /* UDS_CHECK_SENDTO_FATALERROR, which -Wsign-compare rejects: that one
      * error only means the frame wasn't sent. */
     if (R_FAILED(ret) && (u32)ret != 0xC86113F0u)
@@ -330,7 +349,9 @@ static void SendFrame(uint16_t to, uint32_t bodyLen)
 }
 
 /* What's due to one system: messages not sent yet, and when the oldest has
- * waited too long, everything from it again. An ack alone if nothing else. */
+ * waited too long, everything from it again. An ack alone if nothing else
+ * goes for a while: in a link both sides send every frame, and the ack rides
+ * on that (one UDS frame a game frame each way, not two). */
 static void FlushNode(uint16_t id, uint32_t now)
 {
     struct Node *n = &sL.nodes[id];
@@ -349,6 +370,8 @@ static void FlushNode(uint16_t id, uint32_t now)
 
             if (m->sentMs && !resend)
                 continue;
+            if (m->sentMs)
+                sL.stats.resent++;
             if (body + MSG_HEADER + m->len > FRAME_MAX)
                 break;
             p[0] = m->seq & 0xFF;
@@ -362,7 +385,7 @@ static void FlushNode(uint16_t id, uint32_t now)
             body += MSG_HEADER + m->len;
             m->sentMs = now;
         }
-        if (body == 0 && !n->ackDue)
+        if (body == 0 && !(n->ackDue && now - n->ackDueMs >= ACK_DELAY_MS))
             break;
         SendFrame(id, body);
         n->ackDue = false;
@@ -374,11 +397,17 @@ static void FlushNode(uint16_t id, uint32_t now)
 
 static void ReadFrames(void)
 {
+    /* Cleared before reading: a frame that comes in meanwhile signals it
+     * again, so the thread wakes for it. */
+    if (sL.bind.event)
+        svcClearEvent(sL.bind.event);
     for (int i = 0; i < 64; i++)
     {
         size_t got = 0;
         u16 from = 0;
         Result ret = udsPullPacket(&sL.bind, sFrame, sizeof(sFrame), &got, &from);
+
+        sL.stats.pulls++;
 
         if (R_FAILED(ret))
         {
@@ -389,6 +418,7 @@ static void ReadFrames(void)
         }
         if (got == 0)
             break;
+        sL.stats.framesIn++;
         LightLock_Lock(&sL.lock);
         HandleFrame(from, sFrame, got);
         LightLock_Unlock(&sL.lock);
@@ -697,8 +727,21 @@ static void StartSession(uint8_t kind)
     TakeNetwork(false);
 }
 
+/* Messages waiting for their ack, or an ack waiting to go: the thread looks
+ * again soon (lock held). */
+static bool Unacked(void)
+{
+    for (uint16_t id = 1; id < NODE_SLOTS; id++)
+        if (sL.nodes[id].present && (sL.nodes[id].outCount || sL.nodes[id].ackDue))
+            return true;
+    return false;
+}
+
 static void LocalThread(void *unused)
 {
+    bool frameReady = false; /* the bind's event woke us */
+    uint32_t lastRead = 0;
+
     (void)unused;
     while (!sL.quit)
     {
@@ -731,17 +774,52 @@ static void LocalThread(void *unused)
                 MergeAlone();
             if (sL.inNetwork)
             {
-                ReadFrames();
+                if (frameReady || now - lastRead >= IDLE_MS)
+                {
+                    ReadFrames();
+                    lastRead = now;
+                }
                 LightLock_Lock(&sL.lock);
                 for (uint16_t id = 1; id < NODE_SLOTS; id++)
                     if (sL.nodes[id].present && id != sL.myId)
                         FlushNode(id, now);
                 LightLock_Unlock(&sL.lock);
             }
+            if (now - sL.stats.sinceMs >= STATS_MS)
+            {
+                if (sL.stats.sinceMs)
+                    CtrLog_Write(CTR_LOG_GAME, "local: %u s: %lu wakes, %lu reads, %lu frames in, %lu out, %lu messages resent",
+                                 (unsigned)((now - sL.stats.sinceMs) / 1000), sL.stats.wakes, sL.stats.pulls,
+                                 sL.stats.framesIn, sL.stats.framesOut, sL.stats.resent);
+                memset(&sL.stats, 0, sizeof(sL.stats));
+                sL.stats.sinceMs = now;
+            }
         }
-        svcSleepThread(2000000LL);
+        {
+            Handle handles[2];
+            s32 count = 0, which = -1;
+            bool busy;
+
+            LightLock_Lock(&sL.lock);
+            busy = Unacked();
+            LightLock_Unlock(&sL.lock);
+            handles[count++] = sL.wake;
+            if (sL.inNetwork && sL.bind.event)
+                handles[count++] = sL.bind.event;
+            svcWaitSynchronizationN(&which, handles, count, false,
+                                    (sL.inNetwork && busy ? WAIT_MS : IDLE_MS) * 1000000LL);
+            frameReady = which == 1;
+            sL.stats.wakes++;
+        }
     }
     LeaveNetwork();
+}
+
+/* The thread has something to do. */
+static void Wake(void)
+{
+    if (sL.wake)
+        svcSignalEvent(sL.wake);
 }
 
 /* ---- The game's side ---------------------------------------------------- */
@@ -754,6 +832,11 @@ void LocalLink_Init(void)
         return;
     LightLock_Init(&sL.lock);
     sL.state = LOCAL_SESSION_NONE;
+    if (R_FAILED(svcCreateEvent(&sL.wake, RESET_ONESHOT)))
+    {
+        CtrLog_Write(CTR_LOG_ERROR, "local: no event, local wireless off");
+        return;
+    }
     srand((unsigned)svcGetSystemTick());
     sL.token = ((uint32_t)rand() << 16) ^ (uint32_t)rand();
     /* Just below the game: it runs while the game waits for the next frame. */
@@ -772,8 +855,11 @@ void LocalLink_Shutdown(void)
     if (!sL.ready)
         return;
     sL.quit = true;
+    Wake();
     if (R_SUCCEEDED(threadJoin(sL.thread, 3000000000LL)))
         threadFree(sL.thread);
+    svcCloseHandle(sL.wake);
+    sL.wake = 0;
     if (sL.udsReady)
         udsExit();
     sL.udsReady = false;
@@ -827,6 +913,7 @@ void LocalLink_SetAdvert(uint8_t hosting, uint8_t nextSlot, const uint8_t *data)
         for (uint16_t id = 1; id < NODE_SLOTS; id++)
             if (sL.nodes[id].present && id != sL.myId)
                 QueueAdvert(id);
+        Wake();
     }
     LightLock_Unlock(&sL.lock);
 }
@@ -866,6 +953,7 @@ void LocalLink_Send(uint16_t dest, const void *data, uint32_t len)
     if (sL.state == LOCAL_SESSION_IN)
         QueueMessage(dest, MSG_DATA, data, len);
     LightLock_Unlock(&sL.lock);
+    Wake();
 }
 
 uint8_t LocalLink_PollEvent(struct LocalEvent *ev)
@@ -896,6 +984,7 @@ void LocalLink_StartSession(uint8_t kind)
     sL.askedKind = kind;
     sL.state = LOCAL_SESSION_SEARCHING;
     LightLock_Unlock(&sL.lock);
+    Wake();
 }
 
 void LocalLink_LeaveSession(void)
@@ -909,6 +998,7 @@ void LocalLink_LeaveSession(void)
         sL.startAsked = false;
     }
     LightLock_Unlock(&sL.lock);
+    Wake();
 }
 
 uint8_t LocalLink_GetSession(void)
