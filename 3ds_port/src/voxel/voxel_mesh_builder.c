@@ -741,6 +741,86 @@ static void EmitSeamSkirt(VoxelBuilder *b, const VoxelMapInstance *inst, int x, 
          && nx < inst->originX + inst->width && ny < inst->originY + inst->height)
             continue;
         other = VoxelWorld_GetInstanceAt(nx, ny);
+        if (other == NULL && !inst->indoor && d != 1)
+        {
+            /*
+             * The belt past the last map (VoxelMesh_EmitBorder) stands at the
+             * base of instance 0. An edge lowered under it - Rustboro's sea,
+             * Route 117's wood - left a step up to it with nothing in it, a
+             * band of the clear colour along the map's edge. It is closed by
+             * a wall of the edge cell's own drawing, from the edge up to the
+             * belt. Not along the south edge: there the belt stands in front.
+             * Its foot is the edge as the cell draws it, point by point of
+             * the lattice: a rock or a slope at the edge stands each point at
+             * its own height, and that far south (voxel_relief.h), and a foot
+             * level at the centre's height left slivers of the clear under
+             * it. Its top is where the belt stands, unmoved. Not round a
+             * belt laid as the drawing (VoxelRelief_Belt): that meets every
+             * edge at its height, and the map's faces close the steps.
+             */
+            const VoxelMapInstance *ring = VoxelWorld_Instance(0);
+            float belt = ring != NULL ? VoxelRelief_Base(ring) - VoxelRelief_Base(inst) : 0.0f;
+            const int16_t *grid = VoxelRelief_Cell(inst, x, y);
+            const int16_t *depth = VoxelRelief_Depth(inst, x, y);
+            const unsigned last = VOXEL_RELIEF_SIDE - 1;
+            float footH[VOXEL_RELIEF_SIDE], footZ[VOXEL_RELIEF_SIDE], along[VOXEL_RELIEF_SIDE];
+            float lowest = belt;
+
+            if (ring == NULL || VoxelRelief_Belt(ring) != 0)
+                continue;
+            for (unsigned k = 0; k < VOXEL_RELIEF_SIDE; ++k)
+            {
+                /* the north row, or the west or east column */
+                unsigned i = d == 0 ? k : k * VOXEL_RELIEF_SIDE + (d == 2 ? 0 : last);
+                along[k] = k / (float)last;
+                footH[k] = (grid ? grid[i] : 0) / 16.0f;
+                footZ[k] = (float)y + (d == 0 ? 0.0f : along[k]) + (depth ? depth[i] : 0) / 16.0f;
+                if (footH[k] < lowest)
+                    lowest = footH[k];
+            }
+            if (lowest >= belt - 0.05f)
+                continue;
+            if (!uv && !(uv = VoxelMesh_TileUV(b, x, y, &u0, &v0, &u1, &v1)))
+                return;
+            for (unsigned k = 0; k < last; ++k)
+            {
+                float hA = belt - footH[k], hB = belt - footH[k + 1];
+                float fA = hA < 1.0f ? hA : 1.0f, fB = hB < 1.0f ? hB : 1.0f;
+
+                if (hA <= 0.05f && hB <= 0.05f)
+                    continue;
+                if (d == 0) /* faces south, on the map's north edge, where the belt's face ends */
+                {
+                    float xa = wx + along[k], xb = wx + along[k + 1];
+                    float ua = u0 + (u1 - u0) * along[k], ub = u0 + (u1 - u0) * along[k + 1];
+
+                    VoxelBuilder_Quad(b,
+                        &(VoxelVertex){xa, footH[k],     footZ[k],     ua, v0 + (v1 - v0) * fA, SHADE_SOUTH},
+                        &(VoxelVertex){xb, footH[k + 1], footZ[k + 1], ub, v0 + (v1 - v0) * fB, SHADE_SOUTH},
+                        &(VoxelVertex){xb, belt,         (float)y,     ub, v0,                  SHADE_SOUTH},
+                        &(VoxelVertex){xa, belt,         (float)y,     ua, v0,                  SHADE_SOUTH});
+                }
+                else
+                {
+                    float za = (float)y + along[k], zb = (float)y + along[k + 1];
+                    float va = v0 + (v1 - v0) * along[k], vb = v0 + (v1 - v0) * along[k + 1];
+
+                    if (d == 2) /* faces east, on the west edge */
+                        VoxelBuilder_Quad(b,
+                            &(VoxelVertex){wx, belt,         zb,           u0,                  vb, SHADE_EAST},
+                            &(VoxelVertex){wx, belt,         za,           u0,                  va, SHADE_EAST},
+                            &(VoxelVertex){wx, footH[k],     footZ[k],     u0 + (u1 - u0) * fA, va, SHADE_EAST},
+                            &(VoxelVertex){wx, footH[k + 1], footZ[k + 1], u0 + (u1 - u0) * fB, vb, SHADE_EAST});
+                    else /* faces west, on the east edge */
+                        VoxelBuilder_Quad(b,
+                            &(VoxelVertex){wx + 1.0f, belt,         za,           u1,                  va, SHADE_WEST},
+                            &(VoxelVertex){wx + 1.0f, belt,         zb,           u1,                  vb, SHADE_WEST},
+                            &(VoxelVertex){wx + 1.0f, footH[k + 1], footZ[k + 1], u1 - (u1 - u0) * fB, vb, SHADE_WEST},
+                            &(VoxelVertex){wx + 1.0f, footH[k],     footZ[k],     u1 - (u1 - u0) * fA, va, SHADE_WEST});
+                }
+            }
+            continue;
+        }
         if (other == NULL || other == inst || other->indoor)
             continue;
         low = VoxelRelief_LiftAt((float)nx + 0.5f, (float)ny + 0.5f) - VoxelRelief_Base(inst);
