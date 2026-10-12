@@ -1090,13 +1090,20 @@ class Relief:
                                         if r * 16 < zb):
                             continue    # the run goes on into the next block
                         if self.flank_tile is not None and zb - za >= 16:
-                            if facing > 0:
-                                quad = [(x, -1.0, zb), (x, -1.0, za), (x, t, za), (x, t, zb)]
-                            else:
-                                quad = [(x, -1.0, za), (x, -1.0, zb), (x, t, zb), (x, t, za)]
-                            self._tile(mesh, quad, (x, 0.0), (0.0, 1.0), t,
-                                       SHADE_EAST if facing > 0 else SHADE_WEST, n + ".flank",
-                                       self.flank_tile)
+                            # a railing running down a column: one plane of
+                            # bars down its middle, not one on each side - a
+                            # box with bars on both faces read as a wall with
+                            # windows. Edge-on at 45 degrees either way.
+                            if facing < 0:
+                                continue        # the west side: its east one stands for it
+                            k = u
+                            while k > 0 and any(c <= za + 1e-6 and d >= zb - 1e-6 and s >= t
+                                                for (c, d, s) in covered(solid(cols[k - 1]))):
+                                k -= 1
+                            x = (k + u) / 2.0
+                            quad = [(x, -1.0, zb), (x, -1.0, za), (x, t, za), (x, t, zb)]
+                            self._tile(mesh, quad, (x, 0.0), (0.0, 1.0), t, SHADE_EAST,
+                                       n + ".flank", self.flank_tile)
                             continue
                         if self.hull or (self.foot is not None and not self.solid):
                             # the end of a railing: the drawn column there, projected
@@ -1397,6 +1404,163 @@ def catmull(pts, n):
                                 + (-p0[d] + 3 * p1[d] - 3 * p2[d] + p3[d]) * t ** 3)
                          for d in range(len(p1))))
     return out
+
+
+class ProjDome:
+    """A small round thing (a bush) as a smooth dome over an ellipse,
+    textured with its drawing projected (u = x, v = z - y).
+
+    Any surface laid with the projection is the drawing at 45 degrees
+    wherever it stands, so the dome only has to cover the drawing's outline
+    there; the texture's own transparency cuts the rest (the console tests
+    alpha), and from the game's camera the cut is the outline drawn out
+    along the 45-degree view - clean, where a height field cut column by
+    column left fins and steps on the flanks. `seg` points round, `rings`
+    up; the base ring at `y0`, the crown `h` above it.
+    """
+
+    def __init__(self, name, cx, cz, rx, rz, h, y0=0.0, seg=12, rings=3):
+        self.name, self.cx, self.cz, self.rx, self.rz = name, cx, cz, rx, rz
+        self.h, self.y0, self.seg, self.rings = h, y0, seg, rings
+
+    def emit(self, mesh):
+        def pt(k, i):
+            phi = (math.pi / 2) * k / self.rings
+            a = 2 * math.pi * i / self.seg
+            r = math.cos(phi)
+            x = self.cx + self.rx * r * math.cos(a)
+            z = self.cz + self.rz * r * math.sin(a)
+            y = self.y0 + self.h * math.sin(phi)
+            return (x, y, z, x, z - y)
+        tag = self.name + "~proj"
+        for k in range(self.rings):
+            for i in range(self.seg):
+                a, b = pt(k, i), pt(k, i + 1)
+                c, d = pt(k + 1, i + 1), pt(k + 1, i)
+                if k == self.rings - 1:
+                    mesh.tri(a, b, c, 1.0, tag)
+                else:
+                    mesh.poly([a, b, c, d], 1.0, tag)
+
+
+class ProjLathe:
+    """A small turned thing (a bollard) as a smooth surface of revolution on
+    an elliptical plan, its drawing projected (see ProjDome). `profile`
+    lists (y, radius) from the foot up; the plan is `squash` as deep as
+    wide; a lid closes the top ring. `seg` points round."""
+
+    def __init__(self, name, cx, cz, profile, squash=1.0, seg=12):
+        self.name, self.cx, self.cz, self.profile = name, cx, cz, profile
+        self.squash, self.seg = squash, seg
+
+    def emit(self, mesh):
+        # the polygon round each ring circumscribes it: the drawing's outline
+        # stays covered
+        grow = 1.0 / math.cos(math.pi / self.seg)
+
+        def ring(y, r):
+            r *= grow
+            out = []
+            for i in range(self.seg):
+                a = 2 * math.pi * i / self.seg
+                x = self.cx + r * math.cos(a)
+                z = self.cz + r * self.squash * math.sin(a)
+                out.append((x, y, z, x, z - y))
+            return out
+        tag = self.name + "~proj"
+        rings = [ring(y, r) for (y, r) in self.profile]
+        n = self.seg
+        for lo, hi in zip(rings, rings[1:]):
+            for i in range(n):
+                quad = [lo[i], lo[(i + 1) % n], hi[(i + 1) % n], hi[i]]
+                if self.profile[rings.index(hi)][1] < 1e-6:
+                    mesh.tri(quad[0], quad[1], quad[2], 1.0, tag)
+                else:
+                    mesh.poly(quad, 1.0, tag)
+        if self.profile[-1][1] > 1e-6:
+            mesh.poly(rings[-1], 1.0, tag)
+
+
+class ProjHull:
+    """An open boat as smooth surfaces, its drawing projected on all of
+    them (see ProjDome: any surface so laid is the drawing at 45 degrees,
+    so only the outline has to be covered; the texture's transparency cuts
+    the rest).
+
+    The outside upright on a superellipse plan (`cx`, `cz`, `rx`, `rz`,
+    `p`) from `y0` (rising `keel` to the ends) to the gunwale at `y1`,
+    rising `sheer` to the ends; open, the rim across to the inside
+    (`inner` = (cx, cz, rx, rz, floor)) and its wall down to the floor, or
+    with no `inner` a deck along the sheer; `boxes` (x0, x1, y0, y1, z0, z1)
+    standing in it (a thwart). A height field cut column by column stood it
+    in steps.
+    """
+
+    def __init__(self, name, cx, cz, rx, rz, y0, y1, p, sheer, inner=None, boxes=(), seg=32,
+                 keel=0.0):
+        self.name, self.cx, self.cz, self.rx, self.rz = name, cx, cz, rx, rz
+        self.y0, self.y1, self.p, self.sheer = y0, y1, p, sheer
+        self.inner, self.boxes, self.seg = inner, boxes, seg
+        # the bottom rising `keel` to the ends (a stem out of the water)
+        self.keel = keel
+
+    def _ring(self, cx, cz, rx, rz):
+        out = []
+        for i in range(self.seg):
+            a = 2 * math.pi * i / self.seg
+            c, s = math.cos(a), math.sin(a)
+            k = 2.0 / self.p
+            out.append((cx + rx * math.copysign(abs(c) ** k, c),
+                        cz + rz * math.copysign(abs(s) ** k, s)))
+        return out
+
+    def _gunwale(self, x):
+        k = (x - self.cx) / self.rx
+        return self.y1 + self.sheer * k * k
+
+    def _bottom(self, x):
+        k = (x - self.cx) / self.rx
+        return self.y0 + self.keel * k ** 4
+
+    def emit(self, mesh):
+        tag = self.name + "~proj"
+
+        def P(x, y, z):
+            return (x, y, z, x, z - y)
+        outer = self._ring(self.cx, self.cz, self.rx, self.rz)
+        n = self.seg
+        for i in range(n):
+            (xa, za), (xb, zb) = outer[i], outer[(i + 1) % n]
+            mesh.poly([P(xa, self._bottom(xa), za), P(xb, self._bottom(xb), zb),
+                       P(xb, self._gunwale(xb), zb), P(xa, self._gunwale(xa), za)], 1.0, tag)
+        mesh.poly([P(x, self._bottom(x), z) for (x, z) in outer], 1.0, tag)
+        if self.inner is None:
+            # decked: the deck follows the sheer, a fan from its middle
+            mid = P(self.cx, self.y1, self.cz)
+            for i in range(n):
+                (xa, za), (xb, zb) = outer[i], outer[(i + 1) % n]
+                mesh.tri(mid, P(xb, self._gunwale(xb), zb), P(xa, self._gunwale(xa), za),
+                         1.0, tag)
+        else:
+            icx, icz, irx, irz, floor = self.inner
+            inner = self._ring(icx, icz, irx, irz)
+            for i in range(n):
+                (xa, za), (xb, zb) = outer[i], outer[(i + 1) % n]
+                (ia, ka), (ib, kb) = inner[i], inner[(i + 1) % n]
+                ga, gb = self._gunwale(xa), self._gunwale(xb)
+                ha, hb = self._gunwale(ia), self._gunwale(ib)
+                mesh.poly([P(xa, ga, za), P(xb, gb, zb), P(ib, hb, kb), P(ia, ha, ka)], 1.0,
+                          tag)
+                mesh.poly([P(ia, ha, ka), P(ib, hb, kb), P(ib, floor, kb), P(ia, floor, ka)],
+                          1.0, tag)
+            mesh.poly([P(x, floor, z) for (x, z) in inner], 1.0, tag)
+        for (x0, x1, y0, y1, z0, z1) in self.boxes:
+            for quad in ([(x0, y1, z1), (x1, y1, z1), (x1, y1, z0), (x0, y1, z0)],
+                         [(x0, y0, z1), (x1, y0, z1), (x1, y1, z1), (x0, y1, z1)],
+                         [(x0, y0, z0), (x1, y0, z0), (x1, y1, z0), (x0, y1, z0)],
+                         [(x0, y0, z0), (x0, y0, z1), (x0, y1, z1), (x0, y1, z0)],
+                         [(x1, y0, z0), (x1, y0, z1), (x1, y1, z1), (x1, y1, z0)]):
+                mesh.poly([P(*q) for q in quad], 1.0, tag)
 
 
 class Volume:

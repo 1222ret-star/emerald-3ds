@@ -19,7 +19,7 @@ stronger check there, and the proofs would double its time.
 
 import argparse
 import copy
-from PIL import Image
+from PIL import Image, ImageChops, ImageFilter
 import json
 import math
 import os
@@ -30,6 +30,7 @@ import types
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import voxel_building as vb  # noqa: E402
 import voxel_building_specs as specs  # noqa: E402
+import voxel_cells as vc  # noqa: E402
 import voxel_props  # noqa: E402
 import voxel_relief_fixes  # noqa: E402
 
@@ -156,6 +157,19 @@ def prop_specs(spec):
             parts = (lambda c: (lambda: [vb.Cylinder("basket", c["cx"], c["cz"], c["rx"], c["rz"],
                                                      -1, c["h"], back_tile=vb.Tile(*c["side"]),
                                                      sides=24)]))(c)
+        elif shape == "lathe":
+            # a turned thing (a pot): smooth, its drawing projected, where
+            # this variant's half-cell offset puts it
+            c = spec["lathe"]
+            parts = (lambda c, dx, dz: (lambda: [vb.ProjLathe(
+                spec["name"], c["cx"] + dx, c["cz"] + dz, c["profile"],
+                squash=c.get("squash", 1.0), seg=c.get("seg", 10))]))(c, ox * 8, oy * 8)
+        elif shape == "dome":
+            # a heap (fruit): a smooth dome, its drawing projected
+            c = spec["dome"]
+            parts = (lambda c, dx, dz: (lambda: [vb.ProjDome(
+                spec["name"], c["cx"] + dx, c["cz"] + dz, c["rx"], c["rz"], c["h"],
+                seg=c.get("seg", 12), rings=c.get("rings", 3))]))(c, ox * 8, oy * 8)
         else:
             parts = (lambda a, k, st, rg, r: (lambda: [vb.Mound("mound", a, rise=k, step=st,
                                                               ring=rg, rows=r)]))(
@@ -165,7 +179,8 @@ def prop_specs(spec):
                     "parts": parts,
                     # a polygon round a drawn oval misses its outline by a pixel
                     "exact": spec.get("exact", [(0, 0, w * 16, h * 16)]), "at": at, "quads": quads,
-                    "drawing": drawing})
+                    "drawing": drawing, "static": spec.get("static", False),
+                    "clip_art": spec.get("clip_art", False)})
     return out
 
 
@@ -196,7 +211,51 @@ def piece_spec(spec, comp, entry, blocks, w, h, cells, tiles, run=None):
     return {"name": name, "layout": entry["id"], "rect": (x0, y0, x1 - x0, y1 - y0),
             "ground": spec["ground"], "owned": owned, "relief": comp, "pattern": pattern,
             "south": south, "north": north, "east": east, "west": west,
-            "patch_own": spec.get("patch_own", False)}
+            "patch_own": spec.get("patch_own", False),
+            **{k: spec[k] for k in ("ground_rgb", "ground_fixed") if k in spec}}
+
+
+def clip_to_art(model):
+    """Cut every triangle to its texture's rectangle (spec "clip_art"). A
+    shape laid with its drawing projected (ProjDome, a card) may stand past
+    the drawing; the previews read nothing there, but on the console the
+    texel beside a model's art on its page is another model's (a grey
+    flag over a mast, a speck over a bollard). A triangle's uv is affine
+    in its position, so the cut is exact."""
+    # to its opaque pixels' box, a hair inside: the pages keep no more of a
+    # drawing than that, and a face on its very edge reads the next texel
+    # (a prop's texture carries a grown band under its drawing: the box is
+    # its drawing's)
+    src = (getattr(model, "spec", None) or {}).get("drawing") or model.art
+    alpha = src.getchannel("A").point(lambda a: 255 if a >= 128 else 0)
+    box = alpha.getbbox()
+    if box is None:
+        return
+    e = 1.0 / 64
+    u0, v0, u1, v1 = box[0] + e, box[1] + e, box[2] - e, box[3] - e
+    out = []
+    for (tri, shade, tag) in model.mesh.tris:
+        u = [p[3] for p in tri]
+        v = [p[4] for p in tri]
+        if min(u) >= u0 and min(v) >= v0 and max(u) <= u1 and max(v) <= v1:
+            out.append((tri, shade, tag))
+            continue
+        poly = list(tri)
+        for axis, value, keep in ((3, u0, True), (3, u1, False), (4, v0, True), (4, v1, False)):
+            if len(poly) >= 3:
+                poly = vb.clip(poly, axis, value, keep)
+        for k in range(1, len(poly) - 1):
+            out.append(((poly[0], poly[k], poly[k + 1]), shade, tag))
+    model.mesh.tris = out
+
+
+def clear_rgb(art, colours):
+    """Make every pixel of these colours transparent."""
+    apx = art.load()
+    for v in range(art.size[1]):
+        for u in range(art.size[0]):
+            if apx[u, v][3] and apx[u, v][:3] in colours:
+                apx[u, v] = (0, 0, 0, 0)
 
 
 def seam_art(layout, spec, art, height, ground, ground_px):
@@ -954,6 +1013,11 @@ def build_models(only=None):
                                       ground_px=layout.ground_pixels(spec["ground"])
                                       if owned or spec.get("ground_px") else None,
                                       upper=spec.get("relief", {}).get("upper", False))
+        if "ground_rgb" in spec:
+            # colours the object never has: the ground painted in its own
+            # cells wherever it is (a curb's paving and lawn beside it, which
+            # the ground metatiles do not draw at the same place)
+            clear_rgb(art, spec["ground_rgb"])
         if "keep" in spec:
             # only these rectangles of the drawing are the model's: what
             # stands under a stall is not
@@ -969,6 +1033,8 @@ def build_models(only=None):
             art, open_s, open_n = seam_art(layout, spec, art, height,
                                            layout.ground_tiles(spec["ground"]),
                                            layout.ground_pixels(spec["ground"]))
+            if "ground_rgb" in spec:
+                clear_rgb(art, spec["ground_rgb"])     # and the run's next rows
             art, flank = flank_band(layout, art, relief, height)
             parts = [vb.Relief("relief", art, height, side,
                                hull=relief.get("hull", 0), bridge=relief.get("bridge", 0),
@@ -988,6 +1054,9 @@ def build_models(only=None):
         else:
             parts = spec["parts"]()
         model = vb.Model(spec["name"], art, parts, (w, h), spec["ground"][0])
+        if spec.get("clip_art"):
+            model.spec = spec
+            clip_to_art(model)
         model.owned = owned if owned is not None else {(i, j) for i in range(w) for j in range(h)}
         model.spec = spec
         model.layout = layout
@@ -1152,6 +1221,253 @@ def _area_xz(poly):
 
 
 _EXISTS = {}    # blockdata path -> on disk: asked for every model
+_WATER = {}     # (primary, secondary) -> their metatiles that are water
+_PAINTED = {}   # blockdata path -> the metatiles the map paints
+_SEAMLESS = {}  # blockdata path -> those it paints beside themselves (_seamless)
+
+
+def _painted(path, blocks):
+    if path not in _PAINTED:
+        _PAINTED[path] = {b & 0x3FF for b in blocks}
+    return _PAINTED[path]
+
+
+def _seamless(path, blocks, w):
+    """The metatiles a map paints beside themselves both across and down: a
+    material that tiles (paving, grass, the sea), not the edge of one (a
+    path's grassy border), which laid under every cell of a model would
+    stripe the floor."""
+    if path not in _SEAMLESS:
+        across, down = set(), set()
+        m = [b & 0x3FF for b in blocks]
+        for k in range(len(m)):
+            if (k + 1) % w and k + 1 < len(m) and m[k + 1] == m[k]:
+                across.add(m[k])
+            if k + w < len(m) and m[k + w] == m[k]:
+                down.add(m[k])
+        _SEAMLESS[path] = across & down
+    return _SEAMLESS[path]
+
+
+def water_metatiles(primary, secondary):
+    """The metatiles of a pair of tilesets whose behaviour is water (the
+    sea, a pond, a sea's rocky edge drawn on it)."""
+    if (primary, secondary) not in _WATER:
+        out = set()
+        for which, ts in enumerate((primary, secondary)):
+            if ts in vc.ATTRIBUTES:
+                for k, a in enumerate(vc.read_u16(vc.ATTRIBUTES[ts])):
+                    if (a & 0xFF) in vc.WATER:
+                        out.add(k + which * vb.NUM_PRIMARY)
+        _WATER[(primary, secondary)] = out
+    return _WATER[(primary, secondary)]
+
+
+# The ground under a placement shows whole where a model's cell has no patch
+# and the model draws nothing, and where the GBA's view sees none of it: a
+# patch lies a hair over it, so a line of it shows along the patch's edges in
+# the game's view, and round a model that is not its drawing in depth. What
+# the map draws in a model's own cells where the model draws nothing is what
+# should be there; `placement_ground` picks the metatile that draws most of
+# it, and the cells its ground still is not are reported (report_grounds).
+GROUND_REPORT = []   # (model, layout, x, y, ground, [(i, j, kind, pixels, metatile)])
+GROUND_REPORT_PIXELS = 24   # a cell's pixels its ground is not, to report it
+_CELL_RGB = {}
+_EXPOSED = {}
+
+
+def _cell_rgb(layout_id, metatile):
+    art = _layout_art(layout_id)
+    key = (art.primary, art.secondary, metatile)
+    if key not in _CELL_RGB:
+        _CELL_RGB[key] = art.cell_image(metatile).convert("RGB")
+    return _CELL_RGB[key]
+
+
+def _exposed(model, i, j):
+    """Cell (i, j) of a model as a mask: 255 where the model draws nothing,
+    which the map's own drawing shows there - by a patch (ground_patch) or
+    by the bare ground."""
+    key = (id(model), i, j)
+    if key not in _EXPOSED:
+        apx = model.art.load()
+        W, H = model.art.size
+        own = getattr(model, "own", None)   # a bare piece: its own pixels only
+        mask = Image.new("L", (16, 16), 0)
+        mpx = mask.load()
+        for y in range(16):
+            for x in range(16):
+                X, Y = i * 16 + x, j * 16 + y
+                drawn = ((X, Y) in own if own is not None
+                         else X < W and Y < H and apx[X, Y][3] >= 128)
+                if not drawn:
+                    mpx[x, y] = 255
+        _EXPOSED[key] = mask if mask.getbbox() else None
+    return _EXPOSED[key]
+
+
+_COVERED = {}
+
+
+def _covered(model):
+    """The model in the GBA's projection, as a mask the size of its art: 255
+    where its faces draw (an opaque texel), whatever the drawing has there -
+    its real depth rises past the drawing (a roof behind the drawn outline
+    hides the ground at its corners)."""
+    key = id(model)
+    if key not in _COVERED:
+        W, H = model.art.size
+        ras = vb.Raster(W, H, bg=(0, 0, 0))
+        for (tri, shade, tag) in model.mesh.tris:
+            ras.draw([(x, z - y, y + z, 1.0, u, v) for (x, y, z, u, v) in tri], model.art, 1.0, 1)
+        mask = Image.new("L", (W, H), 0)
+        mask.putdata([0 if o is None else 255 for o in ras.owner])
+        _COVERED[key] = mask
+    return _COVERED[key]
+
+
+def _bare(model, i, j):
+    """What shows of the ground in cell (i, j) of a model with no patch over
+    it, in the GBA's view: where the model draws nothing (_exposed) and no
+    face of it stands in front (_covered). None if nothing."""
+    mask = _exposed(model, i, j)
+    if mask is None:
+        return None
+    faces = _covered(model).crop((i * 16, j * 16, i * 16 + 16, j * 16 + 16))
+    mask = ImageChops.multiply(mask, ImageChops.invert(faces))
+    return mask if mask.getbbox() else None
+
+
+def _drawn_alike(a, b, mask):
+    """How many of the mask's pixels two cells draw the same."""
+    r, g, bl = ImageChops.difference(a, b).split()
+    same = ImageChops.lighter(ImageChops.lighter(r, g), bl).point(lambda v: 255 if v == 0 else 0)
+    return ImageChops.multiply(same, mask).histogram()[255]
+
+
+def _cell_grounds(model, layout_id, px, py):
+    """The cells a spec lays a ground of its choosing on (cell_ground,
+    cell_ground_at): {(i, j): metatile}."""
+    chosen = dict(model.spec.get("cell_ground", {}))
+    chosen.update(model.spec.get("cell_ground_at", {}).get((layout_id, px, py), {}))
+    return chosen
+
+
+def patched_cells(model, layout_id, px, py, odd):
+    """The cells of `odd` a placement lays the map's own paint over
+    (placement_patches), but for those of a ground the spec chose: where
+    the model stands the map's paint is its own drawing, lost."""
+    w, h = model.cells
+    tops = cell_heights(model)
+    chosen = _cell_grounds(model, layout_id, px, py)
+    return {(i, j) for (i, j) in odd if (i, j) not in chosen
+            and (tops[j * w + i] == 0 or layout_id in model.spec.get("patch_all", ()))}
+
+
+def _edge(mask):
+    """A mask's pixels on its edge: next to one it leaves out, or on the
+    cell's border."""
+    pad = Image.new("L", (18, 18), 0)
+    pad.paste(mask, (1, 1))
+    inner = pad.filter(ImageFilter.MinFilter(3)).crop((1, 1, 17, 17))
+    return ImageChops.subtract(mask, inner)
+
+
+def placement_ground(model, entry, blocks, path, px, py, ring, patched):
+    """The ground under one placement, of the metatiles the map paints round
+    it and the spec's own grounds the map paints (those of them that tile,
+    `_seamless`, if any). First the one that draws most of what the map
+    shows in the model's cells where the model draws nothing and no patch
+    covers it (the grass under a fence's bars): there the ground shows
+    whole, in the GBA's view too. Then what the game's camera sees of it, a
+    line along the edges of the patches and of the model: the patches'
+    edge pixels it draws as the map does (the paving between a curb's
+    slabs), and the ground round the model, 16 pixels of edge a cell."""
+    lw = entry["width"]
+    candidates = set(ring) | (set(model.spec["ground"]) & _painted(path, blocks))
+    candidates = (candidates & _seamless(path, blocks, lw)) or candidates
+    if len(candidates) < 2:
+        return min(candidates) if candidates else model.ground_metatile
+    chosen = _cell_grounds(model, entry["id"], px, py)
+    bare, edges = [], []
+    for (i, j) in sorted(model.owned):
+        if (i, j) in chosen or _exposed(model, i, j) is None:
+            continue
+        rgb = _cell_rgb(entry["id"], blocks[(py + j) * lw + px + i] & 0x3FF)
+        if (i, j) in patched:
+            edges.append((rgb, _edge(_exposed(model, i, j))))
+        else:
+            mask = _bare(model, i, j)
+            if mask is not None:
+                bare.append((rgb, mask))
+    score = {}
+    for c in candidates:
+        tile = _cell_rgb(entry["id"], c)
+        score[c] = (sum(_drawn_alike(rgb, tile, mask) for rgb, mask in bare),
+                    sum(_drawn_alike(rgb, tile, mask) for rgb, mask in edges) + 16 * ring.get(c, 0))
+    return max(sorted(candidates), key=score.get)
+
+
+def report_grounds(models, found):
+    """The cells where a placement's ground is not what the map shows, into
+    GROUND_REPORT. In each map the first placement that owns a cell lays its
+    ground there (voxel_building.c ModelCell), and what shows of it is what
+    no model there draws, no face of one stands in front of (_bare) and no
+    patch covers (a table's top over a room's floor, a tree's crown).
+    bare: GROUND_REPORT_PIXELS of those pixels or more drawn otherwise,
+    as the GBA's view sees them too (gba); patched: most of the patch's
+    pixels, and as many, colours the ground has none of - a line of it
+    along the patch's edges in the game's view (under): the sea under a
+    curb's paving."""
+    del GROUND_REPORT[:]
+    full = Image.new("L", (16, 16), 255)
+    by_layout = {}
+    for rec in found:
+        by_layout.setdefault(rec[0], []).append(rec)
+    for recs in by_layout.values():
+        name = recs[0][6]
+        art = _layout_art(name)
+        drawn, laid, owner = {}, {}, {}
+        for k, (_, index, px, py, ground, cells, _) in enumerate(recs):
+            m = models[index]
+            for (i, j) in m.owned:
+                c = (px + i, py + j)
+                owner.setdefault(c, k)
+                mask = _bare(m, i, j)
+                d = full if mask is None else ImageChops.invert(mask)
+                drawn[c] = ImageChops.lighter(drawn[c], d) if c in drawn else d
+            for (i, j, img) in cells:
+                c = (px + i, py + j)
+                a = img.getchannel("A").point(lambda v: 255 if v >= 128 else 0)
+                laid[c] = ImageChops.lighter(laid[c], a) if c in laid else a
+        bad = {}
+        for (X, Y), k in sorted(owner.items()):
+            _, index, px, py, ground, cells, _ = recs[k]
+            m = models[index]
+            if ground == OWN_GROUND or not (0 <= X < art.w and 0 <= Y < art.h):
+                continue
+            if (X - px, Y - py) in _cell_grounds(m, name, px, py):
+                continue    # a ground of the spec's choosing, whole
+            own = art.metatile(X, Y)
+            rgb, tile = _cell_rgb(name, own), _cell_rgb(name, ground)
+            patch = laid.get((X, Y))
+            cover = drawn[(X, Y)] if patch is None else ImageChops.lighter(drawn[(X, Y)], patch)
+            shown = ImageChops.invert(cover)
+            n = shown.histogram()[255]
+            off = n - _drawn_alike(rgb, tile, shown)
+            if off >= GROUND_REPORT_PIXELS:
+                bad.setdefault(k, []).append((X - px, Y - py, "bare", off, own))
+            if patch is not None:
+                # the patch where no model draws over it: the map's paint
+                shows = ImageChops.multiply(patch, ImageChops.invert(drawn[(X, Y)]))
+                palette = set(tile.getdata())
+                seen = [c for c, v in zip(rgb.getdata(), shows.getdata()) if v]
+                off = sum(1 for c in seen if c not in palette)
+                if off >= GROUND_REPORT_PIXELS and off * 2 > len(seen):
+                    bad.setdefault(k, []).append((X - px, Y - py, "patched", off, own))
+        for k, cells in sorted(bad.items()):
+            _, index, px, py, ground, _, _ = recs[k]
+            GROUND_REPORT.append((models[index].name, name, px, py, ground, cells))
 
 
 def find_placements(model, layouts_json):
@@ -1169,8 +1485,10 @@ def find_placements(model, layouts_json):
     draws the building's own pixels: Rustboro paints the Center's and the
     Mart's corners with its paving round them, not Petalburg's grass.
 
-    Each placement carries its own ground metatile: the commonest walkable
-    one round it, which that map's atlas is sure to hold.
+    Each placement carries its own ground metatile, one the map paints (its
+    atlas holds no other): of those round it (not water, for what stands on
+    land) and the spec's own, the one that draws most of what the map shows
+    in the model's cells where the model draws nothing (placement_ground).
     """
     ref = model.layout
     x, y, w, h = model.spec["rect"]
@@ -1264,7 +1582,17 @@ def find_placements(model, layouts_json):
                         if cell & 0xC00:
                             continue
                         ring[cell & 0x3FF] = ring.get(cell & 0x3FF, 0) + 1
-                ground = max(ring, key=ring.get) if ring else model.ground_metatile
+                # what stands on land stands on land: the sea along a pier's
+                # edge or under a fence by the shore can be the commonest
+                # cell round it, and shows in a line wherever the model or
+                # its patches leave the ground under them uncovered. Not for
+                # a spec that names water among its grounds (a boat, the
+                # Trick House by its pond).
+                if not water_metatiles(ref.primary, ref.secondary) & set(model.spec["ground"]):
+                    water = water_metatiles(entry["primary_tileset"], entry["secondary_tileset"])
+                    land = {k: n for k, n in ring.items() if k not in water}
+                    if land:
+                        ring = land
                 odd = [(i, j) for j in range(h) for i in range(w) if (i, j) in model.owned
                        and (blocks[(py + j) * lw + px + i] & 0x3FF) != template[j * w + i]]
                 if model.spec.get("patch_cells"):
@@ -1277,11 +1605,27 @@ def find_placements(model, layouts_json):
                     model.spec.setdefault("patch_all", set()).add(entry["id"])
                 if model.spec.get("cell_ground"):
                     odd = sorted(set(odd) | set(model.spec["cell_ground"]))
+                if (entry["id"], px, py) in model.spec.get("cell_ground_at", {}):
+                    odd = sorted(set(odd) | set(model.spec["cell_ground_at"][(entry["id"], px, py)]))
                 if model.spec.get("relief", {}).get("upper"):
                     # only the upper layer is modelled: the map paints the
                     # rest of every cell, its ground's edges as drawn
                     odd = sorted(model.owned)
                     model.spec.setdefault("patch_all", set()).add(entry["id"])
+                ground = placement_ground(model, entry, blocks, path, px, py, ring,
+                                          patched_cells(model, entry["id"], px, py, odd))
+                fixed = model.spec.get("ground_fixed")
+                if isinstance(fixed, dict):
+                    fixed = fixed.get(entry["id"])
+                elif fixed is True:
+                    fixed = model.ground_metatile
+                # the spec's own ground whatever is round it (a boat moored by
+                # a pier floats on the sea, not on the pier), or one of its
+                # own in one map (a tent on its lawn, the path in front of it
+                # more common round it) - if the map paints it somewhere: the
+                # console's atlas holds only the metatiles its maps use
+                if fixed is not None and fixed is not False and fixed in _painted(path, blocks):
+                    ground = fixed
                 found.append((index + 1, px, py, ground, entry["id"], odd))
     # and the rooms that repeat a piece of furniture's tiles (reuse_pieces):
     # on a modelled room's floor, or, in a room nobody modelled, on its
@@ -1434,10 +1778,10 @@ def placement_patches(model, layout_json_entry_name, layouts, px, py, odd):
     where the map paints something the reference does not."""
     if not odd:
         return []
-    w, h = model.cells
-    tops = cell_heights(model)
     cells = []
-    chosen = model.spec.get("cell_ground", {})
+    # and those of one placement (`cell_ground_at`, by layout and position)
+    chosen = _cell_grounds(model, layout_json_entry_name, px, py)
+    patched = patched_cells(model, layout_json_entry_name, px, py, odd)
     for (i, j) in odd:
         if (i, j) in chosen:
             # a ground of the spec's choosing, whole (what the drawing hid)
@@ -1446,7 +1790,7 @@ def placement_patches(model, layout_json_entry_name, layouts, px, py, odd):
             cells.append((i, j, layouts[layout_json_entry_name].cell_image(chosen[(i, j)])
                           .convert("RGBA")))
             continue
-        if tops[j * w + i] != 0 and layout_json_entry_name not in model.spec.get("patch_all", ()):
+        if (i, j) not in patched:
             continue  # the model stands there; the map's own paint is lost
         if layout_json_entry_name not in layouts:
             layouts[layout_json_entry_name] = vb.LayoutArt(layout_json_entry_name)
@@ -1878,6 +2222,16 @@ def export(models, path):
             if odd:
                 print("  %s: %s at %d,%d differs in %d cell(s), %d patched from the map"
                       % (m.name, name, px, py, len(odd), len(cells)))
+    report_grounds(models, found)
+    if GROUND_REPORT:
+        # what to fix, and with which spec key: README, the ground chosen
+        # and what the generator reports
+        print("voxel buildings: %d placement(s) on a ground not what their cells show - "
+              "cell i,j, bare (pixels drawn otherwise) or patched (pixels of colours the "
+              "ground has none of), and the cell's own metatile" % len(GROUND_REPORT))
+        for name, lid, px, py, ground, bad in GROUND_REPORT:
+            print("  ground: %s in %s at %d,%d on 0x%03x: %s" % (
+                name, lid, px, py, ground, ", ".join("%d,%d %s %d (0x%03x)" % c for c in bad)))
     # only the rows of a drawing some face samples go to the page: a solid's
     # grown bands (Mound.with_ring, own_bands) are mostly never read, and
     # the ring band of a thing without one is empty
