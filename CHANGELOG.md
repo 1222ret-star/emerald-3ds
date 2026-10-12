@@ -45,6 +45,9 @@ Fixed:
 - People on the map could be drawn over the whole screen for a frame as
   they or the player moved (the old lady in Route 111's rest house): they
   were taken for the fog.
+- Battles: after opening the bag or the party in a battle, a stat change
+  (Growl, Defense Curl and the like) covered the whole screen with its
+  pattern instead of only the Pokémon.
 
 ## 0.3.1 — 2026-10-10
 
