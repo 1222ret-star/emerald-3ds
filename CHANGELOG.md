@@ -21,6 +21,22 @@ New and improved:
   and default phrase IDs from the user's ROM; preserve two-column phrase
   tables, nine-column naming rows and column positions, and 22-byte type names.
   The native Pokédex uses a decimal comma and French measurement alignment.
+- ENHANCEMENTS: four new options, all off by default, by @Deunnis (pull
+  request #49). IVS AND EVS: A (or a tap on the stats) on the summary's
+  SKILLS page shows the Pokémon's IVs, then its EVs. REPEL PROMPT: when a
+  Repel wears off and the Bag still has one, "Use another REPEL?". INFINITE
+  TMS: a TM is kept after teaching, like an HM. RUN INDOORS: the Running
+  Shoes work in houses, Centers, gyms and caves. HMS WITHOUT MOVE now covers
+  Fly and Flash too: HM02 and HM05 used from the Bag offer to use the move,
+  and cancelling the Fly map goes back to the Bag; the new texts are in
+  Spanish in the Spanish game (pull request #52).
+- 3D BLUR has a strength, by @Deunnis (pull request #55): OFF or 10% to 100%
+  in steps of 10 (tap the left half to lower it, the right half to raise it)
+  instead of on and off. An old `voxel_blur=1` reads as 100%.
+- Building from source: the build fails when a song header has a pointer
+  missing from the relocation table, as `se_rain` had in 0.3.0's Spanish
+  build (the rain crash of issues #40, #44 and #46), by @Deunnis (pull
+  request #53).
 
 - OPTIONS > ENHANCEMENTS has REAL-TIME PACING (off by default): the sound
   engine mixes on the DSP's clock instead of once per shown frame, so a
@@ -41,6 +57,17 @@ Fixed:
 - Battles: with the speed multiplier at x2 and above, a Pokémon sent out of
   its Poké Ball (yours or a trainer's) made no cry. The game cleared the cry
   before the sound engine had started it.
+- Saves: a save backed up from a cartridge or exported from mGBA (the 128 KiB
+  flash image followed by the clock's bytes) was refused, which left only
+  NEW GAME; it is read now, by @Deunnis (pull request #47, issue #33).
+- Battles: move backgrounds (Confusion's, Solar Beam's, the impact one...)
+  covered only part of the wide screen, with leftover scenery beside them;
+  they fill it now, by @Deunnis (pull request #54, issue #51).
+- The Pokédex page of a Pokémon just caught was laid out as the battle,
+  zoomed and cut off; it is shown whole, by @Deunnis (pull request #50,
+  issue #29).
+- Voxel: the potted plant in the small houses left pixels of its outline on
+  the floor, by @Deunnis (pull request #48, issue #23).
 
 ## 0.3.1 — 2026-10-10
 
