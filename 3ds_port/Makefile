@@ -67,6 +67,15 @@ override VOXEL_LIGHTING := 0
 endif
 CPPFLAGS += -DCTR_VOXEL_LIGHTING=$(VOXEL_LIGHTING)
 GAMEFLAGS += -DCTR_VOXEL_LIGHTING=$(VOXEL_LIGHTING)
+# The voxel world per eye with the 3D slider: on a New 3DS unless set.
+# VOXEL_STEREO=1 forces it on (an Old 3DS, Azahar), =0 off.
+ifdef VOXEL_STEREO
+CPPFLAGS += -DCTR_VOXEL_STEREO=$(VOXEL_STEREO)
+endif
+# FORCE_SLIDER=1.0 fixes the 3D slider for an emulator that has none.
+ifdef FORCE_SLIDER
+CPPFLAGS += -DCTR_FORCE_SLIDER=$(FORCE_SLIDER)f
+endif
 # A small FPS counter in the top-left corner of the top screen, shown when
 # the bottom screen's options turn it on (off by default).
 SHOW_FPS ?= 1
@@ -76,13 +85,6 @@ $(error SHOW_FPS must be 0 or 1)
 endif
 endif
 CPPFLAGS += -DCTR_SHOW_FPS=$(SHOW_FPS)
-# The parked voxel stereoscopy (3ds_video.c, depth reprojection), for
-# measuring it: 1 turns it back on.
-VOXEL_STEREO ?= 0
-ifneq ($(VOXEL_STEREO),0)
-CPPFLAGS += -DCTR_VOXEL_STEREO=$(VOXEL_STEREO)
-endif
-# The options row that turns it on (3ds_bottom_ui.c).
 GAMEFLAGS += -DCTR_SHOW_FPS=$(SHOW_FPS)
 CPPFLAGS += -DCTR_DATA_BACKEND=$(DATA_BACKEND)
 # Legacy code has existing warnings; platform code remains -Werror.

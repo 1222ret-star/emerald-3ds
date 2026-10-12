@@ -722,14 +722,32 @@ static uint64_t sBgTicks, sObjTicks;
 #define CTR_STEREO_PIXELS 1.0f
 
 /*
- * Stereoscopy of the voxel world (RenderVoxelEye, CtrVoxel_StereoDraw). Off:
- * on an Old 3DS it ran at 40-45 fps, the voxel frame leaving too little room
- * for the second eye. With it off the slider leaves the voxel world flat, as
- * before. Build with -DCTR_VOXEL_STEREO=1 to try it again.
+ * Stereoscopy of the voxel world (RenderVoxel): the world drawn once per eye
+ * from its own camera (CtrVoxel_Draw, eye 0 and 1). The second pass costs
+ * the GPU the world's fill again, which an Old 3DS does not have in a frame
+ * (an earlier attempt ran at 40-45 fps there), so OPTIONS' 3D WORLD on AUTO
+ * leaves the world flat on one, slider or not, and takes the slider on a New
+ * 3DS (sVoxelStereo, set at start-up; -DCTR_VOXEL_STEREO=1 or =0 forces
+ * AUTO either way). ON and OFF decide outright. 3D DEPTH scales the slider.
  */
-#ifndef CTR_VOXEL_STEREO
-#define CTR_VOXEL_STEREO 0
-#endif
+static bool sVoxelStereo;
+
+static bool VoxelStereoWanted(void)
+{
+    int mode = CtrSettings_GetInt("voxel_stereo", 0);
+
+    return mode == 1 || (mode == 0 && sVoxelStereo);
+}
+
+/* The slider as the voxel world takes it: scaled by OPTIONS' 3D DEPTH. */
+static float VoxelStereoSlider(float slider)
+{
+    static const float depths[] = {0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f};
+    int depth = CtrSettings_GetInt("voxel_depth", 3);
+
+    if (depth < 0 || depth >= (int)(sizeof(depths) / sizeof(depths[0]))) depth = 3;
+    return slider * depths[depth];
+}
 
 /* Displacement per depth unit for the eye being composed, and the resulting
  * displacement of the layer being drawn, both in whole screen pixels. */
@@ -5828,6 +5846,23 @@ bool CtrVideo_Init(void)
      * up; a console without it simply never composes a second pass. */
     sTopRight = C2D_CreateScreenTarget(GFX_TOP, GFX_RIGHT);
     if (!sTopRight) CtrLog_Write(CTR_LOG_VIDEO, "no right eye target: 3D disabled");
+    {
+        bool newModel = false;
+
+        if (R_FAILED(APT_CheckNew3DS(&newModel))) newModel = false;
+#if CTR_VOXEL_ENABLED
+        /* The voxel world per eye: a New 3DS has the frame for it. */
+#ifdef CTR_VOXEL_STEREO
+        sVoxelStereo = CTR_VOXEL_STEREO != 0;
+#else
+        sVoxelStereo = newModel;
+#endif
+        CtrLog_Write(CTR_LOG_VIDEO, "voxel 3D %s (%s 3DS)", sVoxelStereo ? "on" : "off",
+                     newModel ? "New" : "Old");
+#else
+        CtrLog_Write(CTR_LOG_VIDEO, "%s 3DS", newModel ? "New" : "Old");
+#endif
+    }
     for (unsigned i = 0; i < 64; ++i)
         sMorton[i] = CtrVideo_Texel(i & 7, i / 8, 8);
     sMortonPairs = true;
@@ -7766,15 +7801,13 @@ static void VoxelBloomCompose(float strength)
  * The dark of a cave: a soft ring of shadow closing in round the player, over
  * the world and under the game's text. One textured quad (CtrVoxel_Gloom).
  */
-static void VoxelGloom(int eye)
+static void VoxelGloom(void)
 {
     float x, y, size, amount;
     const C3D_Tex *tex = CtrVoxel_Gloom(&x, &y, &size, &amount);
     C2D_ImageTint tint;
 
     if (tex == NULL || amount <= 0.0f) return;
-    /* With 3D, as deep as the player it closes in round. */
-    if (eye >= 0) x += CtrVoxel_StereoShift(eye, x, y);
     const Tex3DS_SubTexture whole = {tex->width, tex->height, 0.0f, 1.0f, 1.0f, 0.0f};
     unsigned alpha = (unsigned)(amount * 255.0f + 0.5f);
 
@@ -7853,7 +7886,7 @@ fail:
                  (unsigned long)linearSpaceFree());
 }
 
-static void VoxelFlashLight(int eye)
+static void VoxelFlashLight(void)
 {
     const Tex3DS_SubTexture whole = {FLASH_LIGHT_DIM, FLASH_LIGHT_DIM, 0.0f, 1.0f, 1.0f, 0.0f};
     float x = CTR_GAME_WIDTH * 0.5f, y = CTR_GAME_HEIGHT * 0.5f, sx = 1.0f, sy = 1.0f;
@@ -7866,7 +7899,6 @@ static void VoxelFlashLight(int eye)
     if (!FieldLightShown()) return;
     if (!sFlashTexTried) MakeFlashLight();
     CtrVoxel_PlayerLightSpot(&x, &y, &sx, &sy);
-    if (eye >= 0) x += CtrVoxel_StereoShift(eye, x, y);
     /* A flame's slow breathing: two slow waves, a pixel or two. */
     radius = sFieldLight.shown * (1.0f + 0.010f * sinf(t * 0.071f) + 0.006f * sinf(t * 0.173f + 1.3f));
     w = radius * FLASH_LIGHT_QUAD * sx;
@@ -7937,12 +7969,12 @@ static void ComposeVoxelOverlay(void)
 }
 
 /*
- * The finished world for both eyes - the picture with its blur, glow and
- * gloom, composed once - which each eye then takes moved by its depth. Made
- * when the slider is up in the voxel world and given back when it has not
- * been used for a while, or for a battle transition, which needs the VRAM
- * (before the frame: deleting a target inside one is a panic). Without it
- * each eye composes the world's effects itself, which costs the GPU twice.
+ * The finished world of the 3D battle for both eyes - the picture with its
+ * blur and glow, composed once - which each eye then takes moved by the
+ * scenery's depth (RenderBattleWorld, BattleWorldEye). Made when the slider
+ * is up in such a battle and given back when it has not been used for a
+ * while, or for a battle transition, which needs the VRAM (before the frame:
+ * deleting a target inside one is a panic). Without it the battle stays flat.
  */
 #define STEREO_SURFACE_IDLE_FRAMES 60u
 #define STEREO_SURFACE_RETRY_FRAMES 120u
@@ -8013,93 +8045,37 @@ static void StereoSurfaceManage(void)
 }
 
 /*
- * The world to one eye with the 3D slider up: the finished world moved by
- * its depth (CtrVoxel_StereoDraw); the game's text and weather stay on the
- * screen, in front of the world, the same in both eyes. Without the shared
- * surface the logical surface is moved instead, and the tilt-shift and the
- * glow with it, so that the blur lies on the world and not on the screen.
+ * The world to one screen target: the logical surface cleared and the world
+ * drawn into it from `eye` (-1: the middle camera; 0, 1: one eye of the
+ * pair), then the picture to the target with its tilt-shift, glow and the
+ * dark of a cave, and the game's text and weather over it. With the slider
+ * up this runs once per eye, the logical surface and the bloom's target
+ * reused in turn: the GPU takes the frame's commands in order, so the second
+ * eye's clear comes after the first eye's picture has been copied out. What
+ * is laid over the world is placed as that eye saw it (CtrVoxel_Draw sets
+ * the eye the voxel module projects by); the text and the weather are the
+ * same in both eyes, on the glass in front of the world.
  */
-static void RenderVoxelEye(int eye, float bloom)
-{
-    C3D_RenderTarget *target = eye ? sTopRight : sTop;
-
-    C2D_TargetClear(target, C2D_Color32(0, 0, 0, 255));
-    C2D_SceneBegin(target);
-    C2D_ViewReset();
-    C2D_Flush();
-    if (sStereoTarget)
-        CtrVoxel_StereoDraw(eye, &sStereoTex, VOXEL_STEREO_COPY, 0.0f, 0.0f, 1.0f);
-    else
-    {
-        CtrVoxel_StereoDraw(eye, &sSurface, VOXEL_STEREO_COPY, 0.0f, 0.0f, 1.0f);
-        if (CtrSettings_VoxelBlur())
-        {
-            /* VoxelDiorama's taps: sampling half a texel off is drawing the
-             * picture half a pixel the other way. */
-            float strength = DioramaStrength();
-
-            SurfaceFilter(GPU_LINEAR);
-            CtrVoxel_StereoDraw(eye, &sSurface, VOXEL_STEREO_TOP, -0.5f, -0.5f, 0.67f * strength);
-            CtrVoxel_StereoDraw(eye, &sSurface, VOXEL_STEREO_TOP, 0.5f, 0.5f, 0.50f * strength);
-            CtrVoxel_StereoDraw(eye, &sSurface, VOXEL_STEREO_BOTTOM, -0.5f, -0.5f, 0.60f * strength);
-            CtrVoxel_StereoDraw(eye, &sSurface, VOXEL_STEREO_BOTTOM, 0.5f, 0.5f, 0.45f * strength);
-            SurfaceFilter(GPU_NEAREST);
-        }
-        if (bloom > 0.005f)
-            CtrVoxel_StereoDraw(eye, &sBloomTex, VOXEL_STEREO_ADD, 0.0f, 0.0f, bloom);
-    }
-    /* Back to the 2D compositor's program and state. */
-    C2D_Prepare();
-    C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
-    BlendForget();
-    if (!sStereoTarget) { VoxelGloom(eye); VoxelFlashLight(eye); }
-    if (!(Reg(0) & 128)) ComposeVoxelOverlay();
-    C2D_Flush();
-    C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
-    GpuSplit();
-}
-
-/* The frame whose world the logical surface's depth still holds. */
-static uint32_t sVoxelDepthFrame = UINT32_MAX;
-
-/*
- * The voxel path of the single Citro3D frame opened by CtrVideo_Present.
- * Same shape as RenderEye: compose the logical surface, split, blit it to the
- * screen. What changes is who composes it. `stereo` is the 3D slider, 0 for
- * one picture.
- */
-static void RenderVoxel(uint32_t clear, float stereo)
+static void RenderVoxelTo(C3D_RenderTarget *target, int eye, uint32_t clear, bool first)
 {
     const Tex3DS_SubTexture logical = {CTR_GAME_WIDTH, CTR_GAME_HEIGHT, 0, 1,
         CTR_GAME_WIDTH / 512.0f, 1 - CTR_GAME_HEIGHT / 256.0f};
-
-    /* The brightness effect (BLDY) on the field's backgrounds and sprites. */
-    unsigned control = Reg(0x50), effect = (control >> 6) & 3;
-    float bright = effect >= 2 ? Min(Reg(0x54) & 31, 16) / 16.0f : 0.0f;
     float bloom;
 
-    /* The depth of the last frame's world, while it is still there: the GPU
-     * has finished with it (FrameBegin waited) and the clear is next. */
-    if (stereo > 0.0f && sVoxelDepthFrame + 1 == sStats.frames)
-    {
-        uint64_t sampleStart = svcGetSystemTick();
-
-        CtrVoxel_StereoSample(sLogical);
-        sStats.stereoSampleMs = (svcGetSystemTick() - sampleStart) * 1000.0f / SYSCLOCK_ARM11;
-    }
-    sVoxelDepthFrame = sStats.frames;
-    CtrVoxel_SetBrightness((control & 0x0e) ? bright : 0.0f, (control & 0x10) ? bright : 0.0f,
-                           effect == 2);
     /* C2D_TargetClear clears colour and depth, which the 3D pass needs. */
     C2D_TargetClear(sLogical, clear);
-    CtrVoxel_Draw(sLogical, 0.0f);
+    CtrVoxel_Draw(sLogical, eye);
 
     /* Finish the world before sampling it. UI is drawn on top after blur.
      * The GPU draws it from here while the rest is recorded (GpuStartEarly):
      * until FrameEnd it waited, and every field frame took CPU + GPU, its
-     * 6-9 ms of world after the whole present (DROP ... gpu late). */
+     * 6-9 ms of world after the whole present (DROP ... gpu late). The
+     * second eye's world is split off the same way, for the same reason. */
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
-    GpuStartEarly();
+    if (first)
+        GpuStartEarly();
+    else
+        GpuSplit();
 
     /* Back to the 2D compositor, which assumes its own program and no depth. */
     C2D_Prepare();
@@ -8108,41 +8084,8 @@ static void RenderVoxel(uint32_t clear, float stereo)
     bloom = sBloom != NULL ? CtrVoxel_Bloom() : 0.0f;
     if (bloom > 0.005f)
         VoxelBloomPrepare();
-    if (stereo > 0.0f)
-    {
-        uint64_t eyesStart = svcGetSystemTick();
-
-        sStereoWanted = true;
-        if (sStereoTarget)
-        {
-            /* The world's effects once, as the single picture has them. */
-            sStereoUsedFrame = sStats.frames;
-            C2D_TargetClear(sStereoTarget, C2D_Color32(0, 0, 0, 255));
-            C2D_SceneBegin(sStereoTarget);
-            C2D_ViewReset();
-            Blend(5, false, false);
-            C2D_DrawImageAt((C2D_Image){&sSurface, &logical}, 0, 0, 0, NULL, 1, 1);
-            if (CtrSettings_VoxelBlur())
-                VoxelDiorama();
-            if (bloom > 0.005f)
-                VoxelBloomCompose(bloom);
-            VoxelGloom(-1);
-            VoxelFlashLight(-1);
-            C2D_Flush();
-            C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
-            GpuSplit();
-            CtrVoxel_StereoBegin(stereo, 0, 0);
-        }
-        else
-            CtrVoxel_StereoBegin(stereo, CtrSettings_VoxelBlur() ? DIORAMA_TOP : 0,
-                                 CtrSettings_VoxelBlur() ? DIORAMA_BOTTOM : 0);
-        RenderVoxelEye(0, bloom);
-        RenderVoxelEye(1, bloom);
-        sStats.stereoEyesMs = (svcGetSystemTick() - eyesStart) * 1000.0f / SYSCLOCK_ARM11;
-        return;
-    }
-    C2D_TargetClear(sTop, C2D_Color32(0, 0, 0, 255));
-    C2D_SceneBegin(sTop);
+    C2D_TargetClear(target, C2D_Color32(0, 0, 0, 255));
+    C2D_SceneBegin(target);
     C2D_ViewReset();
     Blend(5, false, false);
     C2D_DrawImageAt((C2D_Image){&sSurface, &logical}, 0, 0, 0, NULL, 1, 1);
@@ -8150,12 +8093,39 @@ static void RenderVoxel(uint32_t clear, float stereo)
         VoxelDiorama();
     if (bloom > 0.005f)
         VoxelBloomCompose(bloom);
-    VoxelGloom(-1);
-    VoxelFlashLight(-1);
+    VoxelGloom();
+    VoxelFlashLight();
     if (!(Reg(0) & 128)) ComposeVoxelOverlay();
     C2D_Flush();
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
     GpuSplit();
+}
+
+/*
+ * The voxel path of the single Citro3D frame opened by CtrVideo_Present.
+ * Same shape as RenderEye: compose the logical surface, split, blit it to the
+ * screen. What changes is who composes it. `stereo` is the 3D slider, 0 for
+ * one picture; with it up the world is drawn to each eye from its own camera
+ * (CtrVoxel_SetStereo was given the slider before the update).
+ */
+static void RenderVoxel(uint32_t clear, float stereo)
+{
+    /* The brightness effect (BLDY) on the field's backgrounds and sprites. */
+    unsigned control = Reg(0x50), effect = (control >> 6) & 3;
+    float bright = effect >= 2 ? Min(Reg(0x54) & 31, 16) / 16.0f : 0.0f;
+
+    CtrVoxel_SetBrightness((control & 0x0e) ? bright : 0.0f, (control & 0x10) ? bright : 0.0f,
+                           effect == 2);
+    if (stereo > 0.0f)
+    {
+        uint64_t eyesStart = svcGetSystemTick();
+
+        RenderVoxelTo(sTop, 0, clear, true);
+        RenderVoxelTo(sTopRight, 1, clear, false);
+        sStats.stereoEyesMs = (svcGetSystemTick() - eyesStart) * 1000.0f / SYSCLOCK_ARM11;
+    }
+    else
+        RenderVoxelTo(sTop, -1, clear, true);
 }
 
 /*
@@ -8412,7 +8382,7 @@ static void RenderBattleWorld(uint32_t clear, float slider)
     PORT_PROF_BEGIN(bwWorld);
     CtrVoxel_SetBrightness((control & 0x08) ? bright : 0.0f, 0.0f, effect == 2);
     C2D_TargetClear(sLogical, clear);
-    CtrVoxel_Draw(sLogical, 0.0f);
+    CtrVoxel_Draw(sLogical, -1);
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
     GpuSplit();
     PORT_PROF_END(bwWorld, PORT_PROF_BW_WORLD);
@@ -8874,7 +8844,7 @@ static void RenderTransition(bool voxel, uint32_t clear)
     {
         CtrVoxel_SetBrightness(0.0f, 0.0f, false);
         C2D_TargetClear(sLogical, clear);
-        CtrVoxel_Draw(sLogical, 0.0f);
+        CtrVoxel_Draw(sLogical, -1);
         C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
         C3D_FrameSplit(0);
         C2D_Prepare();
@@ -9875,6 +9845,15 @@ void CtrVideo_Present(void)
      * Whole pixels only, so every layer stays on the pixel grid in both eyes.
      */
     bool field = !sStage && !sCentred && !sBattle && CtrGame_IsOverworld();
+    /* Azahar passes its slider only with factor_3d set in its config; a
+     * profiling build can fix it (-DCTR_FORCE_SLIDER=1.0f) instead, and a
+     * measured scenario can fix it too (3ds_scenario.c). Read before the
+     * voxel update: the world is drawn per eye from it (CtrVoxel_SetStereo). */
+#ifdef CTR_FORCE_SLIDER
+    float slider = CTR_FORCE_SLIDER;
+#else
+    float slider = CtrScenario_Slider(osGet3DSliderState());
+#endif
 #if CTR_VOXEL_ENABLED
     /*
      * Preparing the voxel frame is part of the decision. If the atlas or the
@@ -9887,6 +9866,13 @@ void CtrVideo_Present(void)
      * VRAM for good, the 2D picture standing in for it frame after frame. */
     /* Opt-in from the bottom screen's options (CtrSettings_Voxel). */
     bool overworld = field && CtrSettings_Voxel() && CtrVoxel_IsAvailable();
+    /* The slider before the update: the world's eyes are set, and its
+     * frustum widened to what they see, before it picks this frame's chunks.
+     * Per eye the frame clears and splits twice: the chunk uploads leave the
+     * GX queue the room for it. */
+    bool voxelStereoWanted = overworld && !sTransition && sTopRight && slider > 0.02f && VoxelStereoWanted();
+    CtrVoxel_SetStereo(voxelStereoWanted ? VoxelStereoSlider(slider) : 0.0f);
+    if (voxelStereoWanted) sRenderReserve = 28u;
     bool voxel = overworld && CtrVoxel_Update();
     /* A new map still being made - a frame or two, behind the fade - is
      * black rather than the 2D picture flashing up before the 3D one. */
@@ -9921,19 +9907,11 @@ void CtrVideo_Present(void)
     /* The 2D field centres its text windows as the voxel overlay does. */
     sFieldUi = field && !voxel;
     sFieldVoxel = voxel;
-    /* Azahar's slider never reaches osGet3DSliderState: a profiling build
-     * can fix it (-DCTR_FORCE_SLIDER=1.0f) to measure the 3D paths there. */
-#ifdef CTR_FORCE_SLIDER
-    float slider = CTR_FORCE_SLIDER;
-#else
-    /* A measured scenario can fix it too (3ds_scenario.c). */
-    float slider = CtrScenario_Slider(osGet3DSliderState());
-#endif
-    /* The voxel world's depth is its own (RenderVoxelEye), from any slider
+    /* The voxel world's depth is its own (RenderVoxelTo), from any slider
      * position up; the layer parallax of the 2D path means nothing for a 3D
      * scene. The 3D battle and the transitions stay flat. */
 #if CTR_VOXEL_ENABLED
-    bool voxelStereo = CTR_VOXEL_STEREO && voxel && !sTransition && sTopRight && slider > 0.02f && CtrVoxel_StereoAvailable();
+    bool voxelStereo = voxelStereoWanted && voxel;
 #else
     const bool voxelStereo = false;
 #endif
