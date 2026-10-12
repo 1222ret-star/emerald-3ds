@@ -2521,6 +2521,14 @@ static bool8 OptionPages(void)
 #define TAB_Y 2
 #define TAB_H 20
 
+/* The SETTINGS tab's first screen is the fixed grid of the game's and the
+ * port's options; its later screens hold extras (3ds_extras.c) like the
+ * other tabs. */
+static bool8 FixedOptions(void)
+{
+    return sOptPage == CTR_EXTRAS_OPTIONS && sOptSub == 0;
+}
+
 static void OptionCell(int row, int *x, int *y)
 {
     bool8 right = row >= OPT_FPS;
@@ -3443,7 +3451,7 @@ static void Snapshot(ViewState *s, u8 mode, u8 pressed)
             ReadOptionValues(s->options);
             s->optPage = sOptPage;
             s->optSub = sOptSub;
-            for (unsigned row = 0; sOptPage != CTR_EXTRAS_OPTIONS && row < ARRAY_COUNT(s->extras); ++row)
+            for (unsigned row = 0; !FixedOptions() && row < ARRAY_COUNT(s->extras); ++row)
             {
                 const CtrExtra *extra = PageExtra(sOptPage, row);
 
@@ -4680,7 +4688,7 @@ static void DrawOptions(const ViewState *s)
 
     OptionNames(names);
 
-    if (s->optPage != CTR_EXTRAS_OPTIONS)
+    if (s->optPage != CTR_EXTRAS_OPTIONS || s->optSub != 0)
     {
         for (unsigned row = 0; row < ARRAY_COUNT(s->extras); ++row)
         {
@@ -7014,7 +7022,7 @@ static void ShowOptionSub(u8 page, u8 sub)
         return;
     sOptPage = page;
     sOptSub = sub;
-    sOptFocus = sOptPage == CTR_EXTRAS_OPTIONS ? OPT_TEXT_SPEED : 0;
+    sOptFocus = FixedOptions() ? OPT_TEXT_SPEED : 0;
     PlaySE(SE_SELECT);
 }
 
@@ -7040,7 +7048,7 @@ static void ActivateOption(u8 id)
     bool8 back = id >= HIT_OPTION + HIT_OPTION_BACK;
     u8 row = (id - HIT_OPTION) % HIT_OPTION_BACK;
 
-    if (sOptPage != CTR_EXTRAS_OPTIONS)
+    if (!FixedOptions())
     {
         const CtrExtra *extra = PageExtra(sOptPage, row);
 
@@ -7520,7 +7528,7 @@ static u8 OptionStep(u8 from, int dir)
 {
     bool8 voxel = CtrSettings_Voxel();
 
-    if (sOptPage != CTR_EXTRAS_OPTIONS)
+    if (!FixedOptions())
     {
         int to = from + dir;
 
@@ -7579,7 +7587,7 @@ static void ChooseColumnItem(u8 mode, u8 item)
     {
         sFocus = FOCUS_NONE;
         sInside = item == SCR_OPTION ? INSIDE_OPTIONS : INSIDE_SAVE;
-        if (item == SCR_OPTION && sOptPage == CTR_EXTRAS_OPTIONS && !OptionLive(sOptFocus, CtrSettings_Voxel()))
+        if (item == SCR_OPTION && FixedOptions() && !OptionLive(sOptFocus, CtrSettings_Voxel()))
             sOptFocus = OPT_TEXT_SPEED;
     }
 }
@@ -8074,3 +8082,4 @@ void CtrBottom_Frame(void)
         WarmOptionCells(mode);
     BottomProfile(frames, mode, ticks, 0);
 }
+

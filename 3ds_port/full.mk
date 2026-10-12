@@ -446,7 +446,6 @@ romfs/bottom/battle.bin: scripts/gen_battle_art.py
 romfs/battle/hud.bin: scripts/gen_battle_hud.py
 	@mkdir -p $(@D)
 	"$(PYTHON)" scripts/gen_battle_hud.py --output $@
-
 romfs/stage/leaves.bin: scripts/gen_intro_margins.py $(ROOT)/graphics/intro/scene_1/bg.4bpp \
 		$(wildcard $(ROOT)/graphics/intro/scene_1/bg?_map.bin)
 	@mkdir -p $(@D)

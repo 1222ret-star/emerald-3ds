@@ -113,6 +113,16 @@ scene (`VOXEL_LIGHTING`). Buildings, trees, signposts and drawn terrain relief
 are modelled on the host from each map's own art (`3ds_port/scripts/gen_voxel_*.py`)
 and read at runtime from `voxel/*.bin`.
 
+With the 3D slider up the world is drawn once per eye, each from a camera
+moved half an interocular distance sideways with the asymmetric frustum of a
+stereo pair (`Mtx_PerspStereo`); the chunk cache, atlases and billboards are
+shared, so the second eye costs its draw calls and fill. The plane of zero
+parallax stands just in front of the player; the game's text and weather are
+composed on it, the same in both eyes. A New 3DS has the frame for the second
+pass; on an Old 3DS the world stays flat unless OPTIONS' 3D WORLD says ON
+(`sVoxelStereo` in `3ds_video.c`), and 3D DEPTH scales the slider. Both are
+extras on the SETTINGS tab's second screen (`3ds_extras.c`).
+
 ## Saves and logs
 
 The 128 KiB flash image is mirrored in RAM and written range by range to

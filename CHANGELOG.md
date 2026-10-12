@@ -60,6 +60,14 @@ Fixed:
   frame, the Pokénav condition cancel icon, the Battle Factory screens, the
   Trainer Hill records, the Battle Pyramid floor colours and the slots' Reel
   Time window are drawn as on the GBA.
+- Voxel overworld in stereoscopic 3D on a New 3DS: with the 3D slider up the
+  world is drawn once per eye from its own camera, so buildings, trees,
+  terrain relief, shadows, reflections and the fog stand at their own depth;
+  the player is just behind the screen and the text and weather on it. An
+  Old 3DS keeps the world flat, as before (the second pass costs it the
+  frame). OPTIONS' SETTINGS tab has a second screen for it: 3D WORLD
+  (AUTO by console, ON, OFF) and 3D DEPTH (25% to 200% of the slider's
+  depth). Build with `VOXEL_STEREO=1` or `=0` to change what AUTO does.
 
 ## 0.3.0 — 2026-10-08
 

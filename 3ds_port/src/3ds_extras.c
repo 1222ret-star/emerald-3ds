@@ -25,6 +25,11 @@ const char *const gCtrExtrasOffOn[2] = {CTR_TEXT("OFF", "OFF", "NON"), CTR_TEXT(
 static const char *const sVisibleWild[] = {CTR_TEXT("OFF", "OFF", "NON"), CTR_TEXT("FEW", "FEW", "PEU"), CTR_TEXT("SOME", "SOME", "MOYEN"), CTR_TEXT("MANY", "MANY", "BEAUCOUP")};
 static const char *const sEncounterRate[] = {CTR_TEXT("NORMAL", "NORMAL", "NORMAL"), CTR_TEXT("OFF", "OFF", "NON"), "1/4", "1/2", "2X"};
 static const char *const sShinyOdds[] = {"1/8192", "1/4096", "1/1024", "1/256", "1/64", CTR_TEXT("ALWAYS", "ALWAYS", "TOUJOURS")};
+/* The voxel world per eye with the 3D slider (3ds_video.c): AUTO is on a
+ * New 3DS only (the second pass costs an Old 3DS the frame), and how deep
+ * the slider's full travel goes, in percent of the renderer's depth. */
+static const char *const sVoxelStereo[] = {CTR_TEXT("AUTO", "AUTO", "AUTO"), CTR_TEXT("ON", "ON", "OUI"), CTR_TEXT("OFF", "OFF", "NON")};
+static const char *const sVoxelDepths[] = {"25%", "50%", "75%", "100%", "125%", "150%", "200%"};
 /*
  * Pokedex (CHEATS): the Hoenn Pokedex complete, the National Pokedex
  * unlocked, or complete (and unlocked): every Pokemon seen and caught. OPTIONS
@@ -179,6 +184,8 @@ static const u8 *SpeedText(void)
 const CtrExtra gCtrExtras[] =
 {
     /* Features add their lines here. */
+    {CTR_EXTRAS_SCREEN(CTR_EXTRAS_OPTIONS, 1), CTR_TEXT("3D WORLD", "MUNDO 3D", "MONDE 3D"), "voxel_stereo", 3, 0, sVoxelStereo, NULL, NULL, NULL},
+    {CTR_EXTRAS_SCREEN(CTR_EXTRAS_OPTIONS, 1), CTR_TEXT("3D DEPTH", "PROFUNDIDAD 3D", "PROFONDEUR 3D"), "voxel_depth", 7, 3, sVoxelDepths, NULL, NULL, NULL},
     {CTR_EXTRAS_ENHANCEMENTS, CTR_TEXT("SPEED", "SPEED", "VITESSE"), "speed", 0, 0, NULL, NULL, SpeedStep, SpeedText},
     {CTR_EXTRAS_ENHANCEMENTS, CTR_TEXT("EXP FOR CATCHING", "EXP FOR CATCHING", "EXP. CAPTURE"), "exp_catch", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
     {CTR_EXTRAS_ENHANCEMENTS, CTR_TEXT("PARTY EXP SHARE", "PARTY EXP SHARE", "MULTI EXP."), "exp_share", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
