@@ -1,11 +1,174 @@
 Pokémon Emerald 3Ds Dual Screen changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: physical/special split
 Applies after 0009-optional-settings.patch; apply with tools/bootstrap.py.
 
+diff --git a/asm/macros/battle_ai_script.inc b/asm/macros/battle_ai_script.inc
+index d14c7e9..56a3635 100644
+--- a/asm/macros/battle_ai_script.inc
++++ b/asm/macros/battle_ai_script.inc
+@@ -551,6 +551,24 @@
+ 	.int \param2
+ 	.endm
+ 
++	@ The category of the move in the result (MOVE_CATEGORY_*), as the battle
++	@ reckons it: the move's own with the physical/special split, its type's
++	@ otherwise; status for a move with no power.
++	.macro get_move_category_from_result
++	.byte 0x63
++	.endm
++
++	@ Whether the target is likely to attack with a category: with the split,
++	@ by the damaging moves it has been seen to use; until it has used one, and
++	@ without the split, by its types against the list (as get_target_type1
++	@ and get_target_type2 with if_in_bytes).
++	.macro if_target_may_use_category category:req, types:req, ptr:req
++	.byte 0x64
++	.byte \category
++	.int \types
++	.int \ptr
++	.endm
++
+ /* useful script macros*/
+ 	.macro get_curr_move_type
+ 	get_type AI_TYPE_MOVE
+diff --git a/data/battle_ai_scripts.s b/data/battle_ai_scripts.s
+index 9459322..3cd7561 100644
+--- a/data/battle_ai_scripts.s
++++ b/data/battle_ai_scripts.s
+@@ -931,8 +931,8 @@ AI_CV_DefenseUp4:
+ 	get_move_power_from_result
+ 	if_equal 0, AI_CV_DefenseUp5
+ 	get_last_used_bank_move AI_TARGET
+-	get_move_type_from_result
+-	if_not_in_bytes AI_CV_DefenseUp_PhysicalTypes, AI_CV_DefenseUp_ScoreDown2
++	get_move_category_from_result
++	if_not_equal MOVE_CATEGORY_PHYSICAL, AI_CV_DefenseUp_ScoreDown2
+ 	if_random_less_than 60, AI_CV_DefenseUp_End
+ AI_CV_DefenseUp5:
+ 	if_random_less_than 60, AI_CV_DefenseUp_End
+@@ -1002,8 +1002,8 @@ AI_CV_SpDefUp4:
+ 	get_move_power_from_result
+ 	if_equal 0, AI_CV_SpDefUp5
+ 	get_last_used_bank_move AI_TARGET
+-	get_move_type_from_result
+-	if_in_bytes AI_CV_SpDefUp_PhysicalTypes, AI_CV_SpDefUp_ScoreDown2
++	get_move_category_from_result
++	if_equal MOVE_CATEGORY_PHYSICAL, AI_CV_SpDefUp_ScoreDown2
+ 	if_random_less_than 60, AI_CV_SpDefUp_End
+ AI_CV_SpDefUp5:
+ 	if_random_less_than 60, AI_CV_SpDefUp_End
+@@ -1100,10 +1100,7 @@ AI_CV_AttackDown3:
+ 	if_hp_more_than AI_TARGET, 70, AI_CV_AttackDown4
+ 	score -2
+ AI_CV_AttackDown4:
+-	get_target_type1
+-	if_in_bytes AI_CV_AttackDown_PhysicalTypeList, AI_CV_AttackDown_End
+-	get_target_type2
+-	if_in_bytes AI_CV_AttackDown_PhysicalTypeList, AI_CV_AttackDown_End
++	if_target_may_use_category MOVE_CATEGORY_PHYSICAL, AI_CV_AttackDown_PhysicalTypeList, AI_CV_AttackDown_End
+ 	if_random_less_than 50, AI_CV_AttackDown_End
+ 	score -2
+ AI_CV_AttackDown_End:
+@@ -1163,10 +1160,7 @@ AI_CV_SpAtkDown3:
+ 	if_hp_more_than AI_TARGET, 70, AI_CV_SpAtkDown4
+ 	score -2
+ AI_CV_SpAtkDown4:
+-	get_target_type1
+-	if_in_bytes AI_CV_SpAtkDown_SpecialTypeList, AI_CV_SpAtkDown_End
+-	get_target_type2
+-	if_in_bytes AI_CV_SpAtkDown_SpecialTypeList, AI_CV_SpAtkDown_End
++	if_target_may_use_category MOVE_CATEGORY_SPECIAL, AI_CV_SpAtkDown_SpecialTypeList, AI_CV_SpAtkDown_End
+ 	if_random_less_than 50, AI_CV_SpAtkDown_End
+ 	score -2
+ AI_CV_SpAtkDown_End:
+@@ -1372,10 +1366,7 @@ AI_CV_Toxic_End:
+ 
+ AI_CV_LightScreen:
+ 	if_hp_less_than AI_USER, 50, AI_CV_LightScreen_ScoreDown2
+-	get_target_type1
+-	if_in_bytes AI_CV_LightScreen_SpecialTypeList, AI_CV_LightScreen_End
+-	get_target_type2
+-	if_in_bytes AI_CV_LightScreen_SpecialTypeList, AI_CV_LightScreen_End
++	if_target_may_use_category MOVE_CATEGORY_SPECIAL, AI_CV_LightScreen_SpecialTypeList, AI_CV_LightScreen_End
+ 	if_random_less_than 50, AI_CV_LightScreen_End
+ AI_CV_LightScreen_ScoreDown2:
+ 	score -2
+@@ -1491,10 +1482,7 @@ AI_CV_SwaggerHasPsychUp_End:
+ 
+ AI_CV_Reflect:
+ 	if_hp_less_than AI_USER, 50, AI_CV_Reflect_ScoreDown2
+-	get_target_type1
+-	if_in_bytes AI_CV_Reflect_PhysicalTypeList, AI_CV_Reflect_End
+-	get_target_type2
+-	if_in_bytes AI_CV_Reflect_PhysicalTypeList, AI_CV_Reflect_End
++	if_target_may_use_category MOVE_CATEGORY_PHYSICAL, AI_CV_Reflect_PhysicalTypeList, AI_CV_Reflect_End
+ 	if_random_less_than 50, AI_CV_Reflect_End
+ AI_CV_Reflect_ScoreDown2:
+ 	score -2
+@@ -1636,8 +1624,8 @@ AI_CV_Counter3:
+ 	score +1
+ AI_CV_Counter4:
+ 	get_last_used_bank_move AI_TARGET
+-	get_move_type_from_result
+-	if_not_in_bytes AI_CV_Counter_PhysicalTypeList, AI_CV_Counter_ScoreDown1
++	get_move_category_from_result
++	if_not_equal MOVE_CATEGORY_PHYSICAL, AI_CV_Counter_ScoreDown1
+ 	if_random_less_than 100, AI_CV_Counter_End
+ 	score +1
+ 	goto AI_CV_Counter_End
+@@ -1648,16 +1636,10 @@ AI_CV_Counter5:
+ 	score +1
+ AI_CV_Counter6:
+ #ifdef BUGFIX
+-	get_target_type1
+-	if_in_bytes AI_CV_Counter_PhysicalTypeList, AI_CV_Counter7
+-	get_target_type2
+-	if_in_bytes AI_CV_Counter_PhysicalTypeList, AI_CV_Counter7
++	if_target_may_use_category MOVE_CATEGORY_PHYSICAL, AI_CV_Counter_PhysicalTypeList, AI_CV_Counter7
+ 	goto AI_CV_Counter_End
+ #else
+-	get_target_type1
+-	if_in_bytes AI_CV_Counter_PhysicalTypeList, AI_CV_Counter_End
+-	get_target_type2
+-	if_in_bytes AI_CV_Counter_PhysicalTypeList, AI_CV_Counter_End
++	if_target_may_use_category MOVE_CATEGORY_PHYSICAL, AI_CV_Counter_PhysicalTypeList, AI_CV_Counter_End
+ #endif
+ AI_CV_Counter7:
+ 	if_random_less_than 50, AI_CV_Counter_End
+@@ -2134,8 +2116,8 @@ AI_CV_MirrorCoat3:
+ 	score +1
+ AI_CV_MirrorCoat4:
+ 	get_last_used_bank_move AI_TARGET
+-	get_move_type_from_result
+-	if_not_in_bytes AI_CV_MirrorCoat_SpecialTypeList, AI_CV_MirrorCoat_ScoreDown1
++	get_move_category_from_result
++	if_not_equal MOVE_CATEGORY_SPECIAL, AI_CV_MirrorCoat_ScoreDown1
+ 	if_random_less_than 100, AI_CV_MirrorCoat_End
+ 	score +1
+ 	goto AI_CV_MirrorCoat_End
+@@ -2146,16 +2128,10 @@ AI_CV_MirrorCoat5:
+ 	score +1
+ AI_CV_MirrorCoat6:
+ #ifdef BUGFIX
+-	get_target_type1
+-	if_in_bytes AI_CV_MirrorCoat_SpecialTypeList, AI_CV_MirrorCoat7
+-	get_target_type2
+-	if_in_bytes AI_CV_MirrorCoat_SpecialTypeList, AI_CV_MirrorCoat7
++	if_target_may_use_category MOVE_CATEGORY_SPECIAL, AI_CV_MirrorCoat_SpecialTypeList, AI_CV_MirrorCoat7
+ 	goto AI_CV_MirrorCoat_End
+ #else
+-	get_target_type1
+-	if_in_bytes AI_CV_MirrorCoat_SpecialTypeList, AI_CV_MirrorCoat_End
+-	get_target_type2
+-	if_in_bytes AI_CV_MirrorCoat_SpecialTypeList, AI_CV_MirrorCoat_End
++	if_target_may_use_category MOVE_CATEGORY_SPECIAL, AI_CV_MirrorCoat_SpecialTypeList, AI_CV_MirrorCoat_End
+ #endif
+ AI_CV_MirrorCoat7:
+ 	if_random_less_than 50, AI_CV_MirrorCoat_End
 diff --git a/include/battle.h b/include/battle.h
-index 855f085..c928f9f 100644
+index 855f085..f333a17 100644
 --- a/include/battle.h
 +++ b/include/battle.h
-@@ -463,6 +463,27 @@ STATIC_ASSERT(sizeof(((struct BattleStruct *)0)->palaceFlags) * 8 >= MAX_BATTLER
+@@ -463,6 +463,24 @@ STATIC_ASSERT(sizeof(((struct BattleStruct *)0)->palaceFlags) * 8 >= MAX_BATTLER
  #define IS_TYPE_PHYSICAL(moveType) (moveType < TYPE_MYSTERY)
  #define IS_TYPE_SPECIAL(moveType) (moveType > TYPE_MYSTERY)
  
@@ -14,9 +177,6 @@ index 855f085..c928f9f 100644
 +// port uses each move's own category, as Generation IV and later do
 +// (pokemon.c, MoveSplitEnabled; src/data/move_categories.h).
 +#ifdef PLATFORM_3DS
-+#define MOVE_CATEGORY_PHYSICAL 0
-+#define MOVE_CATEGORY_SPECIAL  1
-+#define MOVE_CATEGORY_STATUS   2
 +extern const u8 gMoveCategories[];
 +bool8 MoveSplitEnabled(void);
 +// The category icons, 32x16 frames by MOVE_CATEGORY_* (pokemon_summary_screen.c).
@@ -33,6 +193,111 @@ index 855f085..c928f9f 100644
  #define TARGET_TURN_DAMAGED ((gSpecialStatuses[gBattlerTarget].physicalDmg != 0 || gSpecialStatuses[gBattlerTarget].specialDmg != 0))
  
  #define IS_BATTLER_OF_TYPE(battler, type) ((gBattleMons[battler].types[0] == type || gBattleMons[battler].types[1] == type))
+diff --git a/include/constants/battle.h b/include/constants/battle.h
+index f6b4836..5015cd6 100644
+--- a/include/constants/battle.h
++++ b/include/constants/battle.h
+@@ -383,4 +383,11 @@ enum BattlerId
+ // Indicator for the party summary bar to display an empty slot.
+ #define HP_EMPTY_SLOT 0xFFFF
+ 
++// A move's category: physical, special or status. On the GBA it follows the
++// move's type; with ENHANCEMENTS' PHYS/SPEC SPLIT the 3DS port uses each
++// move's own (battle.h, IS_MOVE_PHYSICAL; the AI's get_move_category_from_result).
++#define MOVE_CATEGORY_PHYSICAL 0
++#define MOVE_CATEGORY_SPECIAL  1
++#define MOVE_CATEGORY_STATUS   2
++
+ #endif // GUARD_CONSTANTS_BATTLE_H
+diff --git a/src/battle_ai_script_commands.c b/src/battle_ai_script_commands.c
+index 6fd3cda..298ee03 100644
+--- a/src/battle_ai_script_commands.c
++++ b/src/battle_ai_script_commands.c
+@@ -149,6 +149,8 @@ static void Cmd_is_of_type(void);
+ static void Cmd_if_target_is_ally(void);
+ static void Cmd_if_flash_fired(void);
+ static void Cmd_if_holds_item(void);
++static void Cmd_get_move_category_from_result(void);
++static void Cmd_if_target_may_use_category(void);
+ 
+ // ewram
+ EWRAM_DATA const u8 *gAIScriptPtr = NULL;
+@@ -258,6 +260,8 @@ static const BattleAICmdFunc sBattleAICmdTable[] =
+     Cmd_check_ability,                              // 0x60
+     Cmd_if_flash_fired,                             // 0x61
+     Cmd_if_holds_item,                              // 0x62
++    Cmd_get_move_category_from_result,              // 0x63
++    Cmd_if_target_may_use_category,                 // 0x64
+ };
+ 
+ // For the purposes of determining the most powerful move in a moveset, these
+@@ -2064,6 +2068,66 @@ static void Cmd_if_holds_item(void)
+         gAIScriptPtr += 8;
+ }
+ 
++// A move's category as the battle reckons it (IS_MOVE_PHYSICAL): its own with
++// ENHANCEMENTS' PHYS/SPEC SPLIT, its type's otherwise; status for a move with
++// no power. The scripts' guesses at physical and special (Counter, Mirror
++// Coat, Reflect, the stat moves) went by types alone.
++static u8 AI_GetMoveCategory(u16 move)
++{
++    if (gBattleMoves[move].power == 0)
++        return MOVE_CATEGORY_STATUS;
++    if (IS_MOVE_PHYSICAL(move, gBattleMoves[move].type))
++        return MOVE_CATEGORY_PHYSICAL;
++    return MOVE_CATEGORY_SPECIAL;
++}
++
++static void Cmd_get_move_category_from_result(void)
++{
++    AI_THINKING_STRUCT->funcResult = AI_GetMoveCategory(AI_THINKING_STRUCT->funcResult);
++    gAIScriptPtr += 1;
++}
++
++// Whether the target is likely to attack with a category. Without the split a
++// type decides it, so the target's types against the script's list, as the
++// scripts did with get_target_type1/2 and if_in_bytes (some lists leave types
++// out). With it a type tells little: the damaging moves the AI has seen the
++// target use (BATTLE_HISTORY), and its types only until it has used one.
++static void Cmd_if_target_may_use_category(void)
++{
++    u8 category = gAIScriptPtr[1];
++    const u8 *types = T1_READ_PTR(gAIScriptPtr + 2);
++    bool32 seen = FALSE, may = FALSE;
++    s32 i;
++
++#ifdef PLATFORM_3DS
++    if (MoveSplitEnabled())
++    {
++        for (i = 0; i < MAX_MON_MOVES; i++)
++        {
++            u16 move = BATTLE_HISTORY->usedMoves[gBattlerTarget].moves[i];
++
++            if (move == MOVE_NONE || gBattleMoves[move].power == 0)
++                continue;
++            seen = TRUE;
++            if (AI_GetMoveCategory(move) == category)
++                may = TRUE;
++        }
++    }
++#endif
++    if (!seen)
++    {
++        for (i = 0; types[i] != 0xFF; i++)
++        {
++            if (gBattleMons[gBattlerTarget].types[0] == types[i] || gBattleMons[gBattlerTarget].types[1] == types[i])
++                may = TRUE;
++        }
++    }
++    if (may)
++        gAIScriptPtr = T1_READ_PTR(gAIScriptPtr + 6);
++    else
++        gAIScriptPtr += 10;
++}
++
+ static void Cmd_get_gender(void)
+ {
+     u8 battler;
 diff --git a/src/battle_script_commands.c b/src/battle_script_commands.c
 index 22088a4..4ae4c71 100644
 --- a/src/battle_script_commands.c
