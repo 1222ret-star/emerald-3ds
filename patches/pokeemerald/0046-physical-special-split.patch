@@ -602,7 +602,7 @@ index 1d6126a..66b3ee9 100644
  
      if (gMonSpritesGfxPtr == NULL)
          CreateMonSpritesGfxManager(MON_SPR_GFX_MANAGER_A, MON_SPR_GFX_MODE_NORMAL);
-@@ -1155,9 +1204,236 @@ void ShowPokemonSummaryScreenHandleDeoxys(u8 mode, struct BoxPokemon *mons, u8 m
+@@ -1155,9 +1204,239 @@ void ShowPokemonSummaryScreenHandleDeoxys(u8 mode, struct BoxPokemon *mons, u8 m
      sMonSummaryScreen->handleDeoxys = TRUE;
  }
  
@@ -615,6 +615,9 @@ index 1d6126a..66b3ee9 100644
 +#if defined(PORT_BRIDGE) && GAME_LANGUAGE == LANGUAGE_SPANISH
 +// Shortened like POTENC. and PRECIS. below it: CATEGORÍA is wider than the label column.
 +static const u8 sText_Category[] = _("CATEG.");
++#elif defined(PORT_BRIDGE) && GAME_LANGUAGE == LANGUAGE_FRENCH
++// Shortened like the Spanish one: CATÉGORIE is wider than the label column.
++static const u8 sText_Category[] = _("CATÉG.");
 +#else
 +static const u8 sText_Category[] = _("CATEGORY");
 +#endif
@@ -839,7 +842,7 @@ index 1d6126a..66b3ee9 100644
      AnimateSprites();
      BuildOamBuffer();
      DoScheduledBgTilemapCopiesToVram();
-@@ -1499,6 +1775,12 @@ static void SetDefaultTilemaps(void)
+@@ -1499,6 +1778,12 @@ static void SetDefaultTilemaps(void)
          ChangeBgX(2, 0x10000, BG_COORD_ADD);
          ClearWindowTilemap(PSS_LABEL_WINDOW_PORTRAIT_SPECIES);
          ClearWindowTilemap(PSS_LABEL_WINDOW_POKEMON_SKILLS_STATUS);
@@ -852,7 +855,7 @@ index 1d6126a..66b3ee9 100644
      }
  
      if (sMonSummaryScreen->summary.ailment == AILMENT_NONE)
-@@ -2978,6 +3260,17 @@ static void ResetWindows(void)
+@@ -2978,6 +3263,17 @@ static void ResetWindows(void)
  {
      u8 i;
  
@@ -870,7 +873,7 @@ index 1d6126a..66b3ee9 100644
      InitWindows(sSummaryTemplate);
      DeactivateAllTextPrinters();
      for (i = 0; i < PSS_LABEL_WINDOW_END; i++)
-@@ -3134,8 +3427,23 @@ static void PrintPageNamesAndStats(void)
+@@ -3134,8 +3430,23 @@ static void PrintPageNamesAndStats(void)
      PrintTextOnWindow(PSS_LABEL_WINDOW_POKEMON_SKILLS_EXP, gText_ExpPoints, 6, 1, 0, 1);
      PrintTextOnWindow(PSS_LABEL_WINDOW_POKEMON_SKILLS_EXP, gText_NextLv, 6, 17, 0, 1);
      PrintTextOnWindow(PSS_LABEL_WINDOW_POKEMON_SKILLS_STATUS, gText_Status, 2, 1, 0, 1);
@@ -894,7 +897,7 @@ index 1d6126a..66b3ee9 100644
      PrintTextOnWindow(PSS_LABEL_WINDOW_MOVES_APPEAL_JAM, gText_Appeal, 0, 1, 0, 1);
      PrintTextOnWindow(PSS_LABEL_WINDOW_MOVES_APPEAL_JAM, gText_Jam, 0, 17, 0, 1);
  }
-@@ -3884,7 +4192,12 @@ static void PrintMovePowerAndAccuracy(u16 moveIndex)
+@@ -3884,7 +4195,12 @@ static void PrintMovePowerAndAccuracy(u16 moveIndex)
      const u8 *text;
      if (moveIndex != 0)
      {
@@ -908,7 +911,7 @@ index 1d6126a..66b3ee9 100644
  
          if (gBattleMoves[moveIndex].power < 2)
          {
-@@ -3896,7 +4209,7 @@ static void PrintMovePowerAndAccuracy(u16 moveIndex)
+@@ -3896,7 +4212,7 @@ static void PrintMovePowerAndAccuracy(u16 moveIndex)
              text = gStringVar1;
          }
  
@@ -917,7 +920,7 @@ index 1d6126a..66b3ee9 100644
  
          if (gBattleMoves[moveIndex].accuracy == 0)
          {
-@@ -3908,7 +4221,7 @@ static void PrintMovePowerAndAccuracy(u16 moveIndex)
+@@ -3908,7 +4224,7 @@ static void PrintMovePowerAndAccuracy(u16 moveIndex)
              text = gStringVar1;
          }
  
@@ -926,7 +929,7 @@ index 1d6126a..66b3ee9 100644
      }
  }
  
-@@ -3981,6 +4294,9 @@ static void PrintContestMoveDescription(u8 moveSlot)
+@@ -3981,6 +4297,9 @@ static void PrintContestMoveDescription(u8 moveSlot)
  static void PrintMoveDetails(u16 move)
  {
      u8 windowId = AddWindowFromTemplateList(sPageMovesTemplate, PSS_DATA_WINDOW_MOVE_DESCRIPTION);

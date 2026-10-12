@@ -191,7 +191,7 @@ const CtrExtra gCtrExtras[] =
     {CTR_EXTRAS_ENHANCEMENTS, CTR_TEXT("RUN INDOORS", "RUN INDOORS", "COURSE INTÉR."), "run_indoors", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
     /* Moves physical or special by their own category, as from Gen IV on
      * (pokemon.c, MoveSplitEnabled). */
-    {CTR_EXTRAS_ENHANCEMENTS, "PHYS/SPEC SPLIT", "move_split", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
+    {CTR_EXTRAS_ENHANCEMENTS, CTR_TEXT("PHYS/SPEC SPLIT", "PHYS/SPEC SPLIT", "PHYS./SPÉC."), "move_split", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
     {CTR_EXTRAS_CHEATS, CTR_TEXT("WILD ENCOUNTERS", "WILD ENCOUNTERS", "RENCONTRES"), "encounter_rate", 5, 0, sEncounterRate, NULL, NULL, NULL},
     {CTR_EXTRAS_CHEATS, CTR_TEXT("SHINY ODDS", "SHINY ODDS", "CHROMATIQUES"), "shiny_odds", 6, 0, sShinyOdds, NULL, NULL, NULL},
     {CTR_EXTRAS_CHEATS, CTR_TEXT("ALWAYS CATCH", "ALWAYS CATCH", "CAPTURE SÛRE"), "always_catch", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
