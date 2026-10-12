@@ -7,6 +7,7 @@
 #include "3ds_audio.h"
 #include "3ds_video.h"
 #include "3ds_assets.h"
+#include "3ds_local.h"
 #include "voxel/ctr_voxel.h"
 /* The bottom-screen diagnostic overlay: off, and no longer toggled by SELECT.
  * The figures it showed are still logged periodically to the SD card. */
@@ -94,6 +95,9 @@ bool CtrPlatform_Init(void)
     /* A console without dumped DSP firmware still plays; it just plays silent.
      * CtrAudio_Init says so in the log and the game is left running. */
     CtrAudio_Init();
+    /* The radio of the emulated Wireless Adapter; idle until a link counter
+     * starts a session. */
+    LocalLink_Init();
     return true;
 }
 
@@ -260,7 +264,9 @@ static void PaceUpdate(void)
 
 static bool FrameShown(uint64_t now)
 {
-    int speed = CtrSettings_Speed();
+    /* In a local wireless session everyone plays at the same speed: the link
+     * code times out on a partner that runs slower. */
+    int speed = LocalLink_InSession() ? 1 : CtrSettings_Speed();
     float since = sShownTick ? (now - sShownTick) * 1000.0f / SYSCLOCK_ARM11 : FRAME_MS;
 
     if (sPace && speed <= 1)
@@ -408,6 +414,7 @@ void CtrPlatform_Shutdown(void)
     CtrSettings_Shutdown();
     if (sHooks.shutdown)
         sHooks.shutdown();
+    LocalLink_Shutdown();
     CtrVideo_Shutdown();
     CtrAudio_Shutdown();
     CtrLog_Write(CTR_LOG_BOOT, "clean shutdown, platform frames=%llu", (unsigned long long)sFrames);

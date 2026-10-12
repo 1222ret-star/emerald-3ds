@@ -1,0 +1,950 @@
+/*
+ * Local wireless play: the radio of the emulated Wireless Adapter
+ * (3ds_rfu_adapter.c) is the 3DS's local wireless (the UDS service), so the
+ * game's wireless features find other systems nearby. See include/3ds_local.h.
+ *
+ * Sessions. Wireless Adapters see every adapter in range; UDS has networks,
+ * each with a host and up to 15 others. So players meet in a network, a
+ * session: at a link counter the game looks for a session of that counter
+ * nearby (its beacon's application data says which, and the protocol
+ * version) and joins it, or hosts one if there is none. Everyone in a
+ * session then sees everyone else, as adapters in range would.
+ *
+ * Messages. Every system in a session sends straight to every other (UDS
+ * forwards between clients itself). UDS frames can be lost, and the adapter
+ * expects what it sends to arrive, in order, as the relay of the online
+ * version guaranteed; so each pair of systems keeps a stream of messages:
+ * numbered, acknowledged, and sent again until they are (go-back-N). A
+ * frame's messages to a system go in one UDS frame.
+ *
+ * The UDS calls are made by a thread of their own: looking for sessions takes
+ * a second or two, and the game must not stop meanwhile. The game's side (the
+ * adapter, the counters' script) only queues messages, reads events and the
+ * table of players, under a lock.
+ */
+#include <3ds.h>
+#include <stdbool.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "3ds_local.h"
+#include "3ds_log.h"
+#include "../../include/constants/local_link.h"
+
+/* UDS: our network's id and passphrase, and our data channel. */
+#define COMM_ID 0x45E3D501u
+#define PASSPHRASE "Pokemon Emerald 3DS local wireless"
+#define DATA_CHANNEL 1
+#define SHAREDMEM_SIZE 0x3000
+#define MAX_NODES 5 /* a session: the host and four others, as the Union Room */
+/* Sessions of other versions of this protocol are not joined. */
+#define PROTOCOL_VERSION 1
+static const char kMagic[4] = {'E', 'M', '3', 'L'};
+
+/* How long to look for a session before hosting one: a second and a half,
+ * plus up to one more at random. Two players who talk to their attendants
+ * together can still both end up hosting, each alone: a host with nobody in
+ * its session looks again every couple of seconds, and moves to another
+ * session of its counter if there is one (see MergeAlone). */
+#define SEARCH_MS 1500
+#define SEARCH_JITTER_MS 1000
+#define MERGE_MS 1500
+#define MERGE_JITTER_MS 1500
+
+#define NODE_SLOTS 17     /* UDS node ids are 1-16 */
+#define OUT_QUEUE 128     /* messages to one system not yet acknowledged */
+#define MSG_MAX 168       /* the largest message: an advert, or 160 bytes of data */
+#define RESEND_MS 100     /* unacknowledged this long: sent again */
+#define EVENT_QUEUE 512
+#define FRAME_MAX 1400    /* a UDS data frame takes 0x5C6 bytes */
+#define THREAD_STACK 0x4000
+
+enum
+{
+    MSG_DATA = 1,   /* the adapter's data, for LOCAL_EV_RECV */
+    MSG_ADVERT = 2, /* u8 hosting, u8 nextSlot, u8 hasAdvert, advert */
+};
+
+/* A UDS frame: this header, then messages (u16 seq, u8 type, u8 0, u16 len,
+ * data), then zeros up to a multiple of 4 bytes. Azahar loses frames of some
+ * sizes, and later ones behind them; padded, they all arrive. */
+struct FrameHeader
+{
+    uint8_t magic; /* 0xE3 */
+    uint8_t version;
+    uint16_t ack;  /* the next message we expect from the receiver */
+    uint16_t bodyLen;
+    uint16_t reserved;
+};
+#define FRAME_MAGIC 0xE3
+#define MSG_HEADER 6
+
+/* What a session's beacon tells systems looking for one. */
+struct AppData
+{
+    char magic[4];
+    uint8_t version;
+    uint8_t kind;
+    uint8_t reserved[2];
+    uint32_t token; /* the host's, at random: which of two lone hosts moves */
+};
+
+struct OutMessage
+{
+    uint16_t seq;
+    uint8_t type;
+    uint16_t len;
+    uint32_t sentMs; /* 0: not sent yet */
+    uint8_t data[MSG_MAX];
+};
+
+struct Node
+{
+    bool present;
+    struct LocalPeer info;
+    /* Messages to it: the oldest unacknowledged first. */
+    struct OutMessage out[OUT_QUEUE];
+    uint16_t outHead, outCount;
+    uint16_t nextSeq;
+    bool overflowed;
+    /* Messages from it. */
+    uint16_t expect;
+    bool ackDue;
+};
+
+static struct
+{
+    LightLock lock;
+    Thread thread;
+    bool ready;  /* LocalLink_Init done */
+    volatile bool quit;
+    bool udsReady;
+
+    /* Asked for by the game, done by the thread. */
+    bool startAsked, leaveAsked;
+    uint8_t askedKind;
+
+    uint8_t state; /* LOCAL_SESSION_* */
+    uint8_t kind;
+    bool inNetwork; /* the thread's: hosting or joined a UDS network */
+    bool hosting;
+    uint32_t token;       /* ours, in our session's beacon */
+    uint32_t nextMergeMs; /* a lone host looks for other sessions then */
+    uint16_t myId;
+    uint32_t generation;
+    udsBindContext bind;
+
+    struct Node nodes[NODE_SLOTS];
+    uint16_t nodeMask; /* nodes in the session, us included */
+
+    /* Our adapter's broadcast. */
+    uint8_t advertHosting, advertNextSlot, hasAdvert;
+    uint8_t advert[LOCAL_ADVERT_SIZE];
+
+    struct LocalEvent events[EVENT_QUEUE];
+    uint16_t eventHead, eventCount;
+} sL;
+
+static uint8_t sFrame[UDS_DATAFRAME_MAXSIZE];
+
+uint32_t LocalLink_Milliseconds(void)
+{
+    uint32_t ms = (uint32_t)(svcGetSystemTick() / CPU_TICKS_PER_MSEC);
+    return ms ? ms : 1;
+}
+
+static bool SeqBefore(uint16_t a, uint16_t b)
+{
+    return (int16_t)(a - b) < 0;
+}
+
+/* ---- Events for the game (lock held) ------------------------------------ */
+
+static void PushEvent(uint8_t type, uint16_t id, const uint8_t *data, uint32_t len)
+{
+    struct LocalEvent *ev;
+
+    if (sL.eventCount == EVENT_QUEUE)
+    {
+        CtrLog_Write(CTR_LOG_ERROR, "local: event queue full, dropping");
+        return;
+    }
+    ev = &sL.events[(sL.eventHead + sL.eventCount++) % EVENT_QUEUE];
+    ev->type = type;
+    ev->id = id;
+    if (len > sizeof(ev->data))
+        len = sizeof(ev->data);
+    ev->len = (uint16_t)len;
+    if (len)
+        memcpy(ev->data, data, len);
+}
+
+/* ---- Message streams (lock held) ---------------------------------------- */
+
+static void QueueMessage(uint16_t id, uint8_t type, const void *data, uint32_t len)
+{
+    struct Node *n;
+    struct OutMessage *m;
+
+    if (id == 0 || id >= NODE_SLOTS || !sL.nodes[id].present || id == sL.myId)
+        return;
+    n = &sL.nodes[id];
+    if (len > MSG_MAX)
+        len = MSG_MAX;
+    if (n->outCount == OUT_QUEUE)
+    {
+        /* The other system stopped answering; UDS will drop it soon. */
+        if (!n->overflowed)
+            CtrLog_Write(CTR_LOG_ERROR, "local: queue to %u full", id);
+        n->overflowed = true;
+        return;
+    }
+    m = &n->out[(n->outHead + n->outCount++) % OUT_QUEUE];
+    m->seq = n->nextSeq++;
+    m->type = type;
+    m->len = (uint16_t)len;
+    m->sentMs = 0;
+    memcpy(m->data, data, len);
+}
+
+static void QueueAdvert(uint16_t id)
+{
+    uint8_t msg[3 + LOCAL_ADVERT_SIZE];
+
+    msg[0] = sL.advertHosting;
+    msg[1] = sL.advertNextSlot;
+    msg[2] = sL.hasAdvert;
+    memcpy(msg + 3, sL.advert, LOCAL_ADVERT_SIZE);
+    QueueMessage(id, MSG_ADVERT, msg, sizeof(msg));
+}
+
+static void NodeJoined(uint16_t id)
+{
+    struct Node *n = &sL.nodes[id];
+
+    memset(n, 0, sizeof(*n));
+    n->present = true;
+    n->info.valid = 1;
+    n->info.id = id;
+    if (id != sL.myId)
+    {
+        CtrLog_Write(CTR_LOG_GAME, "local: player %u joined", id);
+        QueueAdvert(id);
+    }
+}
+
+static void NodeLeft(uint16_t id)
+{
+    if (!sL.nodes[id].present)
+        return;
+    if (id != sL.myId)
+    {
+        CtrLog_Write(CTR_LOG_GAME, "local: player %u left", id);
+        PushEvent(LOCAL_EV_LEFT, id, NULL, 0);
+    }
+    memset(&sL.nodes[id], 0, sizeof(sL.nodes[id]));
+}
+
+static void HandleMessage(uint16_t from, uint8_t type, const uint8_t *data, uint16_t len)
+{
+    struct Node *n = &sL.nodes[from];
+
+    if (type == MSG_DATA)
+    {
+        PushEvent(LOCAL_EV_RECV, from, data, len);
+    }
+    else if (type == MSG_ADVERT && len >= 3 + LOCAL_ADVERT_SIZE)
+    {
+        n->info.hosting = data[0];
+        n->info.nextSlot = data[1];
+        n->info.hasAdvert = data[2];
+        memcpy(n->info.advert, data + 3, LOCAL_ADVERT_SIZE);
+        if (n->info.hosting)
+            n->info.lastHostingMs = LocalLink_Milliseconds();
+    }
+}
+
+static void HandleFrame(uint16_t from, const uint8_t *frame, size_t size)
+{
+    const struct FrameHeader *h = (const struct FrameHeader *)frame;
+    struct Node *n;
+    uint32_t pos, end;
+
+    if (from == 0 || from >= NODE_SLOTS || size < sizeof(*h) || h->magic != FRAME_MAGIC
+     || h->version != PROTOCOL_VERSION || sizeof(*h) + h->bodyLen > size)
+        return;
+    n = &sL.nodes[from];
+    if (!n->present)
+        NodeJoined(from); /* its frame came before the status said so */
+
+    /* What it has of ours. */
+    while (n->outCount && SeqBefore(n->out[n->outHead].seq, h->ack))
+    {
+        n->outHead = (n->outHead + 1) % OUT_QUEUE;
+        n->outCount--;
+        n->overflowed = false;
+    }
+
+    pos = sizeof(*h);
+    end = sizeof(*h) + h->bodyLen;
+    while (pos + MSG_HEADER <= end)
+    {
+        uint16_t seq = frame[pos] | (frame[pos + 1] << 8);
+        uint8_t type = frame[pos + 2];
+        uint16_t len = frame[pos + 4] | (frame[pos + 5] << 8);
+
+        pos += MSG_HEADER;
+        if (pos + len > end)
+            break;
+        n->ackDue = true;
+        if (seq == n->expect)
+        {
+            n->expect++;
+            HandleMessage(from, type, frame + pos, len);
+        }
+        /* Older: we had it, our ack was lost. Newer: one before it was lost,
+         * and it comes again with that one. */
+        pos += len;
+    }
+}
+
+/* ---- The thread's side of UDS ------------------------------------------- */
+
+static void SendFrame(uint16_t to, uint32_t bodyLen)
+{
+    struct FrameHeader *h = (struct FrameHeader *)sFrame;
+    uint32_t size = (sizeof(*h) + bodyLen + 3) & ~3u;
+    Result ret;
+
+    h->magic = FRAME_MAGIC;
+    h->version = PROTOCOL_VERSION;
+    h->ack = sL.nodes[to].expect;
+    h->bodyLen = (uint16_t)bodyLen;
+    h->reserved = 0;
+    memset(sFrame + sizeof(*h) + bodyLen, 0, size - sizeof(*h) - bodyLen);
+    ret = udsSendTo(to, DATA_CHANNEL, UDS_SENDFLAG_Default, sFrame, size);
+    /* UDS_CHECK_SENDTO_FATALERROR, which -Wsign-compare rejects: that one
+     * error only means the frame wasn't sent. */
+    if (R_FAILED(ret) && (u32)ret != 0xC86113F0u)
+        CtrLog_Write(CTR_LOG_ERROR, "local: send to %u failed (%08lx)", to, ret);
+}
+
+/* What's due to one system: messages not sent yet, and when the oldest has
+ * waited too long, everything from it again. An ack alone if nothing else. */
+static void FlushNode(uint16_t id, uint32_t now)
+{
+    struct Node *n = &sL.nodes[id];
+    bool resend = n->outCount && n->out[n->outHead].sentMs && now - n->out[n->outHead].sentMs >= RESEND_MS;
+    uint16_t i = 0;
+    int frames = 0;
+
+    while (frames < 4)
+    {
+        uint32_t body = 0;
+        uint8_t *p = sFrame + sizeof(struct FrameHeader);
+
+        for (; i < n->outCount; i++)
+        {
+            struct OutMessage *m = &n->out[(n->outHead + i) % OUT_QUEUE];
+
+            if (m->sentMs && !resend)
+                continue;
+            if (body + MSG_HEADER + m->len > FRAME_MAX)
+                break;
+            p[0] = m->seq & 0xFF;
+            p[1] = m->seq >> 8;
+            p[2] = m->type;
+            p[3] = 0;
+            p[4] = m->len & 0xFF;
+            p[5] = m->len >> 8;
+            memcpy(p + MSG_HEADER, m->data, m->len);
+            p += MSG_HEADER + m->len;
+            body += MSG_HEADER + m->len;
+            m->sentMs = now;
+        }
+        if (body == 0 && !n->ackDue)
+            break;
+        SendFrame(id, body);
+        n->ackDue = false;
+        frames++;
+        if (i >= n->outCount)
+            break;
+    }
+}
+
+static void ReadFrames(void)
+{
+    for (int i = 0; i < 64; i++)
+    {
+        size_t got = 0;
+        u16 from = 0;
+        Result ret = udsPullPacket(&sL.bind, sFrame, sizeof(sFrame), &got, &from);
+
+        if (R_FAILED(ret))
+        {
+            static unsigned told;
+            if (told++ < 8)
+                CtrLog_Write(CTR_LOG_ERROR, "local: receive failed (%08lx)", ret);
+            break;
+        }
+        if (got == 0)
+            break;
+        LightLock_Lock(&sL.lock);
+        HandleFrame(from, sFrame, got);
+        LightLock_Unlock(&sL.lock);
+    }
+}
+
+static void EndSession(uint8_t state)
+{
+    LightLock_Lock(&sL.lock);
+    for (uint16_t id = 1; id < NODE_SLOTS; id++)
+        NodeLeft(id);
+    sL.nodeMask = 0;
+    sL.myId = 0;
+    sL.generation++;
+    sL.state = state;
+    LightLock_Unlock(&sL.lock);
+}
+
+static void LeaveNetwork(void)
+{
+    if (!sL.inNetwork)
+        return;
+    sL.inNetwork = false;
+    if (sL.hosting)
+        udsDestroyNetwork();
+    else
+        udsDisconnectNetwork();
+    udsUnbind(&sL.bind);
+    sL.hosting = false;
+    CtrLog_Write(CTR_LOG_GAME, "local: left the session");
+}
+
+/* Who's in the network now: players joining and leaving. */
+static void UpdateNodes(void)
+{
+    udsConnectionStatus st;
+    uint16_t mask, changed;
+
+    if (!udsWaitConnectionStatusEvent(false, false))
+        return;
+    if (R_FAILED(udsGetConnectionStatus(&st)))
+        return;
+    /* Not in a network any more: the host went, or we were sent away. */
+    if (st.status != 6 && st.status != 9 && st.status != 10)
+    {
+        CtrLog_Write(CTR_LOG_GAME, "local: the session ended (status %lu)", st.status);
+        udsUnbind(&sL.bind);
+        sL.inNetwork = false;
+        sL.hosting = false;
+        EndSession(LOCAL_SESSION_NONE);
+        return;
+    }
+    LightLock_Lock(&sL.lock);
+    sL.myId = st.cur_NetworkNodeID;
+    mask = st.node_bitmask;
+    changed = mask ^ sL.nodeMask;
+    for (uint16_t id = 1; id < NODE_SLOTS; id++)
+    {
+        if (!(changed & (1u << (id - 1))))
+            continue;
+        if (mask & (1u << (id - 1)))
+        {
+            if (!sL.nodes[id].present)
+                NodeJoined(id);
+        }
+        else
+        {
+            NodeLeft(id);
+        }
+    }
+    sL.nodeMask = mask;
+    LightLock_Unlock(&sL.lock);
+}
+
+static bool StartUds(void)
+{
+    Result ret;
+
+    if (sL.udsReady)
+        return true;
+    ret = udsInit(SHAREDMEM_SIZE, NULL);
+    if (R_FAILED(ret))
+    {
+        CtrLog_Write(CTR_LOG_ERROR, "local: udsInit failed (%08lx)", ret);
+        return false;
+    }
+    sL.udsReady = true;
+    return true;
+}
+
+static bool SessionMatches(const udsNetworkScanInfo *net, uint8_t kind, uint32_t *token)
+{
+    struct AppData app;
+    size_t size = 0;
+
+    if (R_FAILED(udsGetNetworkStructApplicationData(&net->network, &app, sizeof(app), &size))
+     || size < sizeof(app) || memcmp(app.magic, kMagic, sizeof(kMagic)) != 0)
+        return false;
+    if (app.version != PROTOCOL_VERSION)
+    {
+        CtrLog_Write(CTR_LOG_GAME, "local: a session of protocol %u nearby, not ours", app.version);
+        return false;
+    }
+    if (token)
+        *token = app.token;
+    return app.kind == kind && net->network.total_nodes < net->network.max_nodes;
+}
+
+static bool Connect(const udsNetworkScanInfo *net)
+{
+    Result ret = udsConnectNetwork(&net->network, PASSPHRASE, sizeof(PASSPHRASE), &sL.bind,
+                                   UDS_BROADCAST_NETWORKNODEID, UDSCONTYPE_Client, DATA_CHANNEL,
+                                   UDS_DEFAULT_RECVBUFSIZE);
+
+    if (R_FAILED(ret))
+    {
+        CtrLog_Write(CTR_LOG_ERROR, "local: joining failed (%08lx)", ret);
+        return false;
+    }
+    sL.hosting = false;
+    return true;
+}
+
+static bool JoinNearby(uint8_t kind, uint32_t lookMs)
+{
+    static uint32_t scanBuffer[0x4000 / 4];
+    uint32_t until = LocalLink_Milliseconds() + lookMs;
+
+    do
+    {
+        udsNetworkScanInfo *nets = NULL;
+        size_t total = 0;
+        Result ret = udsScanBeacons(scanBuffer, sizeof(scanBuffer), &nets, &total, COMM_ID, 0, NULL, false);
+
+        if (R_FAILED(ret))
+        {
+            CtrLog_Write(CTR_LOG_ERROR, "local: scan failed (%08lx)", ret);
+            free(nets);
+            svcSleepThread(200000000LL);
+            continue;
+        }
+        for (size_t i = 0; i < total; i++)
+        {
+            if (SessionMatches(&nets[i], kind, NULL) && Connect(&nets[i]))
+            {
+                free(nets);
+                return true;
+            }
+        }
+        free(nets);
+    } while (!sL.quit && LocalLink_Milliseconds() < until);
+    return false;
+}
+
+static bool HostSession(uint8_t kind)
+{
+    udsNetworkStruct net;
+    struct AppData app = {{0}, PROTOCOL_VERSION, kind, {0, 0}, sL.token};
+    Result ret;
+
+    memcpy(app.magic, kMagic, sizeof(kMagic));
+    udsGenerateDefaultNetworkStruct(&net, COMM_ID, 0, MAX_NODES);
+    ret = udsCreateNetwork(&net, PASSPHRASE, sizeof(PASSPHRASE), &sL.bind, DATA_CHANNEL, UDS_DEFAULT_RECVBUFSIZE);
+    if (R_FAILED(ret))
+    {
+        CtrLog_Write(CTR_LOG_ERROR, "local: hosting failed (%08lx)", ret);
+        return false;
+    }
+    ret = udsSetApplicationData(&app, sizeof(app));
+    if (R_FAILED(ret))
+        CtrLog_Write(CTR_LOG_ERROR, "local: beacon data not set (%08lx)", ret);
+    sL.hosting = true;
+    sL.nextMergeMs = LocalLink_Milliseconds() + MERGE_MS + (uint32_t)(rand() % MERGE_JITTER_MS);
+    return true;
+}
+
+/* Who's in the network we just joined or made: our id, and the others so far
+ * (the status event may already be spent). */
+static void TakeNetwork(bool quiet)
+{
+    udsConnectionStatus st;
+
+    sL.inNetwork = true;
+    udsGetConnectionStatus(&st);
+    udsWaitConnectionStatusEvent(false, false);
+    LightLock_Lock(&sL.lock);
+    for (uint16_t id = 1; id < NODE_SLOTS; id++)
+        memset(&sL.nodes[id], 0, sizeof(sL.nodes[id]));
+    sL.myId = st.cur_NetworkNodeID;
+    for (uint16_t id = 1; id < NODE_SLOTS; id++)
+        if (st.node_bitmask & (1u << (id - 1)))
+            NodeJoined(id);
+    sL.nodeMask = st.node_bitmask;
+    LightLock_Unlock(&sL.lock);
+    if (!quiet)
+        CtrLog_Write(CTR_LOG_GAME, "local: %s a session as player %u (%u in it)",
+                 sL.hosting ? "hosting" : "joined", st.cur_NetworkNodeID, st.total_nodes);
+}
+
+/*
+ * A host still alone in its session looks for another session of its
+ * counter, and moves to it: one with players in it, or another lone host's
+ * if that host's token is lower (the other one stays put, so the two don't
+ * both move). Nobody is linked to a lone host, so the adapter carries on
+ * as it was: the session's generation stays the same.
+ *
+ * A host can look while its network stays up (the system scans "on
+ * connection"); where that fails (Azahar doesn't have it), the network is
+ * closed while it looks and opened again if it stays. A player trying to
+ * join meanwhile finds nothing, hosts, and the two meet the next time one
+ * of them looks.
+ */
+static void MergeAlone(void)
+{
+    static uint32_t scanBuffer[0x4000 / 4];
+    static bool scanHostingFails;
+    udsNetworkScanInfo *nets = NULL;
+    size_t total = 0, target = 0;
+    uint32_t now = LocalLink_Milliseconds();
+    bool found = false;
+    Result ret = -1;
+
+    if (!sL.hosting || now < sL.nextMergeMs || (sL.nodeMask & ~(1u << (sL.myId - 1))))
+        return;
+    sL.nextMergeMs = now + MERGE_MS + (uint32_t)(rand() % MERGE_JITTER_MS);
+    if (!scanHostingFails)
+    {
+        ret = udsScanBeacons(scanBuffer, sizeof(scanBuffer), &nets, &total, COMM_ID, 0, NULL, true);
+        if (R_FAILED(ret))
+        {
+            CtrLog_Write(CTR_LOG_GAME, "local: no scanning while hosting (%08lx): closing the session to look", ret);
+            scanHostingFails = true;
+            free(nets);
+            nets = NULL;
+            total = 0;
+        }
+    }
+    if (scanHostingFails)
+    {
+        udsDestroyNetwork();
+        udsUnbind(&sL.bind);
+        sL.inNetwork = false;
+        ret = udsScanBeacons(scanBuffer, sizeof(scanBuffer), &nets, &total, COMM_ID, 0, NULL, false);
+        if (R_FAILED(ret))
+            total = 0;
+    }
+    for (size_t i = 0; i < total && !found; i++)
+    {
+        uint32_t token = 0;
+
+        if (!SessionMatches(&nets[i], sL.kind, &token) || token == sL.token)
+            continue;
+        if (nets[i].network.total_nodes <= 1 && token > sL.token)
+            continue;
+        found = true;
+        target = i;
+    }
+    if (found)
+    {
+        CtrLog_Write(CTR_LOG_GAME, "local: another session of this counter nearby, moving to it");
+        if (sL.inNetwork)
+        {
+            udsDestroyNetwork();
+            udsUnbind(&sL.bind);
+            sL.inNetwork = false;
+        }
+        if (!Connect(&nets[target]))
+            found = false;
+    }
+    free(nets);
+    if (sL.inNetwork)
+        return; /* looked while hosting, and stays */
+    if (!found && !HostSession(sL.kind))
+    {
+        EndSession(LOCAL_SESSION_FAILED);
+        return;
+    }
+    TakeNetwork(!found);
+}
+
+static void StartSession(uint8_t kind)
+{
+    bool in;
+
+    LeaveNetwork();
+    EndSession(LOCAL_SESSION_SEARCHING);
+    if (!StartUds())
+    {
+        EndSession(LOCAL_SESSION_FAILED);
+        return;
+    }
+    CtrLog_Write(CTR_LOG_GAME, "local: looking for a session of kind %u", kind);
+    in = JoinNearby(kind, SEARCH_MS + (uint32_t)(rand() % SEARCH_JITTER_MS));
+    if (!in)
+        in = HostSession(kind);
+    if (!in)
+    {
+        EndSession(LOCAL_SESSION_FAILED);
+        return;
+    }
+    LightLock_Lock(&sL.lock);
+    sL.kind = kind;
+    sL.generation++;
+    sL.state = LOCAL_SESSION_IN;
+    LightLock_Unlock(&sL.lock);
+    TakeNetwork(false);
+}
+
+static void LocalThread(void *unused)
+{
+    (void)unused;
+    while (!sL.quit)
+    {
+        bool start, leave;
+        uint8_t kind;
+
+        LightLock_Lock(&sL.lock);
+        start = sL.startAsked;
+        leave = sL.leaveAsked;
+        kind = sL.askedKind;
+        sL.startAsked = sL.leaveAsked = false;
+        LightLock_Unlock(&sL.lock);
+
+        if (start)
+        {
+            StartSession(kind);
+        }
+        else if (leave)
+        {
+            LeaveNetwork();
+            EndSession(LOCAL_SESSION_NONE);
+        }
+
+        if (sL.inNetwork)
+        {
+            uint32_t now = LocalLink_Milliseconds();
+
+            UpdateNodes();
+            if (sL.inNetwork)
+                MergeAlone();
+            if (sL.inNetwork)
+            {
+                ReadFrames();
+                LightLock_Lock(&sL.lock);
+                for (uint16_t id = 1; id < NODE_SLOTS; id++)
+                    if (sL.nodes[id].present && id != sL.myId)
+                        FlushNode(id, now);
+                LightLock_Unlock(&sL.lock);
+            }
+        }
+        svcSleepThread(2000000LL);
+    }
+    LeaveNetwork();
+}
+
+/* ---- The game's side ---------------------------------------------------- */
+
+void LocalLink_Init(void)
+{
+    s32 priority = 0x30;
+
+    if (sL.ready)
+        return;
+    LightLock_Init(&sL.lock);
+    sL.state = LOCAL_SESSION_NONE;
+    srand((unsigned)svcGetSystemTick());
+    sL.token = ((uint32_t)rand() << 16) ^ (uint32_t)rand();
+    /* Just below the game: it runs while the game waits for the next frame. */
+    svcGetThreadPriority(&priority, CUR_THREAD_HANDLE);
+    sL.thread = threadCreate(LocalThread, NULL, THREAD_STACK, priority < 0x3F ? priority + 1 : 0x3F, -2, false);
+    if (sL.thread == NULL)
+    {
+        CtrLog_Write(CTR_LOG_ERROR, "local: no thread, local wireless off");
+        return;
+    }
+    sL.ready = true;
+}
+
+void LocalLink_Shutdown(void)
+{
+    if (!sL.ready)
+        return;
+    sL.quit = true;
+    if (R_SUCCEEDED(threadJoin(sL.thread, 3000000000LL)))
+        threadFree(sL.thread);
+    if (sL.udsReady)
+        udsExit();
+    sL.udsReady = false;
+    sL.ready = false;
+}
+
+uint8_t LocalLink_Enabled(void)
+{
+    return sL.ready;
+}
+
+uint16_t LocalLink_MyId(void)
+{
+    uint16_t id;
+
+    if (!sL.ready)
+        return 0;
+    LightLock_Lock(&sL.lock);
+    id = sL.state == LOCAL_SESSION_IN ? sL.myId : 0;
+    LightLock_Unlock(&sL.lock);
+    return id;
+}
+
+uint32_t LocalLink_Generation(void)
+{
+    uint32_t gen;
+
+    if (!sL.ready)
+        return 0;
+    LightLock_Lock(&sL.lock);
+    gen = sL.generation;
+    LightLock_Unlock(&sL.lock);
+    return gen;
+}
+
+void LocalLink_SetAdvert(uint8_t hosting, uint8_t nextSlot, const uint8_t *data)
+{
+    uint8_t has = data != NULL;
+
+    if (!sL.ready)
+        return;
+    LightLock_Lock(&sL.lock);
+    if (hosting != sL.advertHosting || nextSlot != sL.advertNextSlot || has != sL.hasAdvert
+     || (has && memcmp(data, sL.advert, LOCAL_ADVERT_SIZE) != 0))
+    {
+        sL.advertHosting = hosting;
+        sL.advertNextSlot = nextSlot;
+        sL.hasAdvert = has;
+        if (has)
+            memcpy(sL.advert, data, LOCAL_ADVERT_SIZE);
+        for (uint16_t id = 1; id < NODE_SLOTS; id++)
+            if (sL.nodes[id].present && id != sL.myId)
+                QueueAdvert(id);
+    }
+    LightLock_Unlock(&sL.lock);
+}
+
+int LocalLink_GetPeers(struct LocalPeer *out, int max)
+{
+    int n = 0;
+    uint32_t now = LocalLink_Milliseconds();
+
+    if (!sL.ready)
+        return 0;
+    LightLock_Lock(&sL.lock);
+    for (uint16_t id = 1; id < NODE_SLOTS && n < max; id++)
+    {
+        struct LocalPeer *p = &sL.nodes[id].info;
+
+        if (!sL.nodes[id].present || id == sL.myId || sL.state != LOCAL_SESSION_IN)
+            continue;
+        out[n] = *p;
+        out[n].hostedAgoMs = p->hosting ? 0 : p->lastHostingMs ? now - p->lastHostingMs : 0xFFFFFFFFu;
+        n++;
+    }
+    LightLock_Unlock(&sL.lock);
+    return n;
+}
+
+void LocalLink_Send(uint16_t dest, const void *data, uint32_t len)
+{
+    if (!sL.ready)
+        return;
+    if (len > sizeof(((struct LocalEvent *)0)->data))
+    {
+        CtrLog_Write(CTR_LOG_ERROR, "local: message of %lu bytes cut", len);
+        len = sizeof(((struct LocalEvent *)0)->data);
+    }
+    LightLock_Lock(&sL.lock);
+    if (sL.state == LOCAL_SESSION_IN)
+        QueueMessage(dest, MSG_DATA, data, len);
+    LightLock_Unlock(&sL.lock);
+}
+
+uint8_t LocalLink_PollEvent(struct LocalEvent *ev)
+{
+    uint8_t got = 0;
+
+    if (!sL.ready)
+        return 0;
+    LightLock_Lock(&sL.lock);
+    if (sL.eventCount)
+    {
+        *ev = sL.events[sL.eventHead];
+        sL.eventHead = (sL.eventHead + 1) % EVENT_QUEUE;
+        sL.eventCount--;
+        got = 1;
+    }
+    LightLock_Unlock(&sL.lock);
+    return got;
+}
+
+void LocalLink_StartSession(uint8_t kind)
+{
+    if (!sL.ready)
+        return;
+    LightLock_Lock(&sL.lock);
+    sL.startAsked = true;
+    sL.leaveAsked = false;
+    sL.askedKind = kind;
+    sL.state = LOCAL_SESSION_SEARCHING;
+    LightLock_Unlock(&sL.lock);
+}
+
+void LocalLink_LeaveSession(void)
+{
+    if (!sL.ready)
+        return;
+    LightLock_Lock(&sL.lock);
+    if (sL.state == LOCAL_SESSION_IN || sL.state == LOCAL_SESSION_SEARCHING || sL.startAsked)
+    {
+        sL.leaveAsked = true;
+        sL.startAsked = false;
+    }
+    LightLock_Unlock(&sL.lock);
+}
+
+uint8_t LocalLink_GetSession(void)
+{
+    uint8_t state;
+
+    if (!sL.ready)
+        return LOCAL_SESSION_OFF;
+    LightLock_Lock(&sL.lock);
+    state = sL.startAsked ? LOCAL_SESSION_SEARCHING : sL.state;
+    LightLock_Unlock(&sL.lock);
+    return state;
+}
+
+uint8_t LocalLink_GetSessionKind(void)
+{
+    return sL.ready ? sL.kind : LOCAL_KIND_ANY;
+}
+
+uint8_t LocalLink_InSession(void)
+{
+    uint8_t state = LocalLink_GetSession();
+
+    return state == LOCAL_SESSION_IN || state == LOCAL_SESSION_SEARCHING;
+}
+
+uint8_t LocalLink_SessionSize(void)
+{
+    uint8_t n = 0;
+
+    if (!sL.ready)
+        return 0;
+    LightLock_Lock(&sL.lock);
+    if (sL.state == LOCAL_SESSION_IN)
+        for (uint16_t id = 1; id < NODE_SLOTS; id++)
+            n += sL.nodes[id].present;
+    LightLock_Unlock(&sL.lock);
+    return n;
+}

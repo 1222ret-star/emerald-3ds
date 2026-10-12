@@ -36,6 +36,7 @@
 #include "battle_setup.h"
 #include "script_pokemon_util.h"
 #include "constants/species.h"
+#include "librfu.h"
 #endif
 #include "port_platform.h"
 #include "port_log.h"
@@ -518,6 +519,8 @@ void CtrGame_VBlank(void)
      */
     if (REG_IME && (REG_IE & INTR_FLAG_VBLANK) && gIntrTable[INTR_INDEX_VBLANK])
         gIntrTable[INTR_INDEX_VBLANK]();
+    /* The emulated Wireless Adapter's "interrupts" (3ds_rfu_adapter.c). */
+    PortRfu_Frame();
     CtrEmu_EndVBlank();
     PORT_PROF_END(vblank, PORT_PROF_VBLANK);
     UpdateStage();
