@@ -572,3 +572,11 @@ verify-bottom-map:
 verify: verify-voxel-regions
 verify-voxel-regions: romfs/voxel/regions.bin
 	"$(PYTHON)" -B tests/voxel_regions_test.py --cc "$(HOSTCC)"
+
+.PHONY: verify-pokedex-capture verify-voxel-dewford
+verify: verify-pokedex-capture verify-voxel-dewford
+verify-pokedex-capture:
+	"$(PYTHON)" -B tests/pokedex_capture_test.py --tree "$(ROOT)" --cc "$(HOSTCC)" --sanitize
+
+verify-voxel-dewford:
+	"$(PYTHON)" -B tests/voxel_dewford_test.py --tree "$(ROOT)"

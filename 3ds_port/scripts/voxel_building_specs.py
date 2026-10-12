@@ -364,6 +364,35 @@ def kit_house(width):
 def kit_house_exact(width):
     return [(2, 38, width - 2, 64), (8, 16, width - 8, 38)]
 
+
+def dewford_house(width):
+    """Dewford's blue tiled houses and Hall, with their own facade art.
+
+    Three collision rows give Z 16..64. The ridge cap occupies rows 0..8,
+    its front 9..15, the roof courses 16..34, fascia 35..37 and facade
+    38..63. Clean ridge columns exclude the trees painted into the Hall's
+    northern edge; the map's trees remain separate objects.
+    """
+    front, back, wall = 64, 16, 28
+    columns = (8, width - 8)
+    roof = HipRoof(
+        "roof", 0, width, zf=front + 2, zb=back - 2, y0=wall,
+        fascia=Strip((35, 38), wrap=columns),
+        slope=Strip((32, 35), repeat=(16, 32), wrap=columns),
+        teeth=(9, 16), cap=(0, 9), pitch=PITCH, run=6,
+        ridge_u=(0, width), end_tile=Tile(16, 9, 25, 16),
+        ridge_wrap=(16, width - 8))
+    plaster = Tile(9, 38, 15, 64, top=26)
+    post = Tile(2, 38, 8, 64, top=26)
+    body = Prism(
+        "ground_floor", 2, width - 2,
+        [(front, 0), (front, wall), (back, wall), (back, 0)],
+        edges={0: Proj(38, 64), 2: plaster}, skip=(1, 3),
+        caps=[Band(0, 26, plaster, front, front=post, back=post, z1=back),
+              Band(26, wall + 1, Tile(9, 38, 15, 39, top=wall), front)])
+    return [body, roof]
+
+
 def gym():
     """The gym of Petalburg, Mauville, Mossdeep and Lavaridge (96 x 80).
 
@@ -1402,6 +1431,31 @@ SPECS = [
         "ground": [GRASS],
         "parts": oldale_house,
         "exact": OLDALE_HOUSE_EXACT,
+    },
+    {
+        "name": "dewford_house",
+        "layout": "LAYOUT_DEWFORD_TOWN",
+        "rect": (16, 11, 4, 4),
+        "match_rows": (1, 4),
+        "ground": [0x124],
+        "parts": lambda: dewford_house(64),
+        "exact": kit_house_exact(64),
+    },
+    {
+        "name": "dewford_hall",
+        "layout": "LAYOUT_DEWFORD_TOWN",
+        "rect": (1, 0, 5, 4),
+        "ground": [0x124],
+        "parts": lambda: dewford_house(80),
+        "exact": kit_house_exact(80),
+    },
+    {
+        "name": "dewford_gym_exterior",
+        "layout": "LAYOUT_DEWFORD_TOWN",
+        "rect": (5, 13, 6, 5),
+        "ground": [0x124],
+        "parts": gym,
+        "exact": GYM_EXACT,
     },
     {
         "name": "briney_house",

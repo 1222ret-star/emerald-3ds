@@ -46,16 +46,16 @@ CtrDayNightLight CtrDayNight_At(unsigned timeMs)
         unsigned minute;
         CtrDayNightLight light;
     } keys[] = {
-        {0,    {{0.55f, 0.62f, 0.82f}, 0.0f, 1.0f}},
-        {120,  {{0.55f, 0.62f, 0.82f}, 0.0f, 1.0f}},
+        {0,    {{0.66f, 0.74f, 0.92f}, 0.0f, 1.0f}},
+        {120,  {{0.66f, 0.74f, 0.92f}, 0.0f, 1.0f}},
         {240,  {{0.96f, 0.94f, 0.88f}, 0.75f, 0.0f}},
         {480,  {{0.96f, 0.94f, 0.88f}, 0.75f, 0.0f}},
         {600,  {{1.00f, 1.00f, 1.00f}, 1.0f, 0.0f}},
         {900,  {{1.00f, 1.00f, 1.00f}, 1.0f, 0.0f}},
         {1020, {{1.00f, 0.80f, 0.65f}, 0.35f, 0.25f}},
         {1080, {{1.00f, 0.80f, 0.65f}, 0.35f, 0.25f}},
-        {1200, {{0.55f, 0.62f, 0.82f}, 0.0f, 1.0f}},
-        {1440, {{0.55f, 0.62f, 0.82f}, 0.0f, 1.0f}},
+        {1200, {{0.66f, 0.74f, 0.92f}, 0.0f, 1.0f}},
+        {1440, {{0.66f, 0.74f, 0.92f}, 0.0f, 1.0f}},
     };
     unsigned current = timeMs % CTR_DAYNIGHT_DAY_MS;
 
@@ -74,6 +74,21 @@ CtrDayNightLight CtrDayNight_At(unsigned timeMs)
             return light;
         }
     return keys[0].light;
+}
+
+CtrDayNightBlend CtrDayNight_Moonlight(const CtrDayNightLight *light, float fade,
+                                     const float fadeRgb[3])
+{
+    CtrDayNightBlend blend = {{70.0f / 255.0f, 92.0f / 255.0f, 136.0f / 255.0f}, 0.0f};
+    float moon = 0.06f * light->glow * light->glow;
+    float remaining = moon * (1.0f - fade);
+
+    blend.amount = remaining + fade;
+    if (blend.amount > 0.0f)
+        for (unsigned channel = 0; channel < 3; ++channel)
+            blend.rgb[channel] = (blend.rgb[channel] * remaining + fadeRgb[channel] * fade)
+                               / blend.amount;
+    return blend;
 }
 
 static unsigned SunKey(unsigned timeMs)

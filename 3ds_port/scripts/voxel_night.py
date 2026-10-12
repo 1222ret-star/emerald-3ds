@@ -1,6 +1,10 @@
 """Authored exterior glass regions, without recolouring frames or roof art."""
 
 NIGHT_WINDOWS = {
+    "dewford_house": ((34, 46, 39, 52), (41, 46, 46, 52)),
+    "dewford_hall": ((50, 46, 55, 52), (57, 46, 62, 52)),
+    "dewford_gym_exterior": ((11, 50, 21, 53), (27, 50, 37, 53), (75, 50, 85, 53),
+                             (49, 62, 55, 77), (57, 62, 63, 77)),
     "littleroot_house_w": ((17, 62, 23, 68), (25, 62, 31, 68)),
     "littleroot_house_e": ((49, 62, 55, 68), (57, 62, 63, 68)),
     "littleroot_lab": tuple((xpos, top, xpos + 5, bottom)

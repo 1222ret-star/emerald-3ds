@@ -146,6 +146,36 @@ classic 2D artwork shadows remain fixed.
 Encounter time bands keep their original boundaries; the clock display splits
 DÍA at 16:00 to show TARDE. The eased visual transitions start earlier.
 
+## Gentle moonlight
+
+The user confirms the final preview on a physical 3DS on October 12, 2026.
+This is user-reported acceptance, not measured GPU/FPS validation. At full night, the world
+grade is RGB `(0.66, 0.74, 0.92)` rather than `(0.55, 0.62, 0.82)`. An ambient
+blend towards RGB `(70, 92, 136)` adds a blue cast even to dark surfaces, capped
+at 6%. Its strength is `0.06 * glow * glow`, using the existing eased clock
+curve rather than abrupt time-band switches. Daytime and AUTO/OFF behaviour,
+encounters, clock speeds, berries and saves are unchanged.
+
+Classic 2D combines this blend with the existing final palette/brightness fade.
+Voxel terrain uses multiply-add in its existing texture stage, with the same
+grade applied to sprites, reflections and distance haze. Warm building emission
+is applied afterwards, and lamp emission keeps its authored amber colour. There
+are no new textures, geometry, render passes or draw calls. Palette-faded sprites
+also suppress the added ambient component so full black fades remain black.
+Interiors, screen-space UI and classic battles remain excluded.
+
+Host regression tests cover all 32,768 GBA colours, every game minute, black and
+white fade composition, the production 2D moonlight block, voxel texture stages,
+sprite ambient suppression and unchanged warm-emission constants. These are
+mathematical/state checks, not a substitute for inspecting the PICA200 result
+and frame rate on a physical console.
+
+For console review, compare AUTO and OFF in Petalburg and Rustboro at night,
+including dark roofs, grass, water, NPCs, windows and street lamps. Use 60X or
+120X to inspect sunset/dawn and walk through doors, open menus, enter a battle
+and return outdoors. Check that dark/white fades complete, light stays subtle,
+warm windows remain distinct and reflections do not retain a blue veil.
+
 ## Experimental follow-up: softer transitions and warm windows
 
 This follow-up is included in PR #57 after the user's physical-3DS acceptance
@@ -202,10 +232,22 @@ is added. Building draws with active emission omit sunlight dapples.
 Generated building files use VXB8: page height bit 15 marks an L8 glass mask
 immediately following that page's RGBA5551 pixels, in the same PICA order.
 Unmarked pages have no mask. The reader still accepts VXB7 without emission.
-At most four masks are resident, bounded by the existing page cache. They
-use linear memory, not the reserved world VRAM; allocation or mask-read
-failure falls back to an ordinary unlit building. Rebuild the engine and pack
+At most four masks are resident, bounded by the existing page cache. A single
+384 KiB linear-memory pool is reserved alongside the 768 KiB colour-page arena.
+Each mask occupies the corresponding half-sized range, so page recycling does
+not allocate or fragment linear memory. This is the previous maximum mask
+budget, now reserved up front; world VRAM and draw-call budgets are unchanged.
+Pool or mask-read failure falls back to an ordinary unlit building and is
+logged explicitly. Rebuild the engine and pack
 together: the old pack does not contain these masks.
+
+The user confirms lights and Dewford 3D in the local preview on physical
+hardware. The original failure's cause was not independently reproduced. The
+preview removes map-time mask allocation as a failure path without changing
+the existing, mathematically valid amber texture stages. The video log reports
+`windows=ready`, `failed`, or `none` for each loaded page. If glass still fails
+to light, retain that log with the map/time and a screenshot; host tests do not
+prove the PICA output on a real console.
 
 Preview hardware regression checklist (not individually reported):
 

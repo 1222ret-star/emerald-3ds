@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Dewford exterior models and the bounded window-mask pool
+  have user-reported physical-3DS acceptance. Follow-up fixes give the caught-mon
+  Pokédex its own clipped, scroll-isolated bottom-screen layout and recover the
+  gym-side sign from its original two-cell artwork. The user confirms the final
+  preview on a physical 3DS and authorizes publication on October 12, 2026.
+
+- User-tested refinement: brighter, cool-blue outdoor
+  nights with a moonlit ambient blend capped at 6%, eased with the existing clock.
+  Reuse the 2D/voxel texture stages without extra draw calls or assets; keep warm
+  window/lamp emission, neutral interiors/UI and complete black/white fades.
 - Local staging packs now select their ROM fingerprint from the compiled game
   language, rather than marking Spanish data as English. An explicitly supplied
   ROM must match that language; synthetic tests cover both profiles and rejection.

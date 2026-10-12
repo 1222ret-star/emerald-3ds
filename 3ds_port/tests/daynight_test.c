@@ -114,6 +114,59 @@ static void LightTests(void)
     Near(middle.glow, 0.5f);
 }
 
+static void MoonlightTests(void)
+{
+    CtrDayNightLight night = CtrDayNight_At(0), day = CtrDayNight_At(12u * 3600000u);
+    const float black[3] = {0.0f, 0.0f, 0.0f};
+    const float white[3] = {1.0f, 1.0f, 1.0f};
+    CtrDayNightBlend moon = CtrDayNight_Moonlight(&night, 0.0f, black);
+
+    Near(moon.amount, 0.06f);
+    assert(moon.rgb[2] > moon.rgb[1] && moon.rgb[1] > moon.rgb[0]);
+    Near(CtrDayNight_Moonlight(&day, 0.0f, black).amount, 0.0f);
+    const float originalNight[3] = {0.55f, 0.62f, 0.82f};
+    for (unsigned colour = 0; colour < 32768u; ++colour)
+        for (unsigned channel = 0; channel < 3; ++channel)
+        {
+            float source = ((colour >> (channel * 5u)) & 31u) / 31.0f;
+            float result = source * night.rgb[channel] * (1.0f - moon.amount)
+                         + moon.rgb[channel] * moon.amount;
+
+            assert(result >= source * originalNight[channel] && result <= 1.0f);
+        }
+    for (unsigned minute = 0; minute < 1440u; ++minute)
+    {
+        CtrDayNightLight light = CtrDayNight_At(minute * 60000u);
+        CtrDayNightLight previous = CtrDayNight_At(minute * 60000u + CTR_DAYNIGHT_DAY_MS - 1u);
+        CtrDayNightBlend blend = CtrDayNight_Moonlight(&light, 0.0f, black);
+        CtrDayNightBlend before = CtrDayNight_Moonlight(&previous, 0.0f, black);
+
+        assert(blend.amount >= 0.0f && blend.amount <= 0.06f);
+        Near(before.amount, blend.amount);
+        for (unsigned step = 0; step <= 10u; ++step)
+            for (unsigned target = 0; target < 2u; ++target)
+            {
+                float fade = step / 10.0f;
+                const float *fadeRgb = target == 0 ? black : white;
+                CtrDayNightBlend combined = CtrDayNight_Moonlight(&light, fade, fadeRgb);
+
+                for (unsigned channel = 0; channel < 3u; ++channel)
+                {
+                    float source = 0.37f * light.rgb[channel];
+                    float expected = (source * (1.0f - blend.amount)
+                                   + blend.rgb[channel] * blend.amount) * (1.0f - fade)
+                                   + fadeRgb[channel] * fade;
+                    float actual = source * (1.0f - combined.amount)
+                                 + combined.rgb[channel] * combined.amount;
+
+                    Near(actual, expected);
+                    if (step == 10u)
+                        Near(actual, fadeRgb[channel]);
+                }
+            }
+    }
+}
+
 static void SunTests(void)
 {
     CtrDayNightSun morning = CtrDayNight_SunAt(6u * 3600000u);
@@ -155,7 +208,7 @@ static void RuntimeTests(void)
     sEnabled = 1;
     sLocal = 0;
     CtrDayNight_Update();
-    Near(CtrDayNight_Get()->rgb[0], 0.55f);
+    Near(CtrDayNight_Get()->rgb[0], 0.66f);
     assert(CtrDayNight_GetSun()->key == 1 && CtrDayNight_GetSun()->strength == 0);
     sOutdoor = false;
     CtrDayNight_Update();
@@ -340,10 +393,11 @@ int main(void)
 {
     ClockTests();
     LightTests();
+    MoonlightTests();
     SunTests();
     RuntimeTests();
     RuntimeSunTests();
     BerryClockTests();
-    puts("PASS day/night: rates, rollover, continuity, solar path, bonus berry minutes, fractions, restore, offline 1X, resume, invalid settings");
+    puts("PASS day/night: rates, rollover, continuity, moonlight, all 32768 colours, fade composition, solar path, bonus berry minutes, fractions, restore, offline 1X, resume, invalid settings");
     return 0;
 }

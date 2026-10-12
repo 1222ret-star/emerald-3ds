@@ -927,6 +927,7 @@ static int sDynamicX, sDynamicZ; /* the billboards' origin this frame */
 #define VOXEL_BUILDING_PAGES 4
 #define VOXEL_PAGE_SLICE (64u * 1024u) /* texels per read: 128 KiB */
 #define VOXEL_PAGE_VRAM_BUDGET (768u * 1024u)
+#define VOXEL_GLOW_LINEAR_BUDGET (VOXEL_PAGE_VRAM_BUDGET / sizeof(uint16_t))
 /* A page that found no room is asked for again only after this long. */
 #define VOXEL_PAGE_RETRY_FRAMES 120u
 
@@ -979,6 +980,7 @@ static bool sBadPages[VOXEL_MAX_PAGES];
  * the small ones never strand a large gap.
  */
 static void *sPageBlock;
+static void *sGlowBlock;
 static VoxelArena sPageArena;
 static VoxelArenaPiece sPagePieces[VOXEL_BUILDING_PAGES];
 static uint32_t sPageRetry[VOXEL_MAX_PAGES];
@@ -1002,14 +1004,29 @@ static void PageTexInit(C3D_Tex *tex, void *data, unsigned w, unsigned h)
 
 static void PageFree(BuildingPageSlot *slot)
 {
-    if (slot->glow.data != NULL)
-        C3D_TexDelete(&slot->glow);
     memset(&slot->glow, 0, sizeof(slot->glow));
     slot->glowValid = false;
     VoxelArena_Free(&sPageArena, slot->tex.data);
     memset(&slot->tex, 0, sizeof(slot->tex));
     slot->page = -1;
     slot->loaded = 0;
+}
+
+static bool PageGlowInit(BuildingPageSlot *slot)
+{
+    uintptr_t offset = (uintptr_t)slot->tex.data - (uintptr_t)sPageBlock;
+    unsigned pixels = slot->w * slot->h;
+
+    memset(&slot->glow, 0, sizeof(slot->glow));
+    if (sGlowBlock == NULL || sPageBlock == NULL || offset % 128u != 0
+     || offset >= VOXEL_PAGE_VRAM_BUDGET
+     || pixels > (VOXEL_PAGE_VRAM_BUDGET - offset) / sizeof(uint16_t))
+        return false;
+    PageTexInit(&slot->glow, (uint8_t *)sGlowBlock + offset / sizeof(uint16_t),
+                slot->w, slot->h);
+    slot->glow.fmt = GPU_L8;
+    slot->glow.size = pixels;
+    return true;
 }
 
 /* Could this slot's page be dropped now? Not if needed in the last `keep`
@@ -1045,7 +1062,11 @@ static bool ReadPageSlice(BuildingPageSlot *slot, unsigned first, unsigned count
         uint8_t *mask = (uint8_t *)slot->glow.data + first;
 
         if (!VoxelBuildings_ReadGlow((unsigned)slot->page, first, count, mask))
+        {
             slot->glowValid = false;
+            CtrLog_Write(CTR_LOG_ERROR, "VOXEL: window mask page %d unreadable at %u",
+                         slot->page, first);
+        }
         else
             GSPGPU_FlushDataCache(mask, count);
     }
@@ -1328,16 +1349,12 @@ static void WantPage(int page, uint32_t keep, bool quiet)
         PageFree(drop);
     }
     victim->page = page;
-    if (victim->glow.data != NULL)
-        C3D_TexDelete(&victim->glow);
     memset(&victim->glow, 0, sizeof(victim->glow));
     victim->glowValid = VoxelBuildings_PageHasGlow((unsigned)page)
-                     && C3D_TexInit(&victim->glow, (u16)w, (u16)h, GPU_L8);
-    if (victim->glowValid)
-    {
-        C3D_TexSetFilter(&victim->glow, GPU_NEAREST, GPU_NEAREST);
-        C3D_TexSetWrap(&victim->glow, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
-    }
+                     && PageGlowInit(victim);
+    if (VoxelBuildings_PageHasGlow((unsigned)page) && !victim->glowValid)
+        CtrLog_Write(CTR_LOG_ERROR, "VOXEL: window mask page %d allocation failed (%ux%u, linear free=%lu)",
+                     page, w, h, (unsigned long)linearSpaceFree());
     victim->loaded = 0;
     victim->used = ring ? FramesAgo(keep / 2u) : sFrame;
     victim->requested = svcGetSystemTick();
@@ -1382,8 +1399,10 @@ static void QueuePageCopy(BuildingPageSlot *slot, uint16_t *source, unsigned cou
                         count * sizeof(uint16_t), 8);
     slot->loaded += count;
     if (slot->loaded == slot->w * slot->h)
-        CtrLog_Write(CTR_LOG_VIDEO, "VOXEL building page %d loaded (%ux%u) in %.0f ms",
-                     slot->page, slot->w, slot->h, MsSince(slot->requested));
+        CtrLog_Write(CTR_LOG_VIDEO, "VOXEL building page %d loaded (%ux%u) in %.0f ms; windows=%s",
+                     slot->page, slot->w, slot->h, MsSince(slot->requested),
+                     slot->glowValid ? "ready" : VoxelBuildings_PageHasGlow((unsigned)slot->page)
+                                               ? "failed" : "none");
 }
 
 /* One step of the page stream per frame: hand a finished slice to the GPU,
@@ -1752,6 +1771,10 @@ bool CtrVoxel_Init(void)
     }
     C3D_TexSetFilter(&sTreeAtlas, GPU_NEAREST, GPU_NEAREST);
     C3D_TexSetWrap(&sTreeAtlas, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+    sGlowBlock = sPageBlock != NULL ? linearAlloc(VOXEL_GLOW_LINEAR_BUDGET) : NULL;
+    if (sPageBlock != NULL && sGlowBlock == NULL)
+        CtrLog_Write(CTR_LOG_ERROR, "VOXEL: window mask pool unavailable (%lu bytes, linear free=%lu)",
+                     (unsigned long)VOXEL_GLOW_LINEAR_BUDGET, (unsigned long)linearSpaceFree());
 #if CTR_VOXEL_LIGHTING
     MakeDapple();
     MakeRays();
@@ -1858,8 +1881,6 @@ void CtrVoxel_Shutdown(void)
     sHaveFog = sHaveGloom = sOwnsFog = false;
     for (unsigned i = 0; i < VOXEL_BUILDING_PAGES; ++i)
     {
-        if (sPageSlots[i].glow.data != NULL)
-            C3D_TexDelete(&sPageSlots[i].glow);
         memset(&sPageSlots[i], 0, sizeof(sPageSlots[i]));
         sPageSlots[i].page = -1;
     }
@@ -1870,6 +1891,8 @@ void CtrVoxel_Shutdown(void)
     if (sChunkBlock != NULL)
         vramFree(sChunkBlock);
     sPageBlock = sChunkBlock = NULL;
+    linearFree(sGlowBlock);
+    sGlowBlock = NULL;
     sHaveBuildings = false;
     VoxelBuildings_Shutdown();
     VoxelRelief_Shutdown();
@@ -5078,6 +5101,19 @@ static VoxelLight BaseLightFor(bool indoor)
     return light;
 }
 
+static float sMoonlight;
+static uint32_t sMoonlightColour;
+
+static uint32_t MoonlightColour(float fade)
+{
+    uint32_t colour = 0xFF000000u;
+
+    for (unsigned channel = 0; channel < 3; ++channel)
+        colour |= (uint32_t)(((sMoonlightColour >> (channel * 8u)) & 255u) * (1.0f - fade) + 0.5f)
+               << (channel * 8u);
+    return colour;
+}
+
 static VoxelLight LightFor(bool indoor)
 {
     VoxelLight light = BaseLightFor(indoor);
@@ -5085,12 +5121,14 @@ static VoxelLight LightFor(bool indoor)
     if (!indoor)
     {
         const CtrDayNightLight *cycle = CtrDayNight_Get();
+        CtrDayNightBlend moon = CtrDayNight_Moonlight(cycle, 0.0f, cycle->rgb);
 
         for (unsigned channel = 0; channel < 3; ++channel)
         {
-            light.sun[channel] *= cycle->rgb[channel];
-            light.shade[channel] *= cycle->rgb[channel];
+            light.sun[channel] *= cycle->rgb[channel] * (1.0f - moon.amount);
+            light.shade[channel] *= cycle->rgb[channel] * (1.0f - moon.amount);
             light.hazeRgb[channel] *= cycle->rgb[channel];
+            light.hazeRgb[channel] += (moon.rgb[channel] - light.hazeRgb[channel]) * moon.amount;
         }
         light.rays *= cycle->daylight;
         light.motes *= cycle->daylight;
@@ -5725,8 +5763,9 @@ static void TerrainTexEnv(const VoxelLight *dapples)
     C3D_TexEnvInit(env);
     if (dapples == NULL)
     {
-        C3D_TexEnvSrc(env, C3D_RGB, GPU_TEXTURE0, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
-        C3D_TexEnvFunc(env, C3D_RGB, GPU_MODULATE);
+        C3D_TexEnvSrc(env, C3D_RGB, GPU_TEXTURE0, GPU_PRIMARY_COLOR, GPU_CONSTANT);
+        C3D_TexEnvFunc(env, C3D_RGB, sMoonlight > 0.0f ? GPU_MULTIPLY_ADD : GPU_MODULATE);
+        C3D_TexEnvColor(env, sMoonlightColour);
         C3D_TexEnvScale(env, C3D_RGB, GPU_TEVSCALE_2);
         C3D_TexEnvSrc(env, C3D_Alpha, GPU_TEXTURE0, GPU_PRIMARY_COLOR, GPU_PRIMARY_COLOR);
         C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
@@ -5753,8 +5792,9 @@ static void TerrainTexEnv(const VoxelLight *dapples)
 
     env = C3D_GetTexEnv(2);
     C3D_TexEnvInit(env);
-    C3D_TexEnvSrc(env, C3D_RGB, GPU_TEXTURE0, GPU_PREVIOUS, GPU_PREVIOUS);
-    C3D_TexEnvFunc(env, C3D_RGB, GPU_MODULATE);
+    C3D_TexEnvSrc(env, C3D_RGB, GPU_TEXTURE0, GPU_PREVIOUS, GPU_CONSTANT);
+    C3D_TexEnvFunc(env, C3D_RGB, sMoonlight > 0.0f ? GPU_MULTIPLY_ADD : GPU_MODULATE);
+    C3D_TexEnvColor(env, sMoonlightColour);
     C3D_TexEnvScale(env, C3D_RGB, GPU_TEVSCALE_2);
     C3D_TexEnvSrc(env, C3D_Alpha, GPU_PREVIOUS, GPU_PREVIOUS, GPU_PREVIOUS);
     C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
@@ -6072,6 +6112,14 @@ void CtrVoxel_Draw(C3D_RenderTarget *target, float eyeOffset)
     sOwnsFog = false;
     if (!sReady || sDrawCount == 0)
         return;
+    const CtrDayNightLight *cycle = CtrDayNight_Get();
+    CtrDayNightBlend moon = CtrDayNight_Moonlight(cycle, 0.0f, cycle->rgb);
+
+    sMoonlight = indoor ? 0.0f : moon.amount;
+    sMoonlightColour = 0xFF000000u;
+    for (unsigned channel = 0; channel < 3; ++channel)
+        sMoonlightColour |= (uint32_t)(moon.rgb[channel] * sMoonlight * 127.5f + 0.5f)
+                         << (channel * 8u);
 #if CTR_VOXEL_LIGHTING
     sOwnsFog = !indoor && sHaveFog;
 #endif
@@ -6224,7 +6272,7 @@ void CtrVoxel_Draw(C3D_RenderTarget *target, float eyeOffset)
 
         if (!indoor)
             for (unsigned channel = 0; channel < 3; ++channel)
-                reflected.sun[channel] = reflected.shade[channel] = CtrDayNight_Get()->rgb[channel];
+                reflected.sun[channel] = reflected.shade[channel] = cycle->rgb[channel] * (1.0f - sMoonlight);
         /* Mirrored sprite art lies just above reflective ground. One draw for
          * every visible reflection, blended without writing depth. */
         SetGrade(&reflected);
@@ -6236,7 +6284,7 @@ void CtrVoxel_Draw(C3D_RenderTarget *target, float eyeOffset)
         env = C3D_GetTexEnv(0);
         C3D_TexEnvSrc(env, C3D_Alpha, GPU_TEXTURE0, GPU_CONSTANT, GPU_CONSTANT);
         C3D_TexEnvFunc(env, C3D_Alpha, GPU_MODULATE);
-        C3D_TexEnvColor(env, 0x60FFFFFFu);
+        C3D_TexEnvColor(env, 0x60000000u | (MoonlightColour(sWorldFade.amount) & 0xFFFFFFu));
         FadeFor(true);
         C3D_DrawArrays(GPU_TRIANGLES, VOXEL_REFLECTION_FIRST, sReflectionVertices);
         C3D_DepthTest(true, GPU_GREATER, GPU_WRITE_ALL);
@@ -6322,6 +6370,8 @@ void CtrVoxel_Draw(C3D_RenderTarget *target, float eyeOffset)
             TerrainTexEnv(&light);
         }
 #endif
+        if (sMoonlight > 0.0f)
+            C3D_TexEnvColor(C3D_GetTexEnv(dapples ? 2 : 0), MoonlightColour(sWorldFade.amount));
         FadeFor(true);
         C3D_DrawArrays(GPU_TRIANGLES, 0, sSpriteVertices);
     }

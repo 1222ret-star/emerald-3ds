@@ -763,6 +763,8 @@ static const uint16_t *sRegLine;
 
 static unsigned Reg(unsigned offset)
 {
+    if (sCentredScreen == CTR_CENTRED_POKEDEX_CAUGHT && offset >= 0x18 && offset <= 0x1e)
+        return 0;
     if (sRegLine && offset - CTR_LINE_REG_FIRST < CTR_LINE_REGS * 2)
         return sRegLine[(offset - CTR_LINE_REG_FIRST) / 2];
     return sMemory.regs[offset / 2];
@@ -1137,6 +1139,18 @@ static void Blend(unsigned layer, bool effects, bool semiTransparent)
             fade = Min(Reg(0x54), 16) / 16.0f;
             color = C2D_Color32(channel, channel, channel, (unsigned)(fade * 255));
         }
+        float fadeRgb[3] = {(color & 255u) / 255.0f, ((color >> 8) & 255u) / 255.0f,
+                            ((color >> 16) & 255u) / 255.0f};
+        CtrDayNightLight moonLight = *light;
+
+        if (!paletteTint)
+            moonLight.glow *= 1.0f - sPaletteFade;
+        CtrDayNightBlend moon = CtrDayNight_Moonlight(&moonLight, fade, fadeRgb);
+
+        color = C2D_Color32((unsigned)(moon.rgb[0] * 255.0f + 0.5f),
+                           (unsigned)(moon.rgb[1] * 255.0f + 0.5f),
+                           (unsigned)(moon.rgb[2] * 255.0f + 0.5f),
+                           (unsigned)(moon.amount * 255.0f + 0.5f));
         env = C3D_GetTexEnv(5);
         C3D_TexEnvSrc(env, C3D_RGB, GPU_CONSTANT, GPU_PREVIOUS, GPU_CONSTANT);
         C3D_TexEnvOpRgb(env, GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_ALPHA);
@@ -2090,6 +2104,7 @@ static const CentredFill sCentredFills[CTR_CENTRED_SCREENS] =
     /* The Pokédex: a tile its screen on show names (CentredFillOf), or else
      * whatever is at the back of it. */
     [CTR_CENTRED_POKEDEX] = {.backmost = true},
+    [CTR_CENTRED_POKEDEX_CAUGHT] = {.layers = 1u << 3, .tile = true, .tileColumn = 0, .tileRow = 2},
     [CTR_CENTRED_PARTY] = {.section = true},
     [CTR_CENTRED_PARTY_WHOLE] = {.section = true},
 };
@@ -2435,6 +2450,7 @@ static unsigned LineBackgrounds(void)
 {
     unsigned found = 0, text = TextBackgrounds();
 
+    if (sCentredScreen == CTR_CENTRED_POKEDEX_CAUGHT) return 0;
     for (unsigned bg = 0; bg < 4; ++bg)
         if ((text & (1u << bg)) && (sLineMask & (3u << (bg * 2)))) found |= 1u << bg;
     return found;
@@ -5218,7 +5234,8 @@ bool CtrVideo_BottomInUse(void) { return sBottomInUse; }
 static bool BottomWhole(unsigned screen)
 {
     return screen == CTR_CENTRED_STORAGE || screen == CTR_CENTRED_SUMMARY || screen == CTR_CENTRED_BAG_WHOLE
-        || screen == CTR_CENTRED_PARTY_WHOLE || screen == CTR_CENTRED_SHOP;
+        || screen == CTR_CENTRED_PARTY_WHOLE || screen == CTR_CENTRED_SHOP
+        || screen == CTR_CENTRED_POKEDEX_CAUGHT;
 }
 
 /* The screens drawn on the bottom screen at all. */

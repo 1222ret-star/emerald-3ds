@@ -34,6 +34,12 @@ typedef struct
 
 typedef struct
 {
+    float rgb[3];
+    float amount;
+} CtrDayNightBlend;
+
+typedef struct
+{
     float dx, dz, strength;
     uint32_t key;
 } CtrDayNightSun;
@@ -41,6 +47,8 @@ typedef struct
 unsigned CtrDayNight_Speed(int index);
 void CtrDayNight_Advance(CtrDayNightClock *clock, uint64_t nowMs, unsigned localSeconds, int speed);
 CtrDayNightLight CtrDayNight_At(unsigned timeMs);
+CtrDayNightBlend CtrDayNight_Moonlight(const CtrDayNightLight *light, float fade,
+                                     const float fadeRgb[3]);
 CtrDayNightSun CtrDayNight_SunAt(unsigned timeMs);
 void CtrDayNight_Update(void);
 void CtrDayNight_Resume(void);

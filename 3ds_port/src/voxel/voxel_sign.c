@@ -368,9 +368,8 @@ bool VoxelSign_EmitStanding(VoxelBuilder *b, const VoxelMapInstance *inst, int x
 
 bool VoxelSign_IsCell(const VoxelMapInstance *inst, int x, int y)
 {
-    return inst && VoxelRegions_RoleAt((unsigned)inst->layoutId, x - inst->originX,
-                                       y - inst->originY) == VOXEL_ROLE_SIGNPOST
-        && FindMask((unsigned)inst->layoutId, x - inst->originX, y - inst->originY) != NULL;
+    return inst && FindMask((unsigned)inst->layoutId, x - inst->originX,
+                           y - inst->originY) != NULL;
 }
 
 static bool EmitCell(VoxelBuilder *b, const VoxelMapInstance *inst, int x, int y, bool ground)
@@ -382,8 +381,6 @@ static bool EmitCell(VoxelBuilder *b, const VoxelMapInstance *inst, int x, int y
     if (!b || !inst) return false;
     lx = x - inst->originX;
     ly = y - inst->originY;
-    if (VoxelRegions_RoleAt((unsigned)inst->layoutId, lx, ly) != VOXEL_ROLE_SIGNPOST)
-        return false;
     r = FindMask((unsigned)inst->layoutId, lx, ly);
     if (!r || !VoxelMesh_TileUV(b, x, y, &u0, &v0, &u1, &v1)) return false;
     memset(&mask, 0, sizeof(mask));
@@ -421,8 +418,6 @@ bool VoxelSign_HeadGround(const VoxelMapInstance *inst, int x, int y, int *metat
     if (!inst) return false;
     lx = x - inst->originX;
     ly = y - inst->originY;
-    if (VoxelRegions_RoleAt((unsigned)inst->layoutId, lx, ly + 1) != VOXEL_ROLE_SIGNPOST)
-        return false;
     r = FindMask((unsigned)inst->layoutId, lx, ly + 1);
     if (!r || !HasHead(r))
         return false;

@@ -309,9 +309,8 @@ void CtrCentredParty_SetVBlankCallback(IntrCallback callback)
                                      ? CTR_CENTRED_PARTY : CTR_CENTRED_PARTY_WHOLE);
 }
 
-/* The Pokédex's own callback. The page it shows for a mon just caught puts
- * back the battle's, which stays the battle's. */
 IntrCallback CtrPokedex_VBlankCallback(void);
+bool8 CtrPokedex_IsCaughtMonPage(void);
 
 void CtrCentredPokedex_SetVBlankCallback(IntrCallback callback)
 {
@@ -354,6 +353,7 @@ static void UpdateSet(StageSet *set, IntrCallback callback)
 static void UpdateStage(void)
 {
     IntrCallback callback = gMain.vblankCallback;
+    bool caughtMonPage = CtrPokedex_IsCaughtMonPage();
 
     if (callback)
     {
@@ -362,10 +362,11 @@ static void UpdateStage(void)
         UpdateSet(&sBattle, callback);
         UpdateSet(&sTransition, callback);
     }
-    CtrVideo_SetStage(sStage.on);
-    CtrVideo_SetCentred(sCentred.on ? sCentred.screen : CTR_CENTRED_NONE);
-    CtrVideo_SetBattle(sBattle.on);
-    CtrVideo_SetTransition(sTransition.on);
+    CtrVideo_SetStage(!caughtMonPage && sStage.on);
+    CtrVideo_SetCentred(caughtMonPage ? CTR_CENTRED_POKEDEX_CAUGHT
+                                    : sCentred.on ? sCentred.screen : CTR_CENTRED_NONE);
+    CtrVideo_SetBattle(!caughtMonPage && sBattle.on);
+    CtrVideo_SetTransition(!caughtMonPage && sTransition.on);
 }
 
 /*

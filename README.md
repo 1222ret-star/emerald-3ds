@@ -112,6 +112,11 @@ outdoor lighting inspired by HeartGold/SoulSilver. It is **OFF by default**;
 indoors, caves, underwater areas, menus and classic battles retain their
 original colours. Voxel battle scenery follows the outdoor lighting.
 
+The moonlight refinement adds a restrained blue ambience instead of only
+darkening the world. Night colours remain more readable, while supported voxel
+windows and street lamps retain their warm emission. It uses the same AUTO
+setting and eased transitions and has user-reported physical-console acceptance.
+
 **CLOCK SPEED** selects **1X, 6X, 12X, 24X, 60X or 120X**. At 1X, lighting
 follows Emerald's local clock, including the time set at the start of the
 game. Higher speeds advance a separate feature clock: 60X completes a day
@@ -140,6 +145,11 @@ shared Pokémon Centers, marts, gyms, Rustboro apartment blocks and Devon,
 plus the original street lamps and small ground-light pools. It follows
 the same clock without a separate setting and has user-reported 3DS acceptance.
 Unmodelled buildings and classic 2D windows do not receive local emission.
+The follow-up adds [Dewford exterior models](docs/DEWFORD_3D.md) and
+isolates the [caught-mon Pokédex layout](docs/POKEDEX_CAPTURE.md) from voxel
+battles. Its window masks use a fixed startup pool; the user confirms lights
+and Dewford models on a physical 3DS, followed by acceptance of the gym-side sign
+and caught-mon Pokédex clipping/scroll corrections on October 12, 2026.
 The experimental follow-up also accelerates berry growth and preserves the
 clock offset and pending fractions alongside the save. Daily events remain
 on the original RTC; sleep/offline time advances at 1X. Back up the auxiliary
