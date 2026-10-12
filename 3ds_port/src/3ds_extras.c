@@ -180,6 +180,9 @@ const CtrExtra gCtrExtras[] =
 {
     /* Features add their lines here. */
     {CTR_EXTRAS_ENHANCEMENTS, CTR_TEXT("SPEED", "SPEED", "VITESSE"), "speed", 0, 0, NULL, NULL, SpeedStep, SpeedText},
+    /* The game and the music keep real time on a slow frame; the sound
+     * engine mixes on the DSP's clock (3ds_platform.c, 3ds_audio.c). */
+    {CTR_EXTRAS_ENHANCEMENTS, CTR_TEXT("REAL-TIME PACING", "RITMO REAL", "RYTHME RÉEL"), "audio_clock", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
     {CTR_EXTRAS_ENHANCEMENTS, CTR_TEXT("EXP FOR CATCHING", "EXP FOR CATCHING", "EXP. CAPTURE"), "exp_catch", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
     {CTR_EXTRAS_ENHANCEMENTS, CTR_TEXT("PARTY EXP SHARE", "PARTY EXP SHARE", "MULTI EXP."), "exp_share", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
     {CTR_EXTRAS_ENHANCEMENTS, CTR_TEXT("TRADE EVO LV. 40", "TRADE EVO LV. 40", "ÉVOL. NIV. 40"), "trade_evo", 2, 0, gCtrExtrasOffOn, NULL, NULL, NULL},
