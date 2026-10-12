@@ -142,13 +142,16 @@ def main() -> int:
     # keeps its assembler addend, 0 for a header's pointers, and the song then
     # plays from address 0 on the sound core (0.3.0's Spanish se_rain). Each
     # song header names its voice group and every one of its tracks, so all of
-    # those words must be relocation sites.
+    # those words must be relocation sites. The linker's section markers are
+    # no songs: the region's own start, and the end of whatever lies just
+    # before it - the Spanish build's script blob ends on the song blob's first
+    # byte, so __ctr_script_blob_end was read as a header.
     if args.song_headers and start is not None and end is not None:
         relocated = set(sites)
         unrelocated = []
         for name in sorted(global_names):
             address = symbols[name]
-            if name == args.blob_symbol or not (start <= address < end):
+            if name.startswith("__") or not (start <= address < end):
                 continue
             header = address - start
             tracks = payload[header] if header < len(payload) else 0
