@@ -1542,7 +1542,7 @@ def find_placements(model, layouts_json):
                 if first not in starts:
                     starts[first] = first == template[j0 * w + i0] or (
                         "interior" not in model.spec and "owned" not in model.spec
-                        and entry.get("secondary_tileset") != "0"
+                        and entry.get("secondary_tileset") not in ("0", "NULL")
                         and same_building_pixels(model, entry["id"], first, i0, j0))
                 if not starts[first]:
                     continue

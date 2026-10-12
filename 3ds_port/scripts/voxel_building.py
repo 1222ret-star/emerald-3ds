@@ -109,9 +109,13 @@ class LayoutArt:
         self.blocks = read_u16(os.path.join(ROOT, entry["blockdata_filepath"]))
         self.w, self.h = entry["width"], entry["height"]
         self.primary, self.secondary = entry["primary_tileset"], entry["secondary_tileset"]
-        self.ts = Tilesets(self.primary, self.secondary)
+        # A layout can carry no secondary tileset: the source tree writes "0",
+        # the builder's layouts.json writes "NULL". Such a layout has nothing to
+        # compose and the callers skip it; keep it constructible all the same.
+        self.has_secondary = self.secondary not in ("0", "NULL")
+        self.ts = Tilesets(self.primary, self.secondary if self.has_secondary else self.primary)
         self.pm = read_u16(self.mts[self.primary])
-        self.sm = read_u16(self.mts[self.secondary])
+        self.sm = read_u16(self.mts[self.secondary]) if self.has_secondary else []
 
     def metatile(self, x, y):
         return self.blocks[y * self.w + x] & 0x3FF
