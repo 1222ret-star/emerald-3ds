@@ -45,7 +45,9 @@ function pointers (callbacks, native script commands) are guarded for
    with OPTIONS' REAL-TIME PACING the worker mixes on the DSP's clock
    instead, whenever NDSP has fewer than three frames queued, and
    `FrameShown` in `3ds_platform.c` runs a hidden frame when the game has
-   fallen a frame behind the display);
+   fallen a frame behind the display - in the field only: a battle keeps
+   the GBA's timing, and without a DSP the clock mode mixes once per frame
+   as before);
 2. latches the GBA registers, OAM and palettes and presents: the compositor
    decodes changed tiles into an RGBA5551 atlas and draws BG/OBJ layers with
    the PICA200 at native 400x240 on the top screen; the voxel overworld, when

@@ -28,8 +28,15 @@ New and improved:
   no longer makes the music click; and the game keeps real time, running a
   hidden frame when it has fallen a frame behind the display, so only the
   picture skips a step. The FPS counter shows pictures/game frames a second.
+  In the field only: a battle keeps the GBA's timing. Without a DSP (an
+  emulator without its firmware) the engine still runs once per frame.
 
 Fixed:
+- The battle intro could hang with the player's trainer sliding up the
+  screen for ever: the HD interface's lift of the trainer (down with the
+  text box) left an odd y2 on the sprite when the slide across ended first,
+  and the game's vertical slide, two pixels a frame, never reached 0. The
+  lift is kept even.
 
 - Battles: with the speed multiplier at x2 and above, a Pokémon sent out of
   its Poké Ball (yours or a trainer's) made no cry. The game cleared the cry
