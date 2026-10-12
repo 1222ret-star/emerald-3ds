@@ -4,6 +4,13 @@
 
 New and improved:
 
+- Italian: the game in Italian from your own Pokémon Versione Smeraldo (Italy) ROM.
+  The texts and graphics are staged from that ROM by `tools/localize_italian.py`
+  (449 source files, 19 349 edits, 104 graphics, 55 credits pages, the four Trainer
+  Hill floors), with the metric Pokédex units and decimal comma, the wider invalid-move
+  type table, the Italian ending tilemap and the port menus in Italian.
+- Italian build: `tools/bootstrap.py --make --italian-rom` builds it, next to the
+  Spanish and French ones.
 - French: the game in French from your own Pokémon Émeraude (France) ROM.
   The web and Windows builders accept it and pick the language from the ROM;
   every release carries the French executable (`Emerald3DS-fr.3dsx` for Quick
