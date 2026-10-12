@@ -39,6 +39,9 @@ typedef uint8_t u8; typedef uint16_t u16; typedef bool bool8;
 #define OPT_VOXEL 6
 #define HIT_NONE 0
 #define HIT_OPTION 20
+#define HIT_COLUMN 40
+#define COL_ITEMS 4
+#define FOCUS_NONE 0
 #define MODE_OFF 0
 #define MODE_FIELD 1
 #define MODE_BATTLE_INFO 10
@@ -48,16 +51,16 @@ typedef uint8_t u8; typedef uint16_t u16; typedef bool bool8;
 #define HIT_MAP 0
 #define LABEL_FG(x) (x)
 #define LABEL_SH(x) (x)
-#define CTR_TEXT(english, spanish) spanish
+#define CTR_TEXT(english, spanish, french) spanish
 #define CTR_TIME_MORNING 0
 #define CTR_TIME_NIGHT 2
 #define TXT_WHITE 5
 #define TXT_DARK 6
 #define TXT_LIGHT 7
 typedef struct { u8 screen,mode,inBattle,bagView,mapsec,cursorX,cursorY,gender,pickMapsec,pickX,pickY,pressed,enabled;
-    u8 clockShown,clockValid,clockRate,clockPhase,blink,cursor,options[OPTION_ROWS]; u16 clockMinute; } ViewState;
+    u8 clockShown,clockValid,clockRate,clockPhase,blink,cursor,options[OPTION_ROWS]; u16 clockMinute;
+    u8 optPage,optSub,optFocus,focus,extras[OPTION_ROWS]; } ViewState;
 typedef struct {int x0,y0,x1,y1;} Rect;
-static void RectInit(Rect *rect) {*rect=(Rect){0};}
 static bool RectAddPlate(Rect *rect,int hit) {(void)rect;(void)hit;return false;}
 static bool RectAddHit(Rect *rect,int hit) {(void)rect;(void)hit;return false;}
 static int BattleCursorHit(const ViewState *state,int cursor) {(void)state;return cursor;}
@@ -98,7 +101,8 @@ static void CtrBottom_BlitRect(const u16 *p,int x0,int y0,int x1,int y1) {
     for(int x=x0;x<x1;++x) for(int y=y0;y<y1;++y) fb[x*H+H-1-y]=p[x*H+H-1-y];
 }
 '''
-    for name in ('static void DrawRegionName(', 'static void DrawMapClock(', 'static void DrawMapMarks(', 'static void DrawRegionMap(',
+    for name in ('static void RectInit(', 'static void RectAdd(', 'static bool8 OptionsAreaOnly(',
+                 'static void DrawRegionName(', 'static void DrawMapClock(', 'static void DrawMapMarks(', 'static void DrawRegionMap(',
                  'static bool8 MapCursorOnlyMoved(', 'static void MarkRect(',
                  'static bool8 RectsMeet(int ax0, int ay0, int ax1, int ay1, int bx0, int by0, int bx1, int by1)\n{',
                  'static bool8 MoveMapCursor(', 'static bool8 DirtyRect('):
@@ -143,6 +147,14 @@ int main(void) {
     b=a;b.clockMinute=960;CheckFooter(a,b);
     b.pressed=1;assert(!MapCursorOnlyMoved(&b,&a));b=a;b.enabled=1;assert(!MapCursorOnlyMoved(&b,&a));
     b=a;b.mode=2;assert(!MapCursorOnlyMoved(&b,&a));b=a;b.mapsec=MAPSEC_NONE;assert(!MapCursorOnlyMoved(&b,&a));
+    ViewState optionsFrom={.mode=MODE_FIELD,.screen=SCR_OPTION},optionsTo=optionsFrom;
+    Rect optionsRect;
+    optionsTo.optPage=1;optionsTo.options[0]=1;
+    assert(OptionsAreaOnly(&optionsTo,&optionsFrom));
+    assert(DirtyRect(&optionsTo,&optionsFrom,&optionsRect));
+    assert(optionsRect.x0==0&&optionsRect.y0==0&&optionsRect.x1==CW&&optionsRect.y1==H);
+    optionsTo.pressed=HIT_COLUMN;
+    assert(!OptionsAreaOnly(&optionsTo,&optionsFrom));
     puts("PASS bottom map: partial/full canvas and framebuffer equivalence, region changes with clock, invalid clock, picked marker, unrelated state fallback");
 }
 '''

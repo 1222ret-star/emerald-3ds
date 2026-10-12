@@ -18,6 +18,7 @@ stronger check there, and the proofs would double its time.
 """
 
 import argparse
+import copy
 from PIL import Image
 import json
 import math
@@ -46,14 +47,17 @@ MAX_VARIANTS = 128      # voxel_atlas.h VOXEL_VARIANTS
 def component_specs(spec, layouts):
     """Expand a `components` spec - hedges, walls: objects with no fixed
     shape - into one ordinary spec per connected run of its metatiles, in
-    every layout whose secondary tileset is the one named."""
+    every layout whose secondary tileset is the one named (or, for
+    metatiles of a primary tileset, every layout on that primary)."""
     comp = spec["components"]
     tiles = comp["tiles"]
     layouts_json = json.load(open(os.path.join(vb.ROOT, "data", "layouts", "layouts.json"),
                                   encoding="utf-8"))["layouts"]
     out = []
     for entry in layouts_json:
-        if entry.get("secondary_tileset") != comp["secondary"] or "blockdata_filepath" not in entry:
+        if "blockdata_filepath" not in entry or entry.get("id") in comp.get("skip", ()):
+            continue
+        if ("primary" in comp and entry.get("primary_tileset") != comp["primary"]) or                 ("secondary" in comp and entry.get("secondary_tileset") != comp["secondary"]):
             continue
         blocks = vb.read_u16(os.path.join(vb.ROOT, entry["blockdata_filepath"]))
         w, h = entry["width"], entry["height"]
@@ -140,12 +144,28 @@ def prop_specs(spec):
         variant = spec["name"] if not out else "%s_%d" % (spec["name"], len(out))
         at = [(l, min(c[0] for c in voxel_props.cells_of(name, x, y)),
                min(c[1] for c in voxel_props.cells_of(name, x, y))) for (l, x, y) in where]
+        shape = spec.get("shape", "mound")
+        if shape == "card":
+            # a thing of leaves or fruit: it stands at its foot, facing the
+            # camera, like a potted plant
+            parts = (lambda a, f: (lambda: [vb.Card("card", a, f)]))(
+                art, max(y for (x, y) in [(u, v) for v in range(art.size[1]) for u in range(art.size[0])
+                                           if art.getpixel((u, v))[3] >= 128]) + 1)
+        elif shape == "cylinder":
+            # a round basket: its drawn top ellipse and a short side
+            c = spec["cylinder"]
+            parts = (lambda c: (lambda: [vb.Cylinder("basket", c["cx"], c["cz"], c["rx"], c["rz"],
+                                                     -1, c["h"], back_tile=vb.Tile(*c["side"]),
+                                                     sides=24)]))(c)
+        else:
+            parts = (lambda a, k, st, rg, r: (lambda: [vb.Mound("mound", a, rise=k, step=st,
+                                                              ring=rg, rows=r)]))(
+                art, spec["rise"], spec["step"], spec.get("ring", ()), h * 16)
         out.append({"name": variant, "layout": lid, "rect": (cx0, cy0, w, h),
                     "ground": spec["ground"], "art": art,
-                    "parts": (lambda a, k, st, rg, r: (lambda: [vb.Mound("mound", a, rise=k, step=st,
-                                                                     ring=rg, rows=r)]))(
-                        art, spec["rise"], spec["step"], spec.get("ring", ()), h * 16),
-                    "exact": [(0, 0, w * 16, h * 16)], "at": at, "quads": quads,
+                    "parts": parts,
+                    # a polygon round a drawn oval misses its outline by a pixel
+                    "exact": spec.get("exact", [(0, 0, w * 16, h * 16)]), "at": at, "quads": quads,
                     "drawing": drawing})
     return out
 
@@ -176,7 +196,8 @@ def piece_spec(spec, comp, entry, blocks, w, h, cells, tiles, run=None):
     name = "%s_%s_%d_%d" % (spec["name"], entry["id"][len("LAYOUT_"):].lower(), x0, y0)
     return {"name": name, "layout": entry["id"], "rect": (x0, y0, x1 - x0, y1 - y0),
             "ground": spec["ground"], "owned": owned, "relief": comp, "pattern": pattern,
-            "south": south, "north": north, "east": east, "west": west}
+            "south": south, "north": north, "east": east, "west": west,
+            "patch_own": spec.get("patch_own", False)}
 
 
 def seam_art(layout, spec, art, height, ground, ground_px):
@@ -931,8 +952,17 @@ def build_models(only=None):
             art = spec["art"]  # composed by its expander (a room's piece)
         else:
             art = layout.building_art(x, y, w, h, layout.ground_tiles(spec["ground"]), cells=owned,
-                                      ground_px=layout.ground_pixels(spec["ground"]) if owned else None,
+                                      ground_px=layout.ground_pixels(spec["ground"])
+                                      if owned or spec.get("ground_px") else None,
                                       upper=spec.get("relief", {}).get("upper", False))
+        if "keep" in spec:
+            # only these rectangles of the drawing are the model's: what
+            # stands under a stall is not
+            apx = art.load()
+            for v in range(h * 16):
+                for u in range(w * 16):
+                    if not any(a <= u < c and b <= v < d for (a, b, c, d) in spec["keep"]):
+                        apx[u, v] = (0, 0, 0, 0)
         if "relief" in spec:
             height = spec["relief"]["height"]
             relief = spec["relief"]
@@ -946,6 +976,16 @@ def build_models(only=None):
                                seam=(h * 16, open_s, open_n), flank_tile=flank,
                                seam_x=(spec.get("west", ()), spec.get("east", ())))]
             spec["exact"] = [(0, 0, w * 16, h * 16)]
+        elif "parts_art" in spec:
+            # parts read off the drawing itself (a battle tent's dome), at
+            # the spec's level of detail ("lod": HeightSolid step, cell, tol)
+            vb.HEIGHTSOLID_LOD = spec.get("lod")
+            try:
+                parts = spec["parts_art"](art)
+            finally:
+                vb.HEIGHTSOLID_LOD = None
+            if isinstance(parts, tuple):
+                parts, art = parts      # with a texture of its own
         else:
             parts = spec["parts"]()
         model = vb.Model(spec["name"], art, parts, (w, h), spec["ground"][0])
@@ -1011,6 +1051,15 @@ def preview(model, out_dir, cams=None):
 # ── Export ───────────────────────────────────────────────────────────────
 
 MAGIC = b"VXB8"
+# A model drawn from its own mesh (static: ctr_voxel.c StaticMeshPrepare), not
+# copied into the chunk it stands in - a chunk's buffer holds ~9300 vertices
+# with its ground and trees (voxel_engine_view.py check):
+#   one of more than STATIC_TRIANGLES triangles;
+#   one of STATIC_REPEATED or more that a map places STATIC_TIMES times or more
+#   (sea rocks, the market's urns): one mesh, drawn at each place.
+STATIC_TRIANGLES = 1000
+STATIC_REPEATED = 200
+STATIC_TIMES = 3
 
 
 def cell_heights(model):
@@ -1128,7 +1177,13 @@ def find_placements(model, layouts_json):
     x, y, w, h = model.spec["rect"]
     r0, r1 = model.spec.get("match_rows", (0, h))
     template = [ref.metatile(x + i, y + j) for j in range(h) for i in range(w)]
-    core = [(i, j) for j in range(r0, r1) for i in range(w) if (i, j) in model.owned]
+    # a cell the drawing gives none of the model's pixels (under a stall)
+    # may be anything
+    apx = model.art.load()
+    core = [(i, j) for j in range(r0, r1) for i in range(w) if (i, j) in model.owned
+            and any(apx[i * 16 + x, j * 16 + y][3] >= 128 for y in range(16) for x in range(16))]
+    if not core:
+        core = [(i, j) for j in range(r0, r1) for i in range(w) if (i, j) in model.owned]
     core.sort(key=lambda c: (c[1], c[0]))
     primary_only = all(template[j * w + i] < vb.NUM_PRIMARY for i, j in core)
     found = []
@@ -1148,7 +1203,9 @@ def find_placements(model, layouts_json):
         # one stands wherever the generator found the same block.
         if "owned" in model.spec and entry["id"] != ref.id:
             continue
-        if not primary_only and entry.get("secondary_tileset") != ref.secondary:
+        # a building drawn alike in other towns' own tiles (the battle
+        # tents): `anywhere` looks for its pixels in every secondary tileset
+        if not primary_only and entry.get("secondary_tileset") != ref.secondary                 and not model.spec.get("anywhere"):
             continue
         path = os.path.join(vb.ROOT, entry["blockdata_filepath"])
         if path not in _EXISTS:
@@ -1158,10 +1215,22 @@ def find_placements(model, layouts_json):
         blocks = vb.read_u16(path)
         lw, lh = entry["width"], entry["height"]
         i0, j0 = core[0]
+        # the first cell may be another metatile drawing the same building
+        # (Dewford paints the gym with its own tiles, sand where Petalburg
+        # has grass): asked once per metatile of the layout
+        starts = {}
         for py in range(lh - h + 1):
             for px in range(lw - w + 1):
-                if (blocks[(py + j0) * lw + px + i0] & 0x3FF) != template[j0 * w + i0]:
+                first = blocks[(py + j0) * lw + px + i0] & 0x3FF
+                if first not in starts:
+                    starts[first] = first == template[j0 * w + i0] or (
+                        "interior" not in model.spec and "owned" not in model.spec
+                        and entry.get("secondary_tileset") != "0"
+                        and same_building_pixels(model, entry["id"], first, i0, j0))
+                if not starts[first]:
                     continue
+                if first != template[j0 * w + i0] and (entry["id"], px, py) in _canonical_at(model):
+                    continue    # another spec models this copy (Rustboro's gym)
                 if not all((blocks[(py + j) * lw + px + i] & 0x3FF) == template[j * w + i]
                            or same_building_pixels(model, entry["id"],
                                                    blocks[(py + j) * lw + px + i] & 0x3FF, i, j)
@@ -1199,6 +1268,16 @@ def find_placements(model, layouts_json):
                 ground = max(ring, key=ring.get) if ring else model.ground_metatile
                 odd = [(i, j) for j in range(h) for i in range(w) if (i, j) in model.owned
                        and (blocks[(py + j) * lw + px + i] & 0x3FF) != template[j * w + i]]
+                if model.spec.get("patch_cells"):
+                    # cells whose map paint shows round the model (the sea
+                    # behind the Space Center's rocket): laid flat on them
+                    odd = sorted(set(odd) | set(model.spec["patch_cells"]))
+                    model.spec.setdefault("patch_all", set()).add(entry["id"])
+                if model.spec.get("patch_own"):
+                    odd = sorted(model.owned)
+                    model.spec.setdefault("patch_all", set()).add(entry["id"])
+                if model.spec.get("cell_ground"):
+                    odd = sorted(set(odd) | set(model.spec["cell_ground"]))
                 if model.spec.get("relief", {}).get("upper"):
                     # only the upper layer is modelled: the map paints the
                     # rest of every cell, its ground's edges as drawn
@@ -1223,6 +1302,12 @@ def find_placements(model, layouts_json):
             odd = []
         found.append((ids.index(lid) + 1, px, py, ground, lid, odd))
     return found
+
+
+def _canonical_at(model):
+    """Where the other specs' own copies stand: (layout, x, y)."""
+    return {(s["layout"], s["rect"][0], s["rect"][1]) for s in specs.SPECS
+            if "rect" in s and "layout" in s and s["name"] != model.spec["name"]}
 
 
 def _layout_art(layout_id):
@@ -1327,7 +1412,15 @@ def placement_patches(model, layout_json_entry_name, layouts, px, py, odd):
     w, h = model.cells
     tops = cell_heights(model)
     cells = []
+    chosen = model.spec.get("cell_ground", {})
     for (i, j) in odd:
+        if (i, j) in chosen:
+            # a ground of the spec's choosing, whole (what the drawing hid)
+            if layout_json_entry_name not in layouts:
+                layouts[layout_json_entry_name] = vb.LayoutArt(layout_json_entry_name)
+            cells.append((i, j, layouts[layout_json_entry_name].cell_image(chosen[(i, j)])
+                          .convert("RGBA")))
+            continue
         if tops[j * w + i] != 0 and layout_json_entry_name not in model.spec.get("patch_all", ()):
             continue  # the model stands there; the map's own paint is lost
         if layout_json_entry_name not in layouts:
@@ -1336,6 +1429,385 @@ def placement_patches(model, layout_json_entry_name, layouts, px, py, odd):
         if img.getbbox() is not None:
             cells.append((i, j, img))
     return cells
+
+
+def sampled_texels(uv, W, H):
+    """The texels a triangle with these uv corners can read with nearest
+    sampling: every texel whose square its uv triangle overlaps (separating
+    axes: the square's two and the triangle's three edge normals), within
+    the rows and columns its corners span. A triangle with no area in uv
+    (a face edge-on to the drawing) reads along its longest edge."""
+    (u0, v0), (u1, v1), (u2, v2) = uv
+    area = (u1 - u0) * (v2 - v0) - (u2 - u0) * (v1 - v0)
+    eps = 1e-4
+    lo_u = max(0, int(math.floor(min(u0, u1, u2) + eps)))
+    hi_u = min(W - 1, max(lo_u, int(math.ceil(max(u0, u1, u2) - eps)) - 1))
+    lo_v = max(0, int(math.floor(min(v0, v1, v2) + eps)))
+    hi_v = min(H - 1, max(lo_v, int(math.ceil(max(v0, v1, v2) - eps)) - 1))
+    out = set()
+    if abs(area) < 1e-6:
+        pts = sorted(uv)
+        a, c = pts[0], pts[-1]
+        n = int(max(abs(c[0] - a[0]), abs(c[1] - a[1])) * 4) + 1
+        for k in range(n + 1):
+            u = a[0] + (c[0] - a[0]) * k / n
+            v = a[1] + (c[1] - a[1]) * k / n
+            out.add((min(hi_u, max(lo_u, int(u))), min(hi_v, max(lo_v, int(v)))))
+        return out
+    sign = 1.0 if area > 0 else -1.0
+    edges = [((ax, ay), (bx - ax, by - ay)) for (ax, ay), (bx, by) in
+             (((u0, v0), (u1, v1)), ((u1, v1), (u2, v2)), ((u2, v2), (u0, v0)))]
+    for v in range(lo_v, hi_v + 1):
+        for u in range(lo_u, hi_u + 1):
+            # overlapping unless some edge has the whole square outside it
+            if all(max(sign * (ex * (cv - ay) - ey * (cu - ax))
+                       for cu in (u, u + 1) for cv in (v, v + 1)) > eps * math.hypot(ex, ey)
+                   for (ax, ay), (ex, ey) in edges):
+                out.add((u, v))
+    return out
+
+
+def pack_band_pieces(model, top, left, texel_sets, band_art):
+    """The faces still reading a band (what they read past the outline the
+    drawing's own faces read clear) keep only what they read: the texels of
+    each, a texel round them, in pieces of those that overlap, packed in
+    shelves under the rows the drawing's faces read (`top`). Each face moves with its piece by whole
+    texels, so what it shows is unchanged; the band's rows then go."""
+    W, H = model.art.size
+    rects = []
+    for texels in texel_sets:
+        us = [u for (u, v) in texels]
+        vs = [v for (u, v) in texels]
+        rects.append([max(0, min(us) - 1), max(0, min(vs) - 1),
+                      min(W, max(us) + 2), min(H, max(vs) + 2)])
+    # pieces: the faces whose rectangles overlap, joined
+    parent = list(range(len(rects)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    grid = {}
+    for i, (u0, v0, u1, v1) in enumerate(rects):
+        for gx in range(u0 // 16, (u1 - 1) // 16 + 1):
+            for gy in range(v0 // 16, (v1 - 1) // 16 + 1):
+                grid.setdefault((gx, gy), []).append(i)
+    for members in grid.values():
+        for a in range(len(members)):
+            for b in range(a + 1, len(members)):
+                i, j = members[a], members[b]
+                ri, rj = rects[i], rects[j]
+                if ri[0] < rj[2] and rj[0] < ri[2] and ri[1] < rj[3] and rj[1] < ri[3]:
+                    parent[find(i)] = find(j)
+    pieces = {}
+    for i, r in enumerate(rects):
+        p = pieces.setdefault(find(i), [r[0], r[1], r[2], r[3], []])
+        p[0], p[1] = min(p[0], r[0]), min(p[1], r[1])
+        p[2], p[3] = max(p[2], r[2]), max(p[3], r[3])
+        p[4].append(i)
+    # merging may make pieces overlap again: join until none do
+    merged = True
+    pieces = list(pieces.values())
+    while merged:
+        merged = False
+        for a in range(len(pieces)):
+            for b in range(a + 1, len(pieces)):
+                pa, pb = pieces[a], pieces[b]
+                if pa[0] < pb[2] and pb[0] < pa[2] and pa[1] < pb[3] and pb[1] < pa[3]:
+                    pa[0], pa[1] = min(pa[0], pb[0]), min(pa[1], pb[1])
+                    pa[2], pa[3] = max(pa[2], pb[2]), max(pa[3], pb[3])
+                    pa[4] += pb[4]
+                    del pieces[b]
+                    merged = True
+                    break
+            if merged:
+                break
+    # shelves under the drawing, tallest first
+    width = max(W, max(p[2] - p[0] for p in pieces))
+    x = y = shelf = 0
+    spots = []
+    for p in sorted(pieces, key=lambda p: -(p[3] - p[1])):
+        w, h = p[2] - p[0], p[3] - p[1]
+        if x + w > width:
+            x, y, shelf = 0, y + shelf, 0
+        spots.append((p, x, y))
+        x += w
+        shelf = max(shelf, h)
+    out = Image.new("RGBA", (width, top + y + shelf), (0, 0, 0, 0))
+    out.paste(model.art.crop((0, 0, W, top)), (0, 0))
+    tris = list(model.mesh.tris)
+    for p, px, py in spots:
+        out.paste(band_art.crop((p[0], p[1], p[2], p[3])), (px, top + py))
+        du, dv = px - p[0], top + py - p[1]
+        for i in p[4]:
+            k = left[i]
+            tri, shade, tag = tris[k]
+            tris[k] = (tuple((x_, y_, z_, u + du, v + dv) for (x_, y_, z_, u, v) in tri), shade, tag)
+    model.mesh.tris = tris
+    model.art = out
+
+
+def same_reads(model, art, tris):
+    """Proof of the compactions: every face reads, texel for texel, the
+    colours it read before (its texels moved by the whole texels its
+    corners moved by). A face reading a texel that differs is an error."""
+    W, H = art.size
+    new = model.art.convert("RGBA")
+    NW, NH = new.size
+    apx, npx = art.load(), new.load()
+    for (tri, _, _), (moved, _, _) in zip(tris, model.mesh.tris):
+        du = moved[0][3] - tri[0][3]
+        dv = moved[0][4] - tri[0][4]
+        if abs(du - round(du)) > 1e-6 or abs(dv - round(dv)) > 1e-6:
+            raise SystemExit("%s: a face moved by part of a texel" % model.name)
+        du, dv = int(round(du)), int(round(dv))
+        for (u, v) in sampled_texels([(p[3], p[4]) for p in tri], W, H):
+            a = apx[u, v]
+            b = npx[u + du, v + dv] if 0 <= u + du < NW and 0 <= v + dv < NH else (0, 0, 0, 0)
+            if (a[3] >= 128) != (b[3] >= 128) or (a[3] >= 128 and a[:3] != b[:3]):
+                raise SystemExit("%s: a face reads %s at %d,%d where it read %s"
+                                 % (model.name, b, u + du, v + dv, a))
+
+
+def compact_rows(model):
+    """Drop the rows of a model's texture no triangle samples, moving every
+    triangle's v down by the rows dropped above it. Each triangle's whole v
+    range (and a row either side) is kept, so its shift is one number and
+    what it shows is unchanged."""
+    # the band's faces moved onto the drawing, or (compact_rows_plain)
+    # only those whose rectangle reads it as it is: whichever leaves the
+    # smaller texture - never more than before
+    trial = copy.copy(model)
+    trial.mesh = copy.copy(model.mesh)
+    trial.mesh.tris = list(model.mesh.tris)
+    compact_rows_plain(trial)
+    compact_rows_moved(model)
+    if folded_area(trial.art, trial.mesh.tris) < folded_area(model.art, model.mesh.tris):
+        model.art, model.mesh.tris = trial.art, trial.mesh.tris
+
+
+def compact_rows_plain(model):
+    """compact_rows as it was: a band face moves onto the drawing when the
+    rectangle of texels its corners span is the same there."""
+    H = model.art.size[1]
+    rows = model.cells[1] * 16
+    if H > rows:
+        art = model.art.convert("RGBA")
+        W = art.size[0]
+        tris = []
+        for (tri, shade, tag) in model.mesh.tris:
+            vs = [p[4] for p in tri]
+            us = [p[3] for p in tri]
+            b = int(min(vs) // rows)
+            if b >= 1 and min(vs) < H and int((max(vs) - 1e-6) // rows) == b:
+                v0, v1 = int(math.floor(min(vs))), int(math.ceil(max(vs)))
+                u0, u1 = int(math.floor(min(us))), int(math.ceil(max(us)))
+                v1, u1 = max(v1, v0 + 1), max(u1, u0 + 1)
+                u0, u1 = max(0, u0), min(W, u1)
+                v1 = min(H, v1)
+                if (u1 > u0 and v1 > v0 and art.crop((u0, v0 - b * rows, u1, v1 - b * rows)).tobytes()
+                        == art.crop((u0, v0, u1, v1)).tobytes()):
+                    tri = tuple((x, y, z, u, v - b * rows) for (x, y, z, u, v) in tri)
+            tris.append((tri, shade, tag))
+        model.mesh.tris = tris
+    drop_rows(model)
+
+
+def compact_rows_moved(model):
+    """compact_rows with the band's faces moved onto the drawing wherever
+    what they read can be made the same there."""
+    H = model.art.size[1]
+    rows = model.cells[1] * 16
+    if H > rows:
+        # A face laid with a grown band (the back of a solid) reads the
+        # drawing instead: inside the outline the bands are copies of it,
+        # and what it reads past the outline - the grown colours - is
+        # written into the drawing's clear texels that no face of the
+        # drawing reads. What every face shows is unchanged, and the
+        # band's rows go (the dome of the Battle Frontier was two pages'
+        # worth of the same drawing).
+        art = model.art.convert("RGBA")
+        W = art.size[0]
+        apx = art.load()
+        band = []
+        front = set()
+        top = rows          # the rows the drawing's own faces read
+        for (tri, shade, tag) in model.mesh.tris:
+            vs = [p[4] for p in tri]
+            texels = sampled_texels([(p[3], p[4]) for p in tri], W, H)
+            b = int(min(vs) // rows)
+            if min(vs) >= H:
+                band.append(None)   # past the texture: reads nothing of it
+            elif b >= 1 and int((max(vs) - 1e-6) // rows) == b:
+                band.append((texels, b))
+            else:
+                band.append(None)
+                top = max(top, min(H, int(math.ceil(max(vs))) + 1))
+                # and a texel round it: a face's edge on a texel's edge may
+                # read the next one by rounding
+                front |= {(u + du, v + dv) for (u, v) in texels if v < rows
+                          for du in (-1, 0, 1) for dv in (-1, 0, 1)}
+        filled = {}         # clear texels given a band's colour
+        held = set()        # texels a moved face reads as they are
+        moved, left = {}, []
+
+        def exact(k):
+            texels, b = band[k]
+            return all(apx[u, v - b * rows] == apx[u, v] for (u, v) in texels)
+
+        # the faces that read the drawing as it is first: a fill made for
+        # another must never take one of those from them
+        # and no fill outside the drawing's own box: it would widen the crop
+        box = art.crop((0, 0, W, rows)).getbbox() or (0, 0, 0, 0)
+        order = [k for k, seen in enumerate(band) if seen is not None and seen[0]]
+        order.sort(key=lambda k: 0 if exact(k) else 1)
+        for k in order:
+            texels, b = band[k]
+            fills, holds = {}, set()
+            for (u, v) in texels:
+                at = (u, v - b * rows)
+                want = apx[u, v]
+                now = fills.get(at, filled.get(at, apx[at]))
+                if now == want:
+                    holds.add(at)
+                    continue
+                if (at in filled or at in fills or at in front or at in held
+                        or at in holds or apx[at][3] >= 128 or want[3] < 128
+                        or not (box[0] <= at[0] < box[2] and box[1] <= at[1] < box[3])):
+                    fills = None
+                    break
+                fills[at] = want
+            if fills is not None and not (holds & set(fills)):
+                filled.update(fills)
+                held |= holds
+                moved[k] = b
+            else:
+                left.append(k)
+        left.sort()
+        tris = []
+        for k, (tri, shade, tag) in enumerate(model.mesh.tris):
+            if k in moved:
+                tri = tuple((x, y, z, u, v - moved[k] * rows) for (x, y, z, u, v) in tri)
+            tris.append((tri, shade, tag))
+        band_art = art.copy()
+        for (u, v), c in filled.items():
+            apx[u, v] = c
+        model.art = art
+        model.mesh.tris = tris
+        if left:
+            # the pieces, or the band's rows as they are: whichever leaves
+            # the smaller texture (many small pieces with their margins can
+            # take more than the few rows they come from)
+            plain = (model.art, list(model.mesh.tris))
+            drop_rows(model)
+            kept = (model.art, model.mesh.tris)
+            model.art, model.mesh.tris = plain[0], list(plain[1])
+            pack_band_pieces(model, top, left, [band[k][0] for k in left], band_art)
+            drop_rows(model)
+            if folded_area(*kept) <= folded_area(model.art, model.mesh.tris):
+                model.art, model.mesh.tris = kept
+            return
+    drop_rows(model)
+
+
+def folded_area(art, tris):
+    """The texels a model's texture takes on its page once folded
+    (compact_islands) and cropped."""
+    trial = type("Trial", (), {})()
+    trial.art, trial.mesh = art, type("Mesh", (), {})()
+    trial.mesh.tris = list(tris)
+    compact_islands(trial)
+    b = trial.art.getbbox() or (0, 0, 1, 1)
+    return (b[2] - b[0]) * (b[3] - b[1])
+
+
+def drop_rows(model):
+    """compact_rows' last step: the rows no face reads go."""
+    H = model.art.size[1]
+    keep = [False] * H
+    spans = []
+    for (tri, shade, tag) in model.mesh.tris:
+        vs = [p[4] for p in tri]
+        lo = min(H - 1, max(0, int(math.floor(min(vs))) - 1))
+        hi = min(H - 1, int(math.ceil(max(vs))) + 1)
+        spans.append(lo)
+        for r in range(lo, hi + 1):
+            keep[r] = True
+    if all(keep):
+        return
+    dropped, before = 0, []
+    for r in range(H):
+        before.append(dropped)
+        if not keep[r]:
+            dropped += 1
+    rows = [r for r in range(H) if keep[r]]
+    W = model.art.size[0]
+    out = Image.new("RGBA", (W, max(1, len(rows))), (0, 0, 0, 0))
+    for k, r in enumerate(rows):
+        out.paste(model.art.crop((0, r, W, r + 1)), (0, k))
+    tris = []
+    for (tri, shade, tag), lo in zip(model.mesh.tris, spans):
+        off = before[lo]
+        tris.append((tuple((x, y, z, u, v - off) for (x, y, z, u, v) in tri), shade, tag))
+    model.mesh.tris = tris
+    model.art = out
+
+
+def compact_islands(model):
+    """Fold a tall model texture (a big solid's drawing over its bands) into
+    strips laid side by side, cut at rows no face reads across: a page packs
+    a squarer block. Each face moves with its strip, by whole texels, so
+    what it shows is unchanged."""
+    W, H = model.art.size
+    if H <= 256 or not model.mesh.tris:
+        return
+    spans = []
+    crossed = [0] * (H + 1)
+    for (tri, shade, tag) in model.mesh.tris:
+        vs = [p[4] for p in tri]
+        lo = max(0, int(math.floor(min(vs))) - 1)
+        hi = min(H, int(math.ceil(max(vs))) + 1)
+        spans.append(lo)
+        crossed[lo + 1] += 1
+        crossed[hi] -= 1
+    inside, cuts = 0, []
+    for r in range(1, H):
+        inside += crossed[r]
+        if inside == 0:
+            cuts.append(r)
+    # as many strips as the page's width allows, cut at the free rows
+    # nearest to even shares
+    k = min((H + 255) // 256, 512 // max(1, W))
+    if k < 2:
+        return
+    segs, start = [], 0
+    for j in range(1, k):
+        want = H * j / k
+        ok = [c for c in cuts if c > start]
+        if not ok:
+            break
+        end = min(ok, key=lambda c: abs(c - want))
+        segs.append((start, end))
+        start = end
+    segs.append((start, H))
+    if len(segs) < 2:
+        return
+    # not, where the page can take it whole, when the cuts are so uneven
+    # the strips take far more room than the texture did
+    if H <= 512 and W * len(segs) * max(e - s_ for s_, e in segs) > 1.15 * W * H:
+        return
+    out = Image.new("RGBA", (W * len(segs), max(e - s_ for s_, e in segs)), (0, 0, 0, 0))
+    for j, (s_, e) in enumerate(segs):
+        out.paste(model.art.crop((0, s_, W, e)), (j * W, 0))
+    tris = []
+    for (tri, shade, tag), lo in zip(model.mesh.tris, spans):
+        j = max(i for i, (s_, e) in enumerate(segs) if s_ <= lo)
+        s_ = segs[j][0]
+        tris.append((tuple((x, y, z, u + j * W, v - s_) for (x, y, z, u, v) in tri), shade, tag))
+    model.mesh.tris = tris
+    model.art = out
 
 
 def export(models, path):
@@ -1347,10 +1819,14 @@ def export(models, path):
     patches), and a page-model record tells where on that page a model's
     drawing went. The console loads the pages of the maps on screen only.
 
+    Drawings with authored glass masks retain their original pixels and UV:
+    band compaction preserves colour reads, not the mask's source coordinates.
+
       "VXB8", u16 pages, models, pageModels, placements, heightBytes, masks,
       u32 vertices, u16 variants, u16 0
       pages       x 8:  u16 w, h (bit 15: glass mask); u32 offset of RGBA5551 texels
       models      x 16: u8 w, h; u16 ground; u32 firstVertex, vertexCount, heights
+                        (vertexCount's top bit: a static model)
       pageModels  x 8:  u16 model, page; i16 ox, oy (pixels)
       placements  x 16: u16 layout, pageModel, x, y, ground, extraCount;
                         u32 extraFirst (ground patches, uv in page pixels)
@@ -1369,13 +1845,26 @@ def export(models, path):
                                   encoding="utf-8"))["layouts"]
     layouts = {}
     found = []
+    per_map = {i: {} for i in range(len(models))}   # placements of each model in each map
     for index, m in enumerate(models):
         for lid, px, py, ground, name, odd in find_placements(m, layouts_json):
             cells = placement_patches(m, name, layouts, px, py, odd)
             found.append((lid, index, px, py, ground, cells, name))
+            per_map.setdefault(index, {})
+            per_map[index][lid] = per_map[index].get(lid, 0) + 1
             if odd:
                 print("  %s: %s at %d,%d differs in %d cell(s), %d patched from the map"
                       % (m.name, name, px, py, len(odd), len(cells)))
+    # only the rows of a drawing some face samples go to the page: a solid's
+    # grown bands (Mound.with_ring, own_bands) are mostly never read, and
+    # the ring band of a thing without one is empty
+    for m in models:
+        if any(voxel_night.building_mask(m.art, m.name)):
+            continue
+        before = (m.art.convert("RGBA"), list(m.mesh.tris))
+        compact_rows(m)
+        compact_islands(m)
+        same_reads(m, *before)
     crops = {m.name: (m.art.getbbox() or (0, 0, 1, 1)) for m in models}
 
     # models: geometry once, uv in the model's own art pixels
@@ -1389,7 +1878,16 @@ def export(models, path):
                 verts += [x / 16.0, y / 16.0, z / 16.0, u, v, shade]
         count = len(verts) // 6 - first
         w, h = m.cells
-        records.append(struct.pack("<BBHIII", w, h, m.ground_metatile, first, count, len(heights)))
+        # a static model (spec "static"): drawn from its own mesh, never
+        # copied into a chunk (ctr_voxel.c StaticMeshPrepare) - vertexCount's top bit
+        # and the heavy and the repeated (STATIC_TRIANGLES)
+        tris = len(m.mesh.tris)
+        static = 0x80000000 if ((getattr(m, "spec", None) or {}).get("static")
+                                or tris > STATIC_TRIANGLES
+                                or (tris >= STATIC_REPEATED
+                                    and max(per_map[index].values() or [0]) >= STATIC_TIMES)) else 0
+        records.append(struct.pack("<BBHIII", w, h, m.ground_metatile, first, count | static,
+                                   len(heights)))
         # 255: a cell of the rectangle the object does not own (a hedge's
         # rectangle holds the house it runs round)
         heights += bytes(t if (i % w, i // w) in m.owned else 255
@@ -1422,6 +1920,11 @@ def export(models, path):
         images += [(("p", key), img) for key, img in patches.items()]
         (tw, th), spots = pack_atlas(images)
         if tw * th > MAX_TEXTURE[0] * MAX_TEXTURE[1]:
+            big = sorted(images, key=lambda kv: -kv[1].size[0] * kv[1].size[1])[:12]
+            print("  page of %s: %d texels in %d images; largest: %s" % (
+                recs[0][6], sum(i.size[0] * i.size[1] for _, i in images), len(images),
+                ", ".join("%s %dx%d" % (models[k[1]].name if k[0] == "m" else "patch", i.size[0], i.size[1])
+                          for k, i in big)))
             raise SystemExit("%s: building page %dx%d exceeds the console's %dx%d"
                              % (recs[0][6], tw, th, MAX_TEXTURE[0], MAX_TEXTURE[1]))
         page = len(pages)
@@ -1557,7 +2060,8 @@ def town_preview(models, layout_id, out_dir):
                 continue
             for j in range(h):
                 for i in range(w):
-                    override[(px + i, py + j)] = ground
+                    if ground != OWN_GROUND:    # a prop keeps each cell's own
+                        override[(px + i, py + j)] = ground
             for (i, j, patch) in placement_patches(m, layout_id, {layout_id: layout}, px, py, odd):
                 q = [(px + i, 0.01, py + j, 0, 0), (px + i + 1, 0.01, py + j, 16, 0),
                      (px + i + 1, 0.01, py + j + 1, 16, 16), (px + i, 0.01, py + j + 1, 0, 16)]
@@ -1669,15 +2173,20 @@ def verify(models, out):
                     if (u, v) not in model.own:
                         apx[u, v] = (0, 0, 0, 0)
             judged = types.SimpleNamespace(art=art, mesh=model.mesh, name=model.name)
+        reference = model.spec.get("drawing")
+        if callable(reference):
+            reference = reference(model)
         wrong, missing, extra = vb.ortho_check(judged, os.path.join(out, model.name + "_ortho.png"),
                                                exact=model.spec.get("exact"),
-                                               reference=model.spec.get("drawing"))
+                                               reference=reference)
         bad = vb.density_check(model)
         print("%-22s %4d tris  exact: wrong=%d missing=%d extra=%d  texel density: %d bad"
               % (model.name, model.triangle_count(), wrong, missing, extra, len(bad)))
         for tag, along, down, shear in bad[:8]:
             print("    %-28s along=%.3f down=%.3f shear=%.3f" % (tag, along, down, shear))
-        if wrong or missing or extra or bad:
+        # a model whose outline is a polygon (BakedLathe) declares how many
+        # pixels of it may differ; any more is a failure
+        if wrong + missing + extra > model.spec.get("tolerance", 0) or bad:
             failed = True
     rooms = sorted({m.spec["layout"] for m in models if "interior" in m.spec})
     for lid in rooms:

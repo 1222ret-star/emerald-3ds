@@ -20,10 +20,12 @@ def function(source, signature):
 
 
 def rendering_source(video, header):
-    enum_start = header.index("enum\n{")
+    enum_start = header.rfind("enum\n{", 0, header.index("CTR_CENTRED_NONE"))
     enum_end = header.index("};", enum_start) + 2
     fill_end = video.index("int CtrPokenavList_Bg(void);")
     fill_start = video.rfind("typedef struct", 0, fill_end)
+    empty_start = video.rfind("typedef struct", 0, video.index("} EmptyWalk;"))
+    empty_end = video.index("static bool EmptyWalkHolds(", empty_start)
     source = r'''
 #include <assert.h>
 #include <stdbool.h>
@@ -60,7 +62,8 @@ static void *sNavBand;
 static uint16_t registers[48], lineRegisters[CTR_LINE_REGS], tilemaps[2][1024];
 static const uint16_t *sRegLine;
 static struct { const uint16_t *regs; } sMemory = {registers};
-static struct { unsigned tiles; } sStats;
+static struct { unsigned tiles, frames; } sStats;
+static float sZoom = 1, sOffX, sOffY;
 typedef struct { unsigned width, height, bg; } Texture;
 typedef struct { Texture tex; } LayerTexture;
 typedef struct { u16 width, height; float left, top, right, bottom; } Tex3DS_SubTexture;
@@ -117,6 +120,12 @@ static void DrawSlot(int slot, int screenX, int screenY, bool flipX, bool flipY)
                 (int)(tile % 32u) * 8 + (flipX ? 7 - column : column),
                 (int)(tile / 32u) * 8 + (flipY ? 7 - row : row)));
 }
+static bool TileWalkBegin(void) { return false; }
+static void TileWalkSlot(bool batch, int slot, float screenX, float screenY, bool flipX, bool flipY) {
+    (void)batch;
+    DrawSlot(slot, (int)screenX, (int)screenY, flipX, flipY);
+}
+static void TileWalkEnd(bool batch) { (void)batch; }
 static void Error(unsigned bit, const char *reason) { (void)bit; (void)reason; abort(); }
 static bool LayerDrawable(unsigned bg) { (void)bg; return textured; }
 static float LayerBrightness(unsigned bg, bool *white) { (void)bg; *white = false; return 0; }
@@ -141,11 +150,18 @@ static void C2D_DrawImageAt(C2D_Image image, float screenX, float screenY, float
 static void DrawNavBackmost(unsigned bg, bool texture) { (void)bg; (void)texture; abort(); }
 static void DrawStageBg(unsigned bg) { (void)bg; abort(); }
 static void DrawBattleText(unsigned bg) { (void)bg; abort(); }
-static void DrawBattleBg(unsigned bg) { (void)bg; abort(); }
+static void DrawBattleBgSplit(unsigned bg) { (void)bg; abort(); }
 static void DrawSectionBackdrop(int marginX, unsigned bg) { (void)marginX; (void)bg; abort(); }
 static void DrawLayerRect(unsigned bg, int x0, int x1, int y0, int y1,
                           float sx, float sy, float dx, float dy, bool fade, int top, int bottom);
 static void Compose(void);
+'''
+    source += video[empty_start:empty_end]
+    source += r'''
+static bool EmptyWalkHolds(const EmptyWalk *previous, const EmptyWalk *current) {
+    (void)previous; (void)current;
+    return false;
+}
 '''
     source += video[fill_start:fill_end]
     for signature in (
@@ -250,6 +266,7 @@ def main():
             subprocess.run(["git", "apply", str(PATCH)], cwd=folder, check=True)
             pokedex = copied.read_text()
         source = r'''
+#define PLATFORM_3DS 1
 #include <assert.h>
 #include <stdbool.h>
 #include <stdint.h>
@@ -273,11 +290,11 @@ static struct { TaskFunc func; int16_t data[16]; bool active; } gTasks[16];
 static struct { struct { u8 priority, paletteNum; } oam; void (*callback)(void *); } gSprites[1];
 static IntrCallback gPokedexVBlankCB;
 static bool videoStage, videoBattle, videoTransition;
-static unsigned videoCentred, newEntryPrints, freedWindows, cries;
+static unsigned videoCentred, newEntryPrints, freedWindows, cries, battleVBlanks;
 static u16 newKeys;
 static const u32 monPalette[1];
-static void BattleVBlank(void) {}
-static void OtherBattleVBlank(void) {}
+static void BattleVBlank(void) { ++battleVBlanks; }
+static void OtherBattleVBlank(void) { ++battleVBlanks; }
 static void VBlankCB_Pokedex(void) {}
 static void FieldVBlank(void) {}
 static void UnrelatedTask(u8 taskId) { (void)taskId; }
@@ -349,11 +366,13 @@ bool8 CtrPokedex_IsCaughtMonPage(void);
         source += bridge[bridge.index("#define CTR_STAGE_CALLBACKS"):bridge.index("static void RememberCallback(")]
         for signature in (
             "static void RememberCallback(", "static void SetCentredCallback(",
+            "void CtrCentred_SetVBlankCallback(",
             "void CtrCentredPokedex_SetVBlankCallback(", "void CtrBattle_SetVBlankCallback(",
             "void CtrTransition_SetVBlankCallback(", "static void UpdateSet(", "static void UpdateStage(",
         ):
             source += function(bridge, signature)
         source += "#define SetVBlankCallback CtrCentredPokedex_SetVBlankCallback\n"
+        source += function(pokedex, "static void VBlankCB_CaughtMonPage(")
         source += pokedex[pokedex.index("#define tState         data[0]"):pokedex.index("u8 DisplayCaughtMonDexPage(")]
         for signature in (
             "u8 DisplayCaughtMonDexPage(", "static void Task_DisplayCaughtMonDexPage(u8 taskId)",
@@ -369,7 +388,11 @@ static void CheckCaught(void) {
     assert(gMain.inBattle);
     assert(videoCentred == CTR_CENTRED_POKEDEX_CAUGHT);
     assert(!videoStage && !videoBattle && !videoTransition);
-    assert(sCentred.count == 0);
+    assert(sCentred.count <= 1);
+    if (sCentred.count) {
+        assert(sCentred.callbacks[0] == VBlankCB_CaughtMonPage);
+        assert(sCentred.screens[0] == CTR_CENTRED_PLAIN);
+    }
 }
 static void CheckBattle(IntrCallback callback) {
     UpdateStage();
@@ -408,7 +431,16 @@ static void Capture(u16 exitKey, IntrCallback callback) {
         gTasks[taskId].func(taskId);
         CheckCaught();
     }
-    assert(gMain.vblankCallback == callback);
+    assert(gMain.vblankCallback == VBlankCB_CaughtMonPage);
+    assert(gPokedexVBlankCB == callback);
+    assert(sCentred.on && sCentred.screen == CTR_CENTRED_PLAIN);
+    unsigned previousVBlanks = battleVBlanks;
+    gMain.vblankCallback();
+    assert(battleVBlanks == previousVBlanks + 1);
+    SetVBlankCallback(NULL);
+    CheckCaught();
+    CtrCentred_SetVBlankCallback(VBlankCB_CaughtMonPage);
+    CheckCaught();
     gTasks[taskId].func(taskId);
     CheckCaught();
     assert(gTasks[taskId].func == Task_DisplayCaughtMonDexPage);

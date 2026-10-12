@@ -74,7 +74,7 @@ typedef struct {
     const void *primary, *secondary, *layout;
     VoxelAtlasSlot *atlas; uint32_t atlasGeneration;
     VoxelGpuVertex *vram;
-    unsigned bytes, count, terrainCount, terrainFirst[VOXEL_ATLAS_PAGES + 1u], buildingFirst;
+    unsigned bytes, count, terrainCount, terrainFirst[VOXEL_ATLAS_PAGES + 1u], buildingFirst, staticCount;
     int buildingPage;
     uint32_t stamp, viewStamp;
     int gx0, gz0, gx1, gz1; float gy0, gy1, buildMs;
@@ -298,8 +298,10 @@ static void TestDraft(void)
     assert(chunk->gy0 == 0.0f && chunk->gy1 > 0.0f && chunk->gy1 <= 0.75f + 1e-6f);
     /* the same square again reuses its slot and its block */
     uploadAllowed = 8;
+    chunk->staticCount = 3;
     again = DraftChunk(&site, &atlas, chunk);
     assert(again == chunk && FindChunk(false, 1, 2, 1, 2) == chunk);
+    assert(chunk->staticCount == 0);
     {
         unsigned used = 0; for (unsigned i = 0; i < VOXEL_CHUNK_SLOTS; ++i) used += sChunks[i].used;
         assert(used == 1);

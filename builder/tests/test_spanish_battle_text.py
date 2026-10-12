@@ -33,6 +33,28 @@ class SpanishBattleTextTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             localization.localize_port_battle_text("")
 
+    def test_french_conditional_preserves_french_and_localizes_fallback(self):
+        original = 'static const u8 sText_PkmnTeamGainedEXP[] = _("original");'
+        french = r'static const u8 sText_PkmnTeamGainedEXP[] = _("Le reste de l’équipe gagne\ndes points d’expérience!\p");'
+        conditional = (
+            "#if defined(PORT_BRIDGE) && GAME_LANGUAGE == LANGUAGE_FRENCH\n"
+            + french + "\n#else\n" + original + "\n#endif"
+        )
+        source = self.source.replace(original, conditional)
+        result = localization.localize_port_battle_text(source)
+        self.assertIn(french, result)
+        self.assertIn(
+            "#else\n"
+            + r'static const u8 sText_PkmnTeamGainedEXP[] = _("¡El resto del equipo ganó\npuntos de experiencia!\p");',
+            result,
+        )
+        self.assertEqual(localization.localize_port_battle_text(result), result)
+
+    def test_duplicate_definitions_outside_conditional_are_rejected(self):
+        duplicate = 'static const u8 sText_PkmnTeamGainedEXP[] = _("duplicate");'
+        with self.assertRaises(ValueError):
+            localization.localize_port_battle_text(self.source + "\n" + duplicate)
+
     @unittest.skipUnless(shutil.which("cc"), "requires a host C compiler")
     def test_clock_accents_use_game_glyphs(self):
         source = (ROOT / "3ds_port/src/3ds_bottom_ui.c").read_text()
@@ -41,21 +63,10 @@ class SpanishBattleTextTests(unittest.TestCase):
         harness = '''
 #include <assert.h>
 #include <stdint.h>
+#include "3ds_locale_text.h"
 typedef uint8_t u8;
 #define CHAR_N_TILDE 0x14
 #define CHAR_I_ACUTE 0x5A
-#define CHAR_A 0xBB
-#define CHAR_a 0xD5
-#define CHAR_0 0xA1
-#define CHAR_SLASH 0xBA
-#define CHAR_HYPHEN 0xAE
-#define CHAR_PERIOD 0xAD
-#define CHAR_COLON 0xF0
-#define CHAR_EXCL_MARK 0xAB
-#define CHAR_QUESTION_MARK 0xAC
-#define CHAR_SGL_QUOTE_RIGHT 0xB4
-#define CHAR_e_ACUTE 0x1B
-#define CHAR_SPACE 0
 #define EOS 0xFF
 '''
         harness += source[start:end]
@@ -74,6 +85,7 @@ int main(void) {
             binary = folder / "clock"
             code.write_text(harness)
             subprocess.run(["cc", "-std=c99", "-Wall", "-Wextra", "-Werror",
+                            "-I", str(ROOT / "3ds_port/include"),
                             str(code), "-o", str(binary)], check=True)
             subprocess.run([str(binary)], check=True)
 

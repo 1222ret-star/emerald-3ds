@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "global.h"
+
 #include "voxel_lighting.h"
 #include "voxel_atlas.h"
 #include "voxel_regions.h"
@@ -22,7 +24,11 @@ static bool sRailPresent;
 static const uint16_t sRailMask[16] = {[14] = 0xFFFF, [15] = 0xFFFF};
 static int sOffsetX, sOffsetZ;
 static unsigned sTileReads;
-const uint8_t gTileset_Dewford = 0;
+
+/* voxel_tree.c compares the map's secondary tileset with this object to
+ * recognise Dewford's tree art; this test never builds trees, so an empty
+ * tileset is enough for the link. */
+const struct Tileset gTileset_Dewford = {0};
 
 unsigned VoxelWorld_InstanceCount(void) { return 2; }
 const VoxelMapInstance *VoxelWorld_Instance(unsigned i) { return i < 2 ? &sMaps[i] : NULL; }
@@ -152,6 +158,24 @@ static void MovingSunTests(void)
     assert(!VoxelLighting_SetSun(0.0f, 0.55f, -1.0f, 103));
 
     sTreePresent = sRailPresent = true;
+    float directionSamples[7][100];
+    for (unsigned direction = 0; direction < sizeof(directions) / sizeof(directions[0]); ++direction)
+    {
+        VoxelLighting_SetSun(directions[direction][0], directions[direction][1], 1.0f, direction + 300);
+        VoxelLighting_Reset();
+        for (unsigned sample = 0; sample < 100; ++sample)
+            directionSamples[direction][sample] = VoxelLighting_Sample(
+                (float)(sample % 10) * 1.3f - 1.0f, 0.37f,
+                (float)(sample / 10) * 1.3f - 1.0f);
+    }
+    for (unsigned direction = 0; direction < sizeof(directions) / sizeof(directions[0]); ++direction)
+    {
+        assert(VoxelLighting_SetSun(directions[direction][0], directions[direction][1], 1.0f, direction + 400));
+        for (unsigned sample = 0; sample < 100; ++sample)
+            assert(directionSamples[direction][sample] == VoxelLighting_Sample(
+                (float)(sample % 10) * 1.3f - 1.0f, 0.37f,
+                (float)(sample / 10) * 1.3f - 1.0f));
+    }
     for (unsigned direction = 0; direction < sizeof(directions) / sizeof(directions[0]); ++direction)
     {
         assert(VoxelLighting_SetSun(directions[direction][0], directions[direction][1], 1.0f, direction + 200));

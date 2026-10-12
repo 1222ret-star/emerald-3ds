@@ -68,6 +68,8 @@ FULL_DATA_OBJS += build/root/3ds_song_blob.o
 BACKEND_SRCS := src/3ds_assets.c src/3ds_map_loader.c src/3ds_compat.c
 BACKEND_SRCS += src/3ds_game_full.c src/3ds_game_bridge.c src/3ds_script_loader.c
 BACKEND_SRCS += src/3ds_bottom_ui.c
+# The battle's info boxes at the screen's resolution (3ds_battle_hud.h).
+BACKEND_SRCS += src/3ds_battle_hud.c
 build/bridge/3ds_bottom_ui.o: FULLCFLAGS += -DCTR_APP_VERSION='"$(APP_VERSION)"'
 # The ENHANCEMENTS and CHEATS pages of OPTIONS (include/3ds_extras.h).
 BACKEND_SRCS += src/3ds_extras.c
@@ -88,7 +90,18 @@ SOUND_WRAPPED := m4aSoundVSync m4aSoundMain m4aSoundInit m4aSoundMode m4aSoundVS
 	SetPokemonCryPanpot SetPokemonCryPitch SetPokemonCryLength SetPokemonCryRelease \
 	SetPokemonCryProgress SetPokemonCryChorus SetPokemonCryStereo SetPokemonCryPriority \
 	SetPokemonCryTone IsPokemonCryPlaying
-LDFLAGS += $(foreach f,$(PROF_WRAPPED) $(SOUND_WRAPPED),-Wl,--wrap=$(f))
+# The field map's changes, announced to the voxel world (src/3ds_map_events.c).
+BACKEND_SRCS += src/3ds_map_events.c
+# Sprites' identities, numbered by sprite.c and completed here.
+BACKEND_SRCS += src/3ds_sprite_ids.c
+# The scene cycling test of phase F2 (empty unless built with CTR_CYCLE_TEST).
+BACKEND_SRCS += src/3ds_cycle_test.c
+# Its flags, e.g. TEST_FLAGS=-DCTR_BATTLE_TEST=SPECIES_SHUCKLE (touch the source to rebuild it).
+build/bridge/3ds_cycle_test.o: FULLCFLAGS += $(TEST_FLAGS)
+MAP_WRAPPED := MapGridSetMetatileIdAt MapGridSetMetatileEntryAt MapGridSetMetatileImpassabilityAt \
+	InitMap InitMapFromSavedGame SetCurrentMapLayout GenerateBattlePyramidFloorLayout \
+	GenerateTrainerHillFloorLayout CameraMove
+LDFLAGS += $(foreach f,$(PROF_WRAPPED) $(SOUND_WRAPPED) $(MAP_WRAPPED),-Wl,--wrap=$(f))
 BACKEND_OBJS := $(patsubst src/%.c,build/bridge/%.o,$(BACKEND_SRCS))
 
 # The voxel overworld is split along the same SDK boundary as the rest of the
@@ -116,6 +129,8 @@ endif
 ROMFS_SHADER_OUTS += romfs/stage/leaves.bin
 # The bottom screen's battle menus: the port's own art (scripts/gen_battle_art.py).
 ROMFS_SHADER_OUTS += romfs/bottom/battle.bin
+# The battle's info boxes and text box: the port's own art (scripts/gen_battle_hud.py).
+ROMFS_SHADER_OUTS += romfs/battle/hud.bin
 
 FULL_OBJECTS := $(FULL_C_OBJS) $(FULL_DATA_OBJS) $(BACKEND_OBJS)
 # The keep table is only referenced from the payload, which is not linked,
@@ -336,7 +351,7 @@ $(ROMFS_SCRIPT_OUTS) &: $(TARGET).elf $(SCRIPT_DATA_OBJS) scripts/gen_script_bun
 $(ROMFS_SOUND_OUTS) &: $(TARGET).elf $(ROOT_SONG_OBJS) scripts/gen_sound_bundle.py
 	@mkdir -p romfs/sound
 	"$(PYTHON)" scripts/gen_sound_bundle.py --port-dir . --bundle --out-dir romfs/sound
-	"$(PYTHON)" scripts/verify_scripts.py --elf $(TARGET).elf --out-dir romfs/sound 		--tag verify_songs --magic C3AB --payload songs.bin --reloc songs.rel 		--blob-symbol __ctr_song_blob --require mus_dummy --require mus_littleroot
+	"$(PYTHON)" scripts/verify_scripts.py --elf $(TARGET).elf --out-dir romfs/sound 		--tag verify_songs --magic C3AB --payload songs.bin --reloc songs.rel 		--blob-symbol __ctr_song_blob --require mus_dummy --require mus_littleroot --song-headers
 
 # The game's linked read-only data: identical layout in both links, contents
 # from the image, reserved NOLOAD in the executable.
@@ -429,6 +444,10 @@ romfs/bottom/battle.bin: scripts/gen_battle_art.py
 	@mkdir -p $(@D)
 	"$(PYTHON)" scripts/gen_battle_art.py --output $@
 
+romfs/battle/hud.bin: scripts/gen_battle_hud.py
+	@mkdir -p $(@D)
+	"$(PYTHON)" scripts/gen_battle_hud.py --output $@
+
 romfs/stage/leaves.bin: scripts/gen_intro_margins.py $(ROOT)/graphics/intro/scene_1/bg.4bpp \
 		$(wildcard $(ROOT)/graphics/intro/scene_1/bg?_map.bin)
 	@mkdir -p $(@D)
@@ -478,6 +497,7 @@ build/voxel_tree_test.exe: tests/voxel_tree_test.c src/voxel/voxel_tree.c \
 		src/voxel/voxel_building.c src/voxel/voxel_relief.c src/voxel/voxel_grade.c src/3ds_video_decode.c
 	@mkdir -p $(@D)
 	$(HOSTCC) -std=c99 -O2 -Wall -Wextra -Werror -Iinclude -Isrc/voxel \
+		-iquote ../include \
 		tests/voxel_tree_test.c src/voxel/voxel_tree.c \
 		src/voxel/voxel_mesh_builder.c src/voxel/voxel_sign.c \
 		src/voxel/voxel_building.c src/voxel/voxel_relief.c src/voxel/voxel_grade.c src/3ds_video_decode.c $(HOST_VOXEL_DEFS) -lm -o $@
@@ -496,11 +516,11 @@ LIGHTING_TEST_HEADERS := src/voxel/voxel_lighting.h src/voxel/voxel_mesh_builder
 build/voxel_lighting_on_test.exe: $(LIGHTING_TEST_SRCS) $(LIGHTING_TEST_HEADERS)
 	@mkdir -p $(@D)
 	$(HOSTCC) -std=c99 -O2 -Wall -Wextra -Werror -DCTR_VOXEL_LIGHTING=1 -DVOXEL_LIGHTING_TESTS -Isrc/voxel \
-		$(HOST_VOXEL_DEFS) $(LIGHTING_TEST_SRCS) -lm -o $@
+		-iquote ../include $(HOST_VOXEL_DEFS) $(LIGHTING_TEST_SRCS) -lm -o $@
 build/voxel_lighting_off_test.exe: $(LIGHTING_TEST_SRCS) $(LIGHTING_TEST_HEADERS)
 	@mkdir -p $(@D)
 	$(HOSTCC) -std=c99 -O2 -Wall -Wextra -Werror -DCTR_VOXEL_LIGHTING=0 -Isrc/voxel \
-		$(HOST_VOXEL_DEFS) $(LIGHTING_TEST_SRCS) -lm -o $@
+		-iquote ../include $(HOST_VOXEL_DEFS) $(LIGHTING_TEST_SRCS) -lm -o $@
 
 .PHONY: verify-voxel-structures
 verify: verify-voxel-structures
@@ -516,6 +536,7 @@ GROUND_TEST_SRCS := tests/voxel_ground_mesh_test.c \
 build/voxel_ground_mesh_test.exe: $(GROUND_TEST_SRCS) $(LIGHTING_TEST_HEADERS) src/voxel/voxel_sign.h
 	@mkdir -p $(@D)
 	$(HOSTCC) -std=c99 -O2 -Wall -Wextra -Werror -Iinclude -Isrc/voxel $(HOST_VOXEL_DEFS) \
+		-iquote ../include \
 		-DVOXEL_BUILDINGS_PATH=\"romfs/voxel/buildings.bin\" $(GROUND_TEST_SRCS) -lm -o $@
 
 build/voxel_sign_test.exe: tests/voxel_sign_test.c src/voxel/voxel_sign.c src/voxel/voxel_sign.h
@@ -580,3 +601,12 @@ verify-pokedex-capture:
 
 verify-voxel-dewford:
 	"$(PYTHON)" -B tests/voxel_dewford_test.py --tree "$(ROOT)"
+
+# What the console builds of every map, checked by the engine's own code over
+# the shipped data (scripts/voxel_engine_view.py check, tests/voxel_scene_dump.c):
+# chunks that would refuse triangles, static models over their memory. A
+# warning for now - the report is build/voxel_check.report.
+all: build/voxel_check.report
+build/voxel_check.report: romfs/voxel/buildings.bin romfs/voxel/relief.bin romfs/voxel/regions.bin 		romfs/voxel/signposts.bin scripts/voxel_engine_view.py tests/voxel_scene_dump.c 		$(wildcard src/voxel/voxel_*.c) $(wildcard src/voxel/voxel_*.h)
+	@mkdir -p $(@D)
+	@"$(PYTHON)" scripts/voxel_engine_view.py check > $@ 2>&1 		&& echo "voxel check: ok" 		|| { echo "voxel check: WARNING, see $@"; grep -E "DROPS|OVER|failed" $@ || true; }

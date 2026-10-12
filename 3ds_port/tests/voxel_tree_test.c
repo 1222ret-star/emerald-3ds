@@ -4,16 +4,22 @@
 #include <stdio.h>
 #include <string.h>
 
+#include "global.h"
+
 #include "voxel_tree.h"
 #include "voxel_atlas.h"
 #include "voxel_regions.h"
+
+/* voxel_tree.c compares the map's secondary tileset with this object to
+ * recognise Dewford's tree art; this test never uses that art, so an empty
+ * tileset is enough for the link. */
+const struct Tileset gTileset_Dewford = {0};
 
 static VoxelMapInstance sMap = {.originX = 7, .originY = 7, .width = 2, .height = 2};
 static bool sGeneral = true;
 static int sTiles[] = {0x1D6, 0x1D7, 0x1E6, 0x1E7};
 static VoxelAtlasMap sAtlas;
 static VoxelVertex sWhole[1024], sParts[1024];
-const uint8_t gTileset_Dewford = 0;
 
 bool VoxelWorld_UsesTreeSprites(const VoxelMapInstance *inst)
 {

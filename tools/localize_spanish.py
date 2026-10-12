@@ -38,9 +38,18 @@ def localize_port_battle_text(text: str) -> str:
     }
     for name, replacement in replacements.items():
         pattern = r"(static const u8 " + name + r"\[\] = )[^;]+;"
-        text, count = re.subn(pattern, lambda match: match[1] + replacement + ";", text)
-        if count != 1:
+        matches = list(re.finditer(pattern, text))
+        if name == "sText_PkmnTeamGainedEXP" and len(matches) == 2:
+            prefix = text[:matches[0].start()].rstrip()
+            between = text[matches[0].end():matches[1].start()].strip()
+            if not prefix.endswith("#if defined(PORT_BRIDGE) && GAME_LANGUAGE == LANGUAGE_FRENCH") or between != "#else":
+                raise ValueError("Missing or duplicate battle text: " + name)
+            match = matches[1]
+        elif len(matches) == 1:
+            match = matches[0]
+        else:
             raise ValueError("Missing or duplicate battle text: " + name)
+        text = text[:match.start()] + match[1] + replacement + ";" + text[match.end():]
     return text
 
 
