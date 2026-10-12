@@ -4,19 +4,24 @@ Applies after 0015-ivs-evs.patch; apply with tools/bootstrap.py.
 diff --git a/data/scripts/repel.inc b/data/scripts/repel.inc
 --- a/data/scripts/repel.inc
 +++ b/data/scripts/repel.inc
-@@ -1,6 +1,32 @@
+@@ -1,4 +1,27 @@
  EventScript_RepelWoreOff::
 +	@ Repel prompt (OPTIONS, ENHANCEMENTS): another of the last Repel used?
 +	special ShouldOfferAnotherRepel
 +	goto_if_eq VAR_RESULT, FALSE, EventScript_RepelWoreOffOnly
 +	lockall
++	message Text_RepelWoreOff
++	waitmessage
++	waitbuttonpress
 +	bufferitemname STR_VAR_1, VAR_LAST_REPEL
-+	msgbox Text_RepelWoreOffUseAnother, MSGBOX_YESNO
++	msgbox gText_UseAnotherRepel, MSGBOX_YESNO
 +	goto_if_eq VAR_RESULT, NO, EventScript_RepelWoreOffDone
 +	removeitem VAR_LAST_REPEL
 +	special SetRepelStepsFromLastRepel
 +	playse SE_REPEL
-+	msgbox Text_UsedAnotherRepel, MSGBOX_DEFAULT
++	bufferitemname STR_VAR_2, VAR_LAST_REPEL
++	message gText_PlayerUsedVar2
++	waitmessage
 +	waitse
 +EventScript_RepelWoreOffDone:
 +	closemessage
@@ -27,16 +32,6 @@ diff --git a/data/scripts/repel.inc b/data/scripts/repel.inc
  	msgbox Text_RepelWoreOff, MSGBOX_SIGN
  	end
  
- Text_RepelWoreOff:
- 	.string "REPEL's effect wore off…$"
-+
-+Text_RepelWoreOffUseAnother:
-+	.string "REPEL's effect wore off…\p"
-+	.string "Use another {STR_VAR_1}?$"
-+
-+Text_UsedAnotherRepel:
-+	.string "{PLAYER} used the\n"
-+	.string "{STR_VAR_1}.$"
 diff --git a/data/specials.inc b/data/specials.inc
 --- a/data/specials.inc
 +++ b/data/specials.inc
@@ -68,7 +63,7 @@ diff --git a/src/item_use.c b/src/item_use.c
  #include "item_use.h"
  #include "battle.h"
  #include "battle_pyramid.h"
-@@ -874,12 +877,36 @@
+@@ -874,12 +877,42 @@
      if (!IsSEPlaying())
      {
          VarSet(VAR_REPEL_STEP_COUNT, GetItemHoldEffectParam(gSpecialVar_ItemId));
@@ -86,6 +81,12 @@ diff --git a/src/item_use.c b/src/item_use.c
 +// Repel prompt (OPTIONS, ENHANCEMENTS): when a Repel wears off, another of
 +// the last kind used, while the Bag still holds one (data/scripts/repel.inc).
 +// Not in the Battle Pyramid, whose Repels are in a bag of its own.
++#if defined(PORT_BRIDGE) && GAME_LANGUAGE == LANGUAGE_SPANISH
++const u8 gText_UseAnotherRepel[] = _("¿Usar otro {STR_VAR_1}?");
++#else
++const u8 gText_UseAnotherRepel[] = _("Use another {STR_VAR_1}?");
++#endif
++
 +void ShouldOfferAnotherRepel(void)
 +{
 +#ifdef PLATFORM_3DS

@@ -13,6 +13,20 @@ diff --git a/include/script.h b/include/script.h
 +#endif
  
  #endif // GUARD_SCRIPT_H
+diff --git a/include/region_map.h b/include/region_map.h
+--- a/include/region_map.h
++++ b/include/region_map.h
+@@ -110,6 +110,10 @@
+ void ShowRegionMapForPokedexAreaScreen(struct RegionMap *regionMap);
+ void PokedexAreaScreen_UpdateRegionMapVariablesAndVideoRegs(s16 x, s16 y);
+ void CB2_OpenFlyMap(void);
++#ifdef PLATFORM_3DS
++// The Fly map was opened from the Bag (HM02, OPTIONS): cancelled, it goes back there.
++extern bool8 gFlyMapFromBag;
++#endif
+ bool8 IsRegionMapZoomed(void);
+ void TrySetPlayerIconBlink(void);
+ void BlendRegionMap(u16 color, u32 coeff);
 diff --git a/src/item_use.c b/src/item_use.c
 --- a/src/item_use.c
 +++ b/src/item_use.c
@@ -26,7 +40,7 @@ diff --git a/src/item_use.c b/src/item_use.c
  #endif
  #include "item_use.h"
  #include "battle.h"
-@@ -789,8 +792,72 @@
+@@ -789,8 +792,78 @@
      SetUpItemUseCallback(taskId);
  }
  
@@ -52,6 +66,8 @@ diff --git a/src/item_use.c b/src/item_use.c
 +    gPartyMenu.slotId = FieldHmUser(ItemIdToBattleMoveId(gSpecialVar_ItemId));
 +    if (gSpecialVar_ItemId == ITEM_HM02)
 +    {
++        // cancelled, the Fly map goes back to the Bag (region_map.c)
++        gFlyMapFromBag = TRUE;
 +        gBagMenu->newScreenCallback = CB2_OpenFlyMap;
 +        Task_FadeAndCloseBagMenu(taskId);
 +    }
@@ -77,7 +93,11 @@ diff --git a/src/item_use.c b/src/item_use.c
 +    .noFunc = BootUpFieldHmInstead,
 +};
 +
++#if GAME_LANGUAGE == LANGUAGE_SPANISH
++static const u8 sText_UseFieldHmNow[] = _("¿Usar {STR_VAR_1} ahora?");
++#else
 +static const u8 sText_UseFieldHmNow[] = _("Use {STR_VAR_1} now?");
++#endif
 +
 +static void UseFieldHmFromBagYesNo(u8 taskId)
 +{
@@ -99,6 +119,49 @@ diff --git a/src/item_use.c b/src/item_use.c
      if (gSpecialVar_ItemId >= ITEM_HM01)
          DisplayItemMessage(taskId, FONT_NORMAL, gText_BootedUpHM, BootUpSoundTMHM); // HM
      else
+diff --git a/src/region_map.c b/src/region_map.c
+--- a/src/region_map.c
++++ b/src/region_map.c
+@@ -20,6 +20,9 @@
+ #include "field_specials.h"
+ #include "fldeff.h"
+ #include "region_map.h"
++#ifdef PLATFORM_3DS
++#include "item_menu.h"
++#endif
+ #include "constants/region_map_sections.h"
+ #include "heal_location.h"
+ #include "constants/field_specials.h"
+@@ -1983,6 +1986,10 @@
+     }
+ }
+ 
++#ifdef PLATFORM_3DS
++bool8 gFlyMapFromBag;
++#endif
++
+ static void CB_ExitFlyMap(void)
+ {
+     switch (sFlyMap->state)
+@@ -2018,8 +2025,18 @@
+                         SetWarpDestinationToMapWarp(sMapHealLocations[sFlyMap->regionMap.mapSecId][0], sMapHealLocations[sFlyMap->regionMap.mapSecId][1], WARP_ID_NONE);
+                     break;
+                 }
++#ifdef PLATFORM_3DS
++                gFlyMapFromBag = FALSE;
++#endif
+                 ReturnToFieldFromFlyMapSelect();
+             }
++#ifdef PLATFORM_3DS
++            else if (gFlyMapFromBag)
++            {
++                gFlyMapFromBag = FALSE;
++                SetMainCallback2(CB2_ReturnToBagMenuPocket);
++            }
++#endif
+             else
+             {
+                 SetMainCallback2(CB2_ReturnToPartyMenuFromFlyMap);
 diff --git a/src/scrcmd.c b/src/scrcmd.c
 --- a/src/scrcmd.c
 +++ b/src/scrcmd.c
