@@ -2926,7 +2926,10 @@ static void FastForward(void)
  */
 bool8 CtrBattleMenu_Active(void)
 {
-    return sRes.ready && !(gBattleTypeFlags & (BATTLE_TYPE_LINK | BATTLE_TYPE_RECORDED));
+    /* Link battles too (local wireless): the player's choices go through the
+     * same controller. Drawn on the top screen, the menu ran into the wide
+     * text box. Not for a recorded battle played back: nobody chooses. */
+    return sRes.ready && !(gBattleTypeFlags & BATTLE_TYPE_RECORDED);
 }
 
 void CtrBattleMenu_Begin(void)
