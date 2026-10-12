@@ -11,6 +11,7 @@
 #include "main.h"
 #include "battle.h"
 #include "battle_anim.h"
+#include "data.h"
 #include "event_object_movement.h"
 #include "field_player_avatar.h"
 #include "metatile_behavior.h"
@@ -494,6 +495,11 @@ unsigned VoxelBattle_Shadows(VoxelBattleShadow *out, unsigned max)
         if (!sprite->inUse || sprite->invisible)
             continue;
         enemy = GetBattlerSide(b) != B_SIDE_PLAYER;
+        /* The player's trainer, before the Pokemon is sent out: no shadow -
+         * the player side's Pokemon are drawn with gAnims_MonPic, the trainer
+         * with its back picture's own. */
+        if (!enemy && sprite->anims != gAnims_MonPic)
+            continue;
         /* A floating Pokemon's shadow is the game's own sprite. */
         shadow = gBattleSpritesDataPtr->healthBoxesData[b].shadowSpriteId;
         if (enemy && shadow < MAX_SPRITES && gSprites[shadow].inUse && !gSprites[shadow].invisible)

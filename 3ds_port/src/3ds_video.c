@@ -496,6 +496,10 @@ static uint16_t sTexturePalette[512];
  * palette (KeySectionColours). */
 static uint16_t sKeyed[16];
 static uint8_t sMorton[64];
+/* A 4bpp tile's two pixels of a byte, (x, y) and (x + 1, y) for an even x,
+ * are neighbouring texels in the tiled order: written as one word. */
+static uint8_t sMortonPair[32];
+static bool sMortonPairs;
 static C2D_ImageTint sTint;
 static uint32_t sPaletteVersion[34];
 static uint32_t sPaletteChanges[34][8];
@@ -743,6 +747,7 @@ static void StereoWhy(unsigned why)
     sFrameFlat |= 1u << why;
 }
 static float BattleSpriteShift(int centre);
+static void SceneOn(C3D_RenderTarget *target);
 static float BattleSceneryShift(void);
 static bool sObjMaskOn;
 /* The OBJ window's own composition (ObjWindowCompose): its sprites as a
@@ -1151,16 +1156,45 @@ static int GetTileSlot(unsigned address, unsigned bank, bool color256)
             if (!fresh)
                 memcpy(before, dest, sizeof(before));
             memset(tile->colors, 0, sizeof(tile->colors));
-            tile->visible = false;
-            for (unsigned pixel = 0; pixel < 64; ++pixel)
+            if (!color256 && sMortonPairs)
             {
-                unsigned index = color256 ? tile->bytes[pixel]
-                    : (tile->bytes[pixel / 2] >> ((pixel & 1) * 4)) & 15;
-                dest[sMorton[pixel]] = index ? sTexturePalette[paletteBase + index] : 0;
-                if (index)
+                /*
+                 * Hundreds of these a frame when a map's tiles change (a
+                 * warp, a connection to another tileset): the 16 colours in
+                 * hand with index 0 clear, a byte's two pixels as one word,
+                 * and the colours used as one mask.
+                 */
+                const uint16_t *source = sTexturePalette + paletteBase;
+                uint32_t lut[16], used = 0;
+                uint32_t *dest32 = (uint32_t *)dest;
+
+                lut[0] = 0;
+                for (unsigned i = 1; i < 16; ++i)
+                    lut[i] = source[i];
+                for (unsigned pair = 0; pair < 32; ++pair)
                 {
-                    tile->visible = true;
-                    tile->colors[index / 32] |= 1u << (index & 31);
+                    unsigned byte = tile->bytes[pair], lo = byte & 15, hi = byte >> 4;
+
+                    dest32[sMortonPair[pair]] = lut[lo] | lut[hi] << 16;
+                    used |= (1u << lo) | (1u << hi);
+                }
+                used &= ~1u;
+                tile->colors[0] = used;
+                tile->visible = used != 0;
+            }
+            else
+            {
+                tile->visible = false;
+                for (unsigned pixel = 0; pixel < 64; ++pixel)
+                {
+                    unsigned index = color256 ? tile->bytes[pixel]
+                        : (tile->bytes[pixel / 2] >> ((pixel & 1) * 4)) & 15;
+                    dest[sMorton[pixel]] = index ? sTexturePalette[paletteBase + index] : 0;
+                    if (index)
+                    {
+                        tile->visible = true;
+                        tile->colors[index / 32] |= 1u << (index & 31);
+                    }
                 }
             }
             /* C3D_FrameEnd(0) flushes linear memory once before submitting
@@ -2156,15 +2190,46 @@ static void HudBlend(unsigned layer, bool effects)
                    GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
 }
 
+/*
+ * The tint a box's picture is drawn with: the palette fade its sprites are
+ * under (the picture is unfaded), then the layer's own (Blend's, a brightness
+ * effect). Two mixes towards a colour are one: strength 1 - (1-a)(1-b), the
+ * colour the two weighted by what each adds.
+ */
+static void HudTint(unsigned k, C2D_ImageTint *tint)
+{
+    float a = sHud[k].fade;
+
+    *tint = sTint;
+    if (a <= 0) return;
+    for (unsigned c = 0; c < 4; ++c)
+    {
+        float b = tint->corners[c].blend, both = 1 - (1 - a) * (1 - b);
+        uint32_t layer = tint->corners[c].color, rgb[3];
+
+        for (unsigned ch = 0; ch < 3; ++ch)
+        {
+            float box = (sHud[k].fadeColour >> (24 - ch * 8)) & 0xFF, own = (layer >> (ch * 8)) & 0xFF;
+
+            rgb[ch] = (uint32_t)((box * a * (1 - b) + own * b) / both + 0.5f);
+        }
+        tint->corners[c].color = C2D_Color32(rgb[0], rgb[1], rgb[2], layer >> 24);
+        tint->corners[c].blend = both;
+    }
+}
+
 /* A box's picture at (x, y), `scale` times the screen's size. */
 static void HudDrawPicture(unsigned k, float x, float y, float scale, bool smooth)
 {
+    C2D_ImageTint tint;
+
+    HudTint(k, &tint);
     for (unsigned part = 0, x0 = 0; part < 2; x0 += sHudPartW[part], ++part)
     {
         const Tex3DS_SubTexture all = {(u16)sHudPartW[part], HUD_TEX_H, 0, 1, 1, 0};
 
         C3D_TexSetFilter(&sHudTex[k][part], smooth ? GPU_LINEAR : GPU_NEAREST, smooth ? GPU_LINEAR : GPU_NEAREST);
-        C2D_DrawImageAt((C2D_Image){&sHudTex[k][part], &all}, x + x0 * scale, y, 0, &sTint, scale, scale);
+        C2D_DrawImageAt((C2D_Image){&sHudTex[k][part], &all}, x + x0 * scale, y, 0, &tint, scale, scale);
     }
 }
 
@@ -2184,8 +2249,9 @@ static int HudBoxOfTile(unsigned tile)
     return -1;
 }
 
-/* A visible OAM entry's place in GBA coordinates, wrapped as the battle reads it. */
-static bool HudEntry(unsigned i, unsigned *priority, int *x, int *y, int *w, int *h)
+/* A visible OAM entry's place in GBA coordinates, wrapped as the battle reads
+ * it: a sprite drawn, or with `window` one in the OBJ window's mode. */
+static bool OamPlace(unsigned i, bool window, unsigned *priority, int *x, int *y, int *w, int *h)
 {
     static const uint8_t dimensions[3][4][2] = {
         {{8,8},{16,16},{32,32},{64,64}},
@@ -2196,7 +2262,8 @@ static bool HudEntry(unsigned i, unsigned *priority, int *x, int *y, int *w, int
     unsigned attr0 = obj[0], attr1 = obj[1], attr2 = obj[2], shape = attr0 >> 14;
     bool affine = (attr0 & 0x100) != 0;
 
-    if ((!affine && (attr0 & 0x200)) || shape == 3 || ((attr0 >> 10) & 3) >= 2) return false;
+    if ((!affine && (attr0 & 0x200)) || shape == 3 || (((attr0 >> 10) & 3) == 2) != window
+        || ((attr0 >> 10) & 3) == 3) return false;
     *w = dimensions[shape][attr1 >> 14][0] * (affine && (attr0 & 0x200) ? 2 : 1);
     *h = dimensions[shape][attr1 >> 14][1] * (affine && (attr0 & 0x200) ? 2 : 1);
     *x = attr1 & 511;
@@ -2208,6 +2275,11 @@ static bool HudEntry(unsigned i, unsigned *priority, int *x, int *y, int *w, int
     if (*y >= 160 || *y + *h <= 0) return false;
     *priority = (attr2 >> 10) & 3;
     return true;
+}
+
+static bool HudEntry(unsigned i, unsigned *priority, int *x, int *y, int *w, int *h)
+{
+    return OamPlace(i, false, priority, x, y, w, h);
 }
 
 /*
@@ -2233,12 +2305,17 @@ static bool HudWindowsShow(int x, int y, int w, int h)
     unsigned masks[25];
 
     if (!(control & 0xE000)) return true;
-    if (control & 0x8000)
+    /* A sprite in window mode shapes the sprites only where it is (a stat
+     * change's pattern over its battler): one apart from the box, or whose
+     * window shows sprites too, leaves the box as it is. */
+    if ((control & 0x8000) && !((Reg(0x4A) >> 8) & 0x10))
         for (unsigned i = 0; i < 128; ++i)
         {
-            unsigned attr0 = sMemory.oam[i * 4];
+            unsigned p;
+            int ox, oy, ow, oh;
 
-            if (((attr0 >> 10) & 3) == 2 && ((attr0 & 0x100) || !(attr0 & 0x200))) return false;
+            if (OamPlace(i, true, &p, &ox, &oy, &ow, &oh) && ox < x + w && ox + ow > x && oy < y + h && oy + oh > y)
+                return false;
         }
     if (y < 0) { h += y; y = 0; }
     if (y + h > 160) h = 160 - y;
@@ -2394,7 +2471,7 @@ static void HudDrawCrisp(unsigned depth)
 #define TEXT_TEX_W 256     /* the message window's 208x32 */
 #define TEXT_TEX_H 32
 #define BOX_TEXT_SHIFT 4
-#define BOX_SLIDE_FRAMES 16
+#define BOX_SLIDE_FRAMES 32
 #define BOX_HIDDEN 60.0f
 /* The player's trainer under it meanwhile, in GBA pixels: below the screen. */
 #define BOX_TRAINER_HIDDEN 90.0f
@@ -2517,9 +2594,9 @@ static float BoxOffset(void)
 
     if (sBoxHidden) return BOX_HIDDEN;
     if (sBoxSlide < 0) return 0;
-    /* An ease out with a little overshoot: quick, and settling. */
-    t = (float)sBoxSlide / BOX_SLIDE_FRAMES - 1.0f;
-    return BOX_HIDDEN * -(t * t * (2.7f * t + 1.7f));
+    /* An ease out, slowing to rest without overshoot. */
+    t = 1.0f - (float)sBoxSlide / BOX_SLIDE_FRAMES;
+    return BOX_HIDDEN * t * t * t;
 }
 
 /* Once a frame: whether the box waits out of sight, and its slide. */
@@ -2539,8 +2616,15 @@ static void BoxFrame(void)
             sBoxDecided = sBoxBarsUp = false;
         sBoxSlide = -1;
         sBoxBattleFrames = 0;
-        /* The next battle's message window is read afresh. */
+        /* The next battle's message window is read afresh, and the last
+         * one's text cleared: the next opens on the empty box, which only
+         * clears the texture when it held a window. */
         sBoxText = false;
+        if (sBoxEntries[0] != 0xFFFF && sTextTex.data)
+        {
+            memset(sTextTex.data, 0, TEXT_TEX_W * TEXT_TEX_H * 2);
+            C3D_TexFlush(&sTextTex);
+        }
         memset(sBoxEntries, 0xFF, sizeof(sBoxEntries));
         return;
     }
@@ -2582,8 +2666,7 @@ static void BoxFrame(void)
     /*
      * The player's trainer goes with it: its picture ends where the box
      * covers it. Out of sight while the box is (all of it: the picture is
-     * taller than the box), up with it as it comes, arriving together, and
-     * with it pixel for pixel through the overshoot, so its edge never shows.
+     * taller than the box), up with it as it comes, arriving together.
      */
     {
         float offset = BoxOffset();
@@ -5383,6 +5466,18 @@ static bool sObjWinWanted, sObjWinFailed;
 static uint32_t sObjWinUsedFrame, sObjWinFailFrame;
 /* This frame's: its box in GBA pixels and the layers it adds. */
 static struct { bool ready; int x0, y0, x1, y1; unsigned layers; } sObjWin;
+/*
+ * The 3D battle's: the window's layers left out of the scenery, to be drawn
+ * in the slot of the sprite group under them instead (SlotsCompose). A stat
+ * change's pattern is on its Pokemon and blends with it; in the scenery it
+ * was a background in front of the sprites that blends, which can only be
+ * composed whole - per eye over the voxel world, 15 ms of drawing for the
+ * second it lasts, or flat in the 2D battle, the Pokemon losing its depth.
+ */
+static bool sObjWinSlotted;
+/* Drawing it over an eye's picture, at its group's displacement (ObjWindowEye). */
+static bool sObjWinEye;
+static float sObjWinEyeShift;
 
 /* Outside the frame, like the battle's other surfaces (SlotsPrepare). */
 static void ObjWindowRelease(void)
@@ -5561,8 +5656,10 @@ static void ObjWindowCompose(void)
  */
 static void ObjWindowDraw(int x0, int y0, int x1, int y1)
 {
-    unsigned layers = sObjWin.layers & ~sLayerExclude, bg = 0, priority = 4;
+    unsigned layers = sObjWin.layers & (sObjWinEye ? ~0u : ~sLayerExclude), bg = 0, priority = 4;
     float shift = sLayerShift;
+
+    if (sObjWinSlotted && !sObjWinEye) return;
 
     if (x0 < sObjWin.x0) x0 = sObjWin.x0;
     if (y0 < sObjWin.y0) y0 = sObjWin.y0;
@@ -5585,14 +5682,39 @@ static void ObjWindowDraw(int x0, int y0, int x1, int y1)
     /* Only where the window's mask and a layer's pixel both are. */
     C3D_AlphaTest(true, GPU_GREATER, 0xc0);
     ViewBase();
-    sLayerShift = (sLayerOrigin + sParallax * (3 - (int)priority)) / sShiftZoom;
+    /* Over an eye, displaced like the group the window is over (ObjWindowEye). */
+    sLayerShift = sObjWinEye ? sObjWinEyeShift : (sLayerOrigin + sParallax * (3 - (int)priority)) / sShiftZoom;
     C2D_DrawImageAt((C2D_Image){&sObjWinTex, &cut}, sObjWin.x0 + CTR_VIEW_X + sLayerShift,
                     sObjWin.y0 + CTR_VIEW_Y, 0, &sTint, 1, 1);
     C2D_Flush();
     BlendForget();
     sLayerShift = shift;
     /* A background in front of the sprites (RenderBattleStereo). */
-    sBgDrawn[bg] += 1;
+    if (!sObjWinEye) sBgDrawn[bg] += 1;
+}
+
+/*
+ * The OBJ window's layers over an eye's picture, after the sprites' groups:
+ * at the displacement of the group its box is in, blended with what is
+ * there as on the GBA, and at the screen's zoom with the window's own
+ * nearest filtering - inside the group's slot they came out smoothed, the
+ * slot being composed at twice the size and drawn down bilinearly.
+ */
+static void ObjWindowEye(C3D_RenderTarget *picture, int centre)
+{
+    unsigned priorities = sPriorityMask, exclude = sLayerExclude;
+
+    SceneOn(picture);
+    C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+    sPriorityMask = SLOTS_ALL;
+    sLayerExclude = 0;
+    sObjWinEye = true;
+    sObjWinEyeShift = BattleSpriteShift(centre) / sZoom;
+    ObjWindowDraw(sObjWin.x0, sObjWin.y0, sObjWin.x1, sObjWin.y1);
+    sObjWinEye = false;
+    C3D_AlphaTest(false, GPU_ALWAYS, 0);
+    sPriorityMask = priorities;
+    sLayerExclude = exclude;
 }
 
 static void ComposeBand(int top, int bottom)
@@ -5705,6 +5827,12 @@ bool CtrVideo_Init(void)
     if (!sTopRight) CtrLog_Write(CTR_LOG_VIDEO, "no right eye target: 3D disabled");
     for (unsigned i = 0; i < 64; ++i)
         sMorton[i] = CtrVideo_Texel(i & 7, i / 8, 8);
+    sMortonPairs = true;
+    for (unsigned i = 0; i < 64; i += 2)
+    {
+        sMortonPair[i / 2] = sMorton[i] / 2;
+        if ((sMorton[i] & 1) || sMorton[i + 1] != sMorton[i] + 1) sMortonPairs = false;
+    }
     for (unsigned i = 0; i < 512; ++i)
         sTexturePalette[i] = CtrVideo_RGBA5551(sPalette[i]);
     C2D_Prepare();
@@ -6014,8 +6142,67 @@ static void SceneLayerVram(unsigned bg, unsigned *map, unsigned *mapBytes, unsig
     *charBytes = 0x10000 - *chars;
 }
 
-/* The layers' VRAM unchanged since `token`. Whether a layer draws anything
- * does not depend on its palette, which is not looked at. */
+/*
+ * The characters an empty scene's layers can show: from the lowest to the
+ * highest tile their whole maps name (SceneEmptyChars), not all of VRAM from
+ * their base. The voxel battle's empty layers share their character block
+ * with the text box, whose printing changed it nearly every frame: the empty
+ * scene was composed again in two frames of three.
+ */
+static struct { unsigned start, bytes, control, mode; uint32_t token; } sSceneEmptyChars[4];
+
+static void SceneEmptyChars(unsigned exclude)
+{
+    for (unsigned bg = 0; bg < 4; ++bg)
+    {
+        unsigned map, mapBytes, chars, charBytes, control = Reg(8 + bg * 2), mode = Reg(0) & 7;
+        bool affine = (mode == 1 && bg == 2) || (mode == 2 && bg >= 2);
+        unsigned tileBytes = affine || (control & 0x80) ? 64 : 32, lo = ~0u, hi = 0;
+
+        if (!(Reg(0) & (0x100u << bg)) || (exclude & (1u << bg)))
+        {
+            sSceneEmptyChars[bg].token = 0;
+            continue;
+        }
+        SceneLayerVram(bg, &map, &mapBytes, &chars, &charBytes);
+        if (map + mapBytes > 0x10000)
+            mapBytes = 0x10000 - map;
+        /* The same map as at the last look: the same tiles named. */
+        if (sSceneEmptyChars[bg].token && sSceneEmptyChars[bg].control == control
+            && sSceneEmptyChars[bg].mode == mode && !VramChangedAfter(map, mapBytes, sSceneEmptyChars[bg].token))
+            continue;
+        sSceneEmptyChars[bg].start = sSceneEmptyChars[bg].bytes = 0;
+        sSceneEmptyChars[bg].control = control;
+        sSceneEmptyChars[bg].mode = mode;
+        sSceneEmptyChars[bg].token = sStats.frames + 1;
+        if (affine)
+            for (unsigned i = 0; i < mapBytes; ++i)
+            {
+                unsigned tile = sMemory.vram[map + i];
+
+                if (tile < lo) lo = tile;
+                if (tile > hi) hi = tile;
+            }
+        else
+            for (unsigned i = 0; i + 1 < mapBytes; i += 2)
+            {
+                unsigned tile = (sMemory.vram[map + i] | sMemory.vram[map + i + 1] << 8) & 0x3ff;
+
+                if (tile < lo) lo = tile;
+                if (tile > hi) hi = tile;
+            }
+        if (lo > hi || chars + lo * tileBytes >= 0x10000)
+            continue;
+        sSceneEmptyChars[bg].start = chars + lo * tileBytes;
+        sSceneEmptyChars[bg].bytes = (hi - lo + 1) * tileBytes;
+        if (sSceneEmptyChars[bg].start + sSceneEmptyChars[bg].bytes > 0x10000)
+            sSceneEmptyChars[bg].bytes = 0x10000 - sSceneEmptyChars[bg].start;
+    }
+}
+
+/* The empty scene's layers unchanged since `token`: their maps, and the
+ * characters those name. Whether a layer draws anything does not depend on
+ * its palette, which is not looked at. */
 static bool SceneHoldsSince(unsigned exclude, uint32_t token)
 {
     if (Reg(0) & 0x8000)
@@ -6027,7 +6214,9 @@ static bool SceneHoldsSince(unsigned exclude, uint32_t token)
         if (!(Reg(0) & (0x100u << bg)) || (exclude & (1u << bg)))
             continue;
         SceneLayerVram(bg, &map, &mapBytes, &chars, &charBytes);
-        if (VramChangedAfter(map, mapBytes, token) || VramChangedAfter(chars, charBytes, token))
+        if (VramChangedAfter(map, mapBytes, token)
+            || (sSceneEmptyChars[bg].bytes
+                && VramChangedAfter(sSceneEmptyChars[bg].start, sSceneEmptyChars[bg].bytes, token)))
             return false;
     }
     return true;
@@ -6103,7 +6292,8 @@ static void BattleSceneCompose(int margin, unsigned exclude)
     sScenePut.height = height;
     if (sSceneCacheAllowed)
     {
-        uint32_t key = SceneCacheKey(left, top, width, height, 1 | sWorldLayers | exclude | BattleBoxLayers());
+        uint32_t key = SceneCacheKey(left, top, width, height, 1 | sWorldLayers | exclude | BattleBoxLayers())
+            ^ (sObjWinSlotted ? 0x5bd1e995u : 0u);
 
         unsigned layers = 1 | sWorldLayers | exclude | BattleBoxLayers();
         bool empty;
@@ -6138,6 +6328,8 @@ static void BattleSceneCompose(int margin, unsigned exclude)
 #endif
         sSceneEmptyKey = key;
         sSceneEmptyToken = sSceneCacheToken;
+        if (sSceneEmpty)
+            SceneEmptyChars(layers);
         return;
     }
     sSceneCached = false;
@@ -6240,6 +6432,14 @@ static void ScenePlaceFrom(C3D_RenderTarget *target, float shift, C3D_Tex *tex, 
         C2D_DrawImageAt((C2D_Image){tex, &line}, ox, y0, 0, NULL, scale, bottom - y0);
     }
     C2D_Flush();
+}
+
+/* As SurfaceFilter, for the battle scene's surface. */
+static void SceneTexFilter(GPU_TEXTURE_FILTER_PARAM filter)
+{
+    C2D_Flush();
+    C3D_TexSetFilter(&sSceneTex, filter, filter);
+    C3D_TexBind(0, &sSceneTex);
 }
 
 /* The composed scene on `target`, `shift` screen pixels across. */
@@ -6699,6 +6899,7 @@ typedef struct
     bool front;             /* in front of the backgrounds before sprites */
     uint8_t patch;          /* nonzero: those backgrounds (Layers bits) over a group */
     uint8_t first;          /* its frontmost OAM entry */
+    bool objWin;            /* the OBJ window is over it: drawn at its depth (ObjWindowEye) */
 } BattleSlot;
 static BattleSlot sSlots[128];
 static unsigned sSlotCount;
@@ -6802,7 +7003,7 @@ static void SlotsPrepare(void)
 /*
  * The battle's sprites this frame, clipped to what the scene can show, and
  * whether they can be drawn apart from the scenery: none blends with what is
- * under it or is in mosaic, and no window cuts them. `furthest` is the
+ * under it, and no window cuts them. `furthest` is the
  * priority of the one furthest back.
  */
 static bool BattleSprites(unsigned *furthest, bool *apart)
@@ -6848,7 +7049,8 @@ static bool BattleSprites(unsigned *furthest, bool *apart)
         if (y + h > bottom) h = bottom - y;
         if (w <= 0 || h <= 0) continue;
         if (mode == 1 || alpha) { if (*apart) StereoWhy(0); *apart = false; }
-        if (attr0 & 0x1000) { if (*apart) StereoWhy(1); *apart = false; }
+        /* Mosaic is not drawn (DrawObjects), composed whole or apart: kept
+         * apart, a sprite in it keeps its depth. */
         if (((attr2 >> 10) & 3) > *furthest) *furthest = (attr2 >> 10) & 3;
         slot = &sSlots[sSlotCount++];
         memset(slot->members, 0, sizeof(slot->members));
@@ -6860,6 +7062,7 @@ static bool BattleSprites(unsigned *furthest, bool *apart)
         slot->nearest = slot->furthest = (uint8_t)((attr2 >> 10) & 3);
         slot->front = false;
         slot->patch = 0;
+        slot->objWin = false;
         slot->first = (uint8_t)i;
         /* The depth of the whole sprite, not of the part on show. */
         slot->centre = (int16_t)(full + (int)(dimensions[shape][attr1 >> 14][1] << twice) / 2);
@@ -7175,17 +7378,49 @@ static void RenderBattleStereo(uint32_t clear, float slider, C3D_Tex *world)
 #else
     if (!world && (Reg(0) & 0x1000)) sSlotWanted = true;
 #endif
+    PORT_PROF_BEGIN(bsPrep);
+
     sSceneOn = NULL;
     sParallax = 0;
     sLayerShift = 0;
     sHudFlatScene = false;
     BlendForget();
     /* The scene's placement first: the sprites are clipped to it. */
+    sObjWinSlotted = sObjWin.ready;
     sSceneCacheAllowed = true;
     BattleSceneCompose(BATTLE_STEREO_MARGIN, 16u);
     sSceneCacheAllowed = false;
     HudCoverUpdate();
     any = BattleSprites(&furthest, &apart);
+    if (sObjWinSlotted)
+    {
+        /* The group the window's box is inside of, as far as it shows; with
+         * none, all composed whole as before, the window with the scenery. */
+        BattleSlot *under = NULL;
+        int wx0 = sObjWin.x0, wy0 = sObjWin.y0, wx1 = sObjWin.x1, wy1 = sObjWin.y1;
+        int top = (int)lroundf((sScenePut.oy - sOffY) / sZoom);
+
+        if (wy0 < top) wy0 = top;
+        if (wy1 > BATTLE_SCENE_BOTTOM) wy1 = BATTLE_SCENE_BOTTOM;
+        for (unsigned k = 0; k < sSlotCount && wx0 < wx1 && wy0 < wy1; ++k)
+        {
+            BattleSlot *slot = &sSlots[k];
+
+            if (wx0 >= slot->x && wy0 >= slot->y && wx1 <= slot->x + slot->w && wy1 <= slot->y + slot->h)
+            {
+                under = slot;
+                break;
+            }
+        }
+        /* Drawn over each eye whole (ObjWindowEye): not through windows 0 and 1. */
+        if (under && !(Reg(0) & 0x6000)) under->objWin = true;
+        else
+        {
+            if (apart) StereoWhy(0);
+            apart = false;
+            sObjWinSlotted = false;
+        }
+    }
     /*
      * Backgrounds in front of a sprite - the intro's entry picture over the
      * Pokemon sliding in, a move's background over its target. The scenery
@@ -7219,6 +7454,7 @@ static void RenderBattleStereo(uint32_t clear, float slider, C3D_Tex *world)
 
         *patch = *slot;
         patch->patch = (uint8_t)front;
+        patch->objWin = false;
         patch->x = (int16_t)(slot->x - reach);
         patch->w = (int16_t)(slot->w + 2 * reach);
     }
@@ -7236,6 +7472,9 @@ static void RenderBattleStereo(uint32_t clear, float slider, C3D_Tex *world)
     }
     GpuStartEarly();
     ++sStereoSplit[apart ? 0 : 1];
+    /* Composed whole below, the window with the rest. */
+    if (!apart) sObjWinSlotted = false;
+    PORT_PROF_END(bsPrep, PORT_PROF_BS_PREP);
 
     if (!apart && !world)
     {
@@ -7256,6 +7495,8 @@ static void RenderBattleStereo(uint32_t clear, float slider, C3D_Tex *world)
     }
     else if (!apart)
     {
+        PORT_PROF_BEGIN(bsWhole);
+
         /* Whole per eye, as RenderEye composes it, at the same depths. */
         for (int eye = 0; eye < 2; ++eye)
         {
@@ -7283,14 +7524,24 @@ static void RenderBattleStereo(uint32_t clear, float slider, C3D_Tex *world)
             }
         }
         sEyeParallax = 0;
+        PORT_PROF_END(bsWhole, PORT_PROF_BS_WHOLE);
         return;
     }
 
     /* Everything both eyes take, in one command list. */
     sSceneOn = NULL;
-    if (any && !(Reg(0) & 128)) SlotsCompose();
-    if (textOnce) BattleTextCompose(true);
-    SplitFrame();
+    {
+        PORT_PROF_BEGIN(bsSlots);
+        if (any && !(Reg(0) & 128)) SlotsCompose();
+        PORT_PROF_END(bsSlots, PORT_PROF_BS_SLOTS);
+    }
+    {
+        PORT_PROF_BEGIN(bsText);
+        if (textOnce) BattleTextCompose(true);
+        SplitFrame();
+        PORT_PROF_END(bsText, PORT_PROF_BS_TEXT);
+    }
+    PORT_PROF_BEGIN(bsEyes);
     for (int eye = 0; eye < 2; ++eye)
     {
         C3D_RenderTarget *target = eye ? sTopRight : sTop;
@@ -7305,7 +7556,11 @@ static void RenderBattleStereo(uint32_t clear, float slider, C3D_Tex *world)
         {
             float origin = sLayerOrigin;
 
+            /* The scenery alone, the sprites being the slots': unfiltered,
+             * as the 2D field draws its layers; the slots keep the filter. */
+            SceneTexFilter(GPU_NEAREST);
             BattleScenePlace(picture, -sEyeParallax * BATTLE_BACK_DEPTH);
+            SceneTexFilter(GPU_LINEAR);
             /* The lines above the surface at the scenery's depth; the
              * sprites are the slots', at their own, unless they are in the
              * scene composed whole. */
@@ -7321,6 +7576,13 @@ static void RenderBattleStereo(uint32_t clear, float slider, C3D_Tex *world)
                 SlotsPlace(picture, false, true);
                 SlotsPlace(picture, true, false);
             }
+            if (sObjWinSlotted)
+                for (unsigned k = 0; k < sSlotCount; ++k)
+                    if (sSlots[k].objWin)
+                    {
+                        ObjWindowEye(picture, sSlots[k].centre);
+                        break;
+                    }
         }
         /* The info boxes over them at the screen's pixels: at their sprites'
          * depth, or the scenery's when the sprites are composed with it. */
@@ -7361,6 +7623,8 @@ static void RenderBattleStereo(uint32_t clear, float slider, C3D_Tex *world)
     }
     sSceneComposed = false;
     sEyeParallax = 0;
+    sObjWinSlotted = false;
+    PORT_PROF_END(bsEyes, PORT_PROF_BS_EYES);
 }
 
 #if CTR_VOXEL_ENABLED
@@ -9461,7 +9725,10 @@ void CtrVideo_Present(void)
     }
 #ifdef CTR_FRAME_DUMP
     /* The GPU has finished the last frame: its screens, raw, at fixed frames. */
-#ifdef CTR_DUMP_BATTLE
+#ifdef CTR_DUMP_OBJWIN
+    static unsigned dumped;
+    if (sObjWin.ready && sStats.frames % 4 == 0 && dumped++ < 60)
+#elif defined(CTR_DUMP_BATTLE)
     static unsigned dumped;
     static uint32_t battleStart;
     if (!sBattle) battleStart = 0;

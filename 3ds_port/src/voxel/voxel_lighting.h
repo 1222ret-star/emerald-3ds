@@ -30,6 +30,10 @@ uint32_t VoxelLighting_Hash(int x0, int z0, int x1, int z1);
 float VoxelLighting_Sample(float x, float y, float z);
 /* Rays cast so far (samples not found in the cache), for the build logs. */
 unsigned VoxelLighting_Rays(void);
+/* Ray points tested, and tests against a relief's surface (rays and contact
+ * AO), so far: where the rays' time goes, for the same logs. */
+unsigned VoxelLighting_Steps(void);
+unsigned VoxelLighting_SurfaceTests(void);
 /* The light a face gets from the sun for its facing alone, VOXEL_AMBIENT for
  * a face turned away. The normal need not be unit length. */
 float VoxelLighting_Face(float nx, float ny, float nz);

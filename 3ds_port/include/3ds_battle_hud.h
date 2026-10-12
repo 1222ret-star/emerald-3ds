@@ -49,9 +49,13 @@ typedef struct
     /* The OAM tiles of the box's two halves and of its bar, [first, first + count). */
     uint16_t boxTile, boxTiles, barTile, barTiles;
     /* RGBA8 (0xRRGGBBAA), CTR_HUD_W x CTR_HUD_H, rows top to bottom; a new
-     * version whenever it changes. */
+     * version whenever it changes. Unfaded: the palette fade the box's
+     * sprites are under is `fade` (0..1) towards `fadeColour` (0xRRGGBB00),
+     * for the compositor to tint the picture with as it draws it. */
     const uint32_t *pixels;
     uint32_t version;
+    float fade;
+    uint32_t fadeColour;
     bool used;
 } CtrHudBox;
 
@@ -71,7 +75,9 @@ const unsigned char *CtrBattleHud_ElementGfx(unsigned char elementId);
 /* ---- For the compositor. ---- */
 /* Whether the boxes are drawn in HD at all (the art loaded). */
 bool CtrBattleHud_Ready(void);
-/* Brings every box's picture up to date (palette fades included); returns
+/* The art read and its labels traced, once, as the first battle makes its boxes. */
+void CtrBattleHud_Prepare(void);
+/* Brings every box's picture up to date (a palette fade in its fade fields); returns
  * the table of CTR_HUD_BOXES boxes. */
 const CtrHudBox *CtrBattleHud_Boxes(void);
 /* The text box's art (gen_battle_hud.py ID_BOX_*): x, y on the screen. */
