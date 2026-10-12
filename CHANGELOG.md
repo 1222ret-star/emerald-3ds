@@ -22,6 +22,27 @@ New and improved:
   tables, nine-column naming rows and column positions, and 22-byte type names.
   The native Pokédex uses a decimal comma and French measurement alignment.
 
+Fixed:
+
+- Battle transitions: the Poké Balls rolling across the screen (trainers on
+  routes) and the other transitions that draw only their own layer over the
+  field were a GBA-sized box in a corner of the screen; they fill it now, at
+  the battle's scale.
+- Pokémon Centers: the balls on the healing machine and the flash of its
+  monitor were drawn 8 pixels too high, above the tray and the screen.
+- Hatching an egg: the scene was drawn as a wide screen, its text box and
+  backgrounds repeated across a black screen, and the spotlight under the
+  Pokémon was noise. The trade animation's GBA had the same noise.
+- The cable car: the ride sat in a corner of the screen with black around
+  it; it fills the screen, the scene mirrored into its edges and faded
+  like the intro's.
+- Weather: the rain, the volcanic ash, the sandstorm and the underwater
+  bubbles fell over a GBA-sized part in the middle of the screen; they cover
+  all of it now, as the fog already did, the cable car's ash included.
+- People on the map could be drawn over the whole screen for a frame as
+  they or the player moved (the old lady in Route 111's rest house): they
+  were taken for the fog.
+
 ## 0.3.1 — 2026-10-10
 
 New and improved:
