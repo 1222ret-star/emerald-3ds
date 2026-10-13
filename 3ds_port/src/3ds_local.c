@@ -158,6 +158,7 @@ struct Node
     uint16_t nextSeq;
     bool overflowed;
     uint32_t heardMs; /* its last frame, or when it joined */
+    bool heard;       /* a frame of its own has come */
     /* Messages from it. */
     uint16_t expect;
     bool ackDue;
@@ -335,6 +336,7 @@ static void HandleFrame(uint16_t from, const uint8_t *frame, size_t size)
     if (!n->present)
         NodeJoined(from); /* its frame came before the status said so */
     n->heardMs = LocalLink_Milliseconds();
+    n->heard = true;
 
     /* What it has of ours. */
     while (n->outCount && SeqBefore(n->out[n->outHead].seq, h->ack))
@@ -881,7 +883,11 @@ static void DropSilent(uint32_t now)
         LightLock_Lock(&sL.lock);
         /* An idle session sends nothing: what counts is how long the
          * oldest message waits, and nothing heard all that time. */
-        silent = n->present && id != sL.myId && n->outCount && n->out[n->outHead].sentMs
+        /* Not one never heard from: right after a join (a merge most of
+         * all) the first frames can take a while each way, and in Azahar
+         * the first many seconds; a player then dropped had to start
+         * again at the counter. */
+        silent = n->present && n->heard && id != sL.myId && n->outCount && n->out[n->outHead].sentMs
               && (int32_t)(now - n->out[n->outHead].firstMs) >= SILENT_MS
               && (int32_t)(now - n->heardMs) >= SILENT_MS;
         LightLock_Unlock(&sL.lock);
