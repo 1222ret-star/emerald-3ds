@@ -2046,6 +2046,28 @@ def live_after(model, art, tris):
     model.live = out
 
 
+def glass_after(model, art, tris, mask):
+    """Where compaction moved a model's window glass: by the whole texels
+    the faces reading it moved, as live_after. `art`, `tris`, `mask` (an L
+    image over `art`): before it. None when two faces would read one texel
+    with different glass."""
+    W, H = art.size
+    out = Image.new("L", model.art.size)
+    NW, NH = out.size
+    opx, gpx = out.load(), mask.load()
+    wrote = {}
+    for (tri, _, _), (moved, _, _) in zip(tris, model.mesh.tris):
+        du = int(round(moved[0][3] - tri[0][3]))
+        dv = int(round(moved[0][4] - tri[0][4]))
+        for (u, v) in sampled_texels([(p[3], p[4]) for p in tri], W, H):
+            x, y = u + du, v + dv
+            if 0 <= x < NW and 0 <= y < NH:
+                if wrote.setdefault((x, y), gpx[u, v]) != gpx[u, v]:
+                    return None
+                opx[x, y] = gpx[u, v]
+    return out
+
+
 def rgba5551(rgb):
     return (rgb[0] >> 3) << 11 | (rgb[1] >> 3) << 6 | (rgb[2] >> 3) << 1 | 1
 
@@ -2838,7 +2860,7 @@ def _guttered(img):
     past it at the seam, and reads its own texel there, not the next image
     packed beside it - a line of another colour down every seam."""
     w, h = img.size
-    out = Image.new("RGBA", (w + 2, h + 2), (0, 0, 0, 0))
+    out = Image.new(img.mode, (w + 2, h + 2))     # clear (an L mask: unlit)
     out.paste(img, (1, 1))
     out.paste(img.crop((0, 0, w, 1)), (1, 0))
     out.paste(img.crop((0, h - 1, w, h)), (1, h + 1))
@@ -3356,9 +3378,10 @@ def export(models, path):
     patches), and a page-model record tells where on that page a model's
     drawing went. The console loads the pages of the maps on screen only.
 
-    Drawings with authored glass masks (voxel_night) retain their original
-    pixels and UV: band compaction preserves colour reads, not the mask's
-    source coordinates.
+    A drawing's window glass (voxel_night) is compacted with it: each texel
+    of the mask moves with the faces reading it (glass_after). One that
+    compaction would leave reading glass where another face reads none
+    keeps its drawing as drawn.
 
       "VXB8", u16 pages, models, pageModels, placements, heightBytes, masks,
       u32 vertices, u16 variants, u16 decks
@@ -3413,15 +3436,32 @@ def export(models, path):
     # only the rows of a drawing some face samples go to the page: a solid's
     # grown bands (Mound.with_ring, own_bands) are mostly never read, and
     # the ring band of a thing without one is empty
+    # A drawing's window glass (voxel_night) moves with the faces reading it.
+    glass, as_drawn = {}, []
     for m in models:
-        if any(voxel_night.building_mask(m.art, m.name)):
-            continue
+        mask = voxel_night.building_mask(m.art, m.name)
+        kept = (m.art, m.mesh.tris, getattr(m, "live", None))
         before = (m.art.convert("RGBA"), list(m.mesh.tris))
         compact_rows(m)
         compact_islands(m)
         same_reads(m, *before)
         if getattr(m, "live", None):
             live_after(m, *before)
+        if any(mask):
+            mask = Image.frombytes("L", before[0].size, bytes(mask))
+            moved = glass_after(m, *before, mask)
+            if moved is None:
+                # two faces read one texel with and without glass: the
+                # drawing stays as it was drawn
+                m.art, m.mesh.tris = kept[:2]
+                if kept[2] is not None:
+                    m.live = kept[2]
+                moved = mask
+                as_drawn.append(m.name)
+            glass[m.name] = moved
+    if glass:
+        print("voxel buildings: window glass on %d drawing(s), %d kept as drawn%s"
+              % (len(glass), len(as_drawn), (": " + ", ".join(as_drawn)) if as_drawn else ""))
     crops = {m.name: (m.art.getbbox() or (0, 0, 1, 1)) for m in models}
 
     # models: geometry once, uv in the model's own art pixels
@@ -3473,15 +3513,23 @@ def export(models, path):
         for r in recs:
             for (i, j, img) in r[5]:
                 patches.setdefault(img.tobytes(), img)
-        # models drawn alike (a bridge's cells, built apart) share one image
-        art_key, art_img = {}, {}
+        # models drawn alike (a bridge's cells, built apart) share one image,
+        # and its glass: the brightest of their masks
+        art_key, art_img, art_glass, art_name = {}, {}, {}, {}
         for k in used:
-            img = models[k].art.crop(crops[models[k].name])
+            name = models[k].name
+            img = models[k].art.crop(crops[name])
             gutter = int(bool(models[k].spec.get("gutter")))
             if gutter:
                 img = _guttered(img)
-            art_key[k] = ("m", gutter, img.size, img.tobytes())
-            art_img[art_key[k]] = img
+            key = art_key[k] = ("m", gutter, img.size, img.tobytes())
+            art_img[key] = img
+            art_name.setdefault(key, name)
+            if name in glass:
+                mask = glass[name].crop(crops[name])
+                if gutter:
+                    mask = _guttered(mask)
+                art_glass[key] = ImageChops.lighter(art_glass[key], mask) if key in art_glass else mask
         images = list(art_img.items())
         images += [(("p", key), img) for key, img in patches.items()]
         (tw, rows), spots = pack_atlas(images)
@@ -3489,7 +3537,7 @@ def export(models, path):
             big = sorted(images, key=lambda kv: -kv[1].size[0] * kv[1].size[1])[:12]
             print("  page of %s: %d texels in %d images; largest: %s" % (
                 recs[0][6], sum(i.size[0] * i.size[1] for _, i in images), len(images),
-                ", ".join("%s %dx%d" % (models[k[1]].name if k[0] == "m" else "patch", i.size[0], i.size[1])
+                ", ".join("%s %dx%d" % (art_name[k] if k[0] == "m" else "patch", i.size[0], i.size[1])
                           for k, i in big)))
             raise SystemExit("%s: building page %dx%d exceeds the console's %dx%d"
                              % (recs[0][6], tw, rows, MAX_TEXTURE[0], MAX_TEXTURE[1]))
@@ -3499,18 +3547,14 @@ def export(models, path):
         for key, img in images:
             ox, oy = spots[key]
             apx = img.load()
-            window_pixels = None
-            if key[0] == "m":
-                model = models[key[1]]
-                full_mask = voxel_night.building_mask(model.art, model.name)
-                window_pixels = Image.frombytes("L", model.art.size, bytes(full_mask)).crop(crops[model.name])
+            gpx = art_glass[key].load() if key in art_glass else None
             for y in range(img.size[1]):
                 for x in range(img.size[0]):
                     r_, g_, b_, a_ = apx[x, y]
                     value = (r_ >> 3) << 11 | (g_ >> 3) << 6 | (b_ >> 3) << 1 | int(a_ >= 128)
                     struct.pack_into("<H", tex, 2 * texel_offset(ox + x, oy + y, tw), value)
-                    if window_pixels is not None:
-                        glow[texel_offset(ox + x, oy + y, tw)] = window_pixels.getpixel((x, y))
+                    if gpx is not None:
+                        glow[texel_offset(ox + x, oy + y, tw)] = gpx[x, y]
         pages.append((tw, rows))
         glows.append(glow if any(glow) else b"")
         texels.append(tex)
