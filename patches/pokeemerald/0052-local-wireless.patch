@@ -639,6 +639,23 @@ index 5305326..571f097 100644
          FadeScreen(FADE_TO_BLACK, 0);
          ClearLinkRfuCallback();
          tState++;
+diff --git a/src/contest_util.c b/src/contest_util.c
+index c9eacda..cdc12a7 100644
+--- a/src/contest_util.c
++++ b/src/contest_util.c
+@@ -1122,6 +1122,12 @@ static void LoadContestMonIcon(u16 species, u8 monIndex, u8 srcOffset, u8 useDma
+         frameNum = 0;
+ 
+     iconPtr = GetMonIconPtr(species, personality, frameNum);
++#ifdef PORT_BRIDGE
++    // The icon's data is found from where it starts, not from a point inside
++    // it: resolved first, the offset into it after. From inside, the copy was
++    // of other bytes (the results' icons were noise).
++    iconPtr = Port_ResolveAssetPointer(iconPtr);
++#endif
+     iconPtr += srcOffset * 0x200 + 0x80;
+     if (useDmaNow)
+     {
 diff --git a/src/librfu_intr.c b/src/librfu_intr.c
 index 9e727a6..beab310 100644
 --- a/src/librfu_intr.c
