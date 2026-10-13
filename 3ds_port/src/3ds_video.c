@@ -5481,10 +5481,19 @@ static unsigned sTransitionLayers;
  * pattern at priority 0 is; a window taking layers away is not reproduced.
  */
 #define OBJWIN_SIZE 128
+/* The link battle's VS letters, two 64x64 sprites at double size moving
+ * apart, are a window wider than that (they were cut off): 256 KB of VRAM
+ * then, for the second they last. */
+#define OBJWIN_SIZE_LARGE 256
 static C3D_Tex sObjWinTex;
 static C3D_RenderTarget *sObjWinTarget;
 static bool sObjWinWanted, sObjWinFailed;
 static uint32_t sObjWinUsedFrame, sObjWinFailFrame;
+/* The side the window's box needed last frame, and when a surface that
+ * large could not be made. */
+static int sObjWinNeed;
+static uint32_t sObjWinLargeFailFrame;
+static bool sObjWinLargeFailed;
 /* This frame's: its box in GBA pixels and the layers it adds. */
 static struct { bool ready; int x0, y0, x1, y1; unsigned layers; } sObjWin;
 /*
@@ -5512,16 +5521,23 @@ static void ObjWindowRelease(void)
 static void ObjWindowPrepare(void)
 {
     bool wanted = sObjWinWanted;
+    bool large = sObjWinNeed > OBJWIN_SIZE
+              && !(sObjWinLargeFailed && sStats.frames - sObjWinLargeFailFrame < LAYER_RETRY_FRAMES);
 
     sObjWinWanted = false;
+    if (!wanted) sObjWinNeed = 0;
     if (wanted) sObjWinUsedFrame = sStats.frames;
     else if (sObjWinTarget && (sTransitionRequested || sStats.frames - sObjWinUsedFrame > LAYER_IDLE_FRAMES))
+        ObjWindowRelease();
+    /* Too small for the window now on screen: made again, larger. */
+    if (wanted && sObjWinTarget && large && sObjWinTex.width < OBJWIN_SIZE_LARGE)
         ObjWindowRelease();
     if (!wanted || sObjWinTarget || (sObjWinFailed && sStats.frames - sObjWinFailFrame < LAYER_RETRY_FRAMES))
         return;
     /* RGBA8: the mask's count needs more than one bit of alpha. 64 KB of
      * VRAM; a Pokemon's 64x64 fits the half size too. */
-    for (unsigned size = OBJWIN_SIZE; size >= OBJWIN_SIZE / 2 && !sObjWinTarget; size /= 2)
+    for (unsigned size = large ? OBJWIN_SIZE_LARGE : OBJWIN_SIZE; size >= OBJWIN_SIZE / 2 && !sObjWinTarget;
+         size /= 2)
     {
         if (C3D_TexInitVRAM(&sObjWinTex, size, size, GPU_RGBA8)
             && (sObjWinTarget = C3D_RenderTargetCreateFromTex(&sObjWinTex, GPU_TEXFACE_2D, 0, -1)))
@@ -5529,6 +5545,13 @@ static void ObjWindowPrepare(void)
         ObjWindowRelease();
     }
     sObjWinFailed = sObjWinTarget == NULL;
+    if (large && (!sObjWinTarget || sObjWinTex.width < OBJWIN_SIZE_LARGE))
+    {
+        sObjWinLargeFailed = true;
+        sObjWinLargeFailFrame = sStats.frames;
+    }
+    else if (large)
+        sObjWinLargeFailed = false;
     if (sObjWinTarget)
     {
         /* Drawn at the scene's whole-number zoom: every texel a block. */
@@ -5594,6 +5617,7 @@ static void ObjWindowCompose(void)
     if (!ObjWindowBounds(&x0, &y0, &x1, &y1)) return;
     if (out & 31 & ~in) Error(12, "OBJ window hiding layers not supported");
     sObjWinWanted = true;
+    sObjWinNeed = x1 - x0 > y1 - y0 ? x1 - x0 : y1 - y0;
     if (!sObjWinTarget) return;
     size = (int)sObjWinTex.width;
     if (x1 - x0 > size || y1 - y0 > size)
