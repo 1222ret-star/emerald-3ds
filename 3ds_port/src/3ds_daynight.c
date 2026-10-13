@@ -181,6 +181,14 @@ bool CtrDayNight_Time(unsigned *seconds, unsigned *rate)
     return true;
 }
 
+/* Off (every clock option off, 1X, nothing owed) the game keeps the GBA's
+ * own timing. */
+bool CtrDayNight_Active(void)
+{
+    CtrDayNight_Update();
+    return sValid;
+}
+
 const CtrDayNightLight *CtrDayNight_Get(void)
 {
     return &sLight;

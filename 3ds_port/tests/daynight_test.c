@@ -246,11 +246,13 @@ static void RuntimeTests(void)
     CtrDayNight_Reset();
     CtrDayNight_Update();
     assert(!CtrDayNight_Time(&seconds, &rate));
+    assert(!CtrDayNight_Active());
     sShowClock = 1;
     sLocal = 9 * 3600;
     sSpeed = 5;
     assert(CtrDayNight_Time(&seconds, &rate));
     assert(seconds == sLocal && rate == 120);
+    assert(CtrDayNight_Active());
     Near(CtrDayNight_Get()->rgb[0], 1);
     sNow += 30000;
     assert(CtrDayNight_Time(&seconds, &rate));

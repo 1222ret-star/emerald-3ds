@@ -65,28 +65,30 @@ diff --git a/src/overworld.c b/src/overworld.c
 diff --git a/src/save.c b/src/save.c
 --- a/src/save.c
 +++ b/src/save.c
-@@ -13,6 +13,10 @@
+@@ -13,6 +13,11 @@
  #include "trainer_hill.h"
  #include "link.h"
  #include "constants/game_stat.h"
 +#ifdef PLATFORM_3DS
 +#include "clock.h"
 +#include "3ds_clock_store.h"
++#include "3ds_daynight.h"
 +#endif
  
  static u16 CalculateChecksum(void *, u16);
  static bool8 ReadFlashSector(u8, struct SaveSector *);
-@@ -728,6 +732,9 @@
+@@ -728,6 +733,10 @@
      u32 *backupVar = gTrainerHillVBlankCounter;
      u8 *tempAddr;
  
 +#ifdef PLATFORM_3DS
-+    DoTimeBasedEvents();
++    if (CtrDayNight_Active())
++        DoTimeBasedEvents();
 +#endif
      gTrainerHillVBlankCounter = NULL;
      UpdateSaveAddresses();
      switch (saveType)
-@@ -778,6 +785,10 @@
+@@ -778,6 +787,10 @@
      }
  
      gTrainerHillVBlankCounter = backupVar;
@@ -97,17 +99,18 @@ diff --git a/src/save.c b/src/save.c
      return 0;
  }
  
-@@ -806,6 +817,9 @@
+@@ -807,6 +820,10 @@
  {
      if (gFlashMemoryPresent != TRUE)
          return TRUE;
 +#ifdef PLATFORM_3DS
-+    DoTimeBasedEvents();
++    if (CtrDayNight_Active())
++        DoTimeBasedEvents();
 +#endif
      UpdateSaveAddresses();
      CopyPartyAndObjectsToSave();
      RestoreSaveBackupVarsAndIncrement(gRamSaveSectorLocations);
-@@ -842,6 +856,10 @@
+@@ -841,6 +858,10 @@
      CopySectorSignatureByte(NUM_SECTORS_PER_SLOT, gRamSaveSectorLocations);
      if (gDamagedSaveSectors)
          DoSaveFailedScreen(SAVE_NORMAL);
@@ -118,17 +121,18 @@ diff --git a/src/save.c b/src/save.c
      return FALSE;
  }
  
-@@ -850,6 +868,9 @@
+@@ -849,6 +870,10 @@
      if (gFlashMemoryPresent != TRUE)
          return TRUE;
  
 +#ifdef PLATFORM_3DS
-+    DoTimeBasedEvents();
++    if (CtrDayNight_Active())
++        DoTimeBasedEvents();
 +#endif
      UpdateSaveAddresses();
      CopyPartyAndObjectsToSave();
      RestoreSaveBackupVars(gRamSaveSectorLocations);
-@@ -885,6 +906,10 @@
+@@ -884,6 +909,10 @@
      if (gDamagedSaveSectors)
          DoSaveFailedScreen(SAVE_LINK);
  
@@ -139,7 +143,7 @@ diff --git a/src/save.c b/src/save.c
      return finished;
  }
  
-@@ -905,6 +930,9 @@
+@@ -905,6 +934,9 @@
          status = TryLoadSaveSlot(FULL_SAVE_SLOT, gRamSaveSectorLocations);
          CopyPartyAndObjectsFromSave();
          gSaveFileStatus = status;

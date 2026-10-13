@@ -55,6 +55,7 @@ void CtrDayNight_Resume(void);
 const CtrDayNightLight *CtrDayNight_Get(void);
 const CtrDayNightSun *CtrDayNight_GetSun(void);
 bool CtrDayNight_Time(unsigned *seconds, unsigned *rate);
+bool CtrDayNight_Active(void);
 bool CtrDayNight_BerryDue(void);
 unsigned CtrDayNight_TakeBerryMinutes(void);
 void CtrDayNight_Reset(void);
