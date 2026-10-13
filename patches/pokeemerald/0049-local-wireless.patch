@@ -62,7 +62,7 @@ index db9f0eb..8df3178 100644
  	goto_if_eq VAR_RESULT, YES, BerryBlender_EventScript_TryDoLinkBlender
  	goto_if_eq VAR_RESULT, NO, BerryBlender_EventScript_CancelLinkBlender
 diff --git a/data/scripts/cable_club.inc b/data/scripts/cable_club.inc
-index 50b0c8e..b327de5 100644
+index 50b0c8e..9ee2c85 100644
 --- a/data/scripts/cable_club.inc
 +++ b/data/scripts/cable_club.inc
 @@ -858,6 +858,15 @@ CableClub_EventScript_UnionRoomAttendant::
@@ -81,7 +81,7 @@ index 50b0c8e..b327de5 100644
  	specialvar VAR_RESULT, IsWirelessAdapterConnected
  	goto_if_eq VAR_RESULT, FALSE, CableClub_EventScript_UnionRoomAdapterNotConnected
  	message CableClub_Text_WelcomeUnionRoomEnter
-@@ -951,6 +960,31 @@ CableClub_EventScript_DontAskAboutLinking::
+@@ -951,6 +960,42 @@ CableClub_EventScript_DontAskAboutLinking::
  	release
  	return
  
@@ -99,12 +99,23 @@ index 50b0c8e..b327de5 100644
 +	special LocalSession_Wait
 +	waitstate
 +	goto_if_eq VAR_RESULT, LOCAL_SESSION_IN, CableClub_EventScript_LocalSessionEnd
++	goto_if_eq VAR_RESULT, LOCAL_SESSION_OTHER_BUILD, CableClub_EventScript_LocalOtherBuild
 +	msgbox CableClub_Text_LocalFailed, MSGBOX_DEFAULT
 +CableClub_EventScript_LocalSessionEnd::
 +	return
 +
++CableClub_EventScript_LocalOtherBuild::
++	msgbox CableClub_Text_LocalOtherBuild, MSGBOX_DEFAULT
++	return
++
 +CableClub_Text_LocalLooking:
 +	.string "Looking for other players nearby…$"
++
++CableClub_Text_LocalOtherBuild:
++	.string "The player nearby has a different\n"
++	.string "version of the game.\p"
++	.string "Please put the same version on both\n"
++	.string "systems to play together.$"
 +
 +CableClub_Text_LocalFailed:
 +	.string "The wireless connection couldn't be\n"
@@ -113,7 +124,7 @@ index 50b0c8e..b327de5 100644
  CableClub_EventScript_DirectCornerAttendant::
  	lock
  	faceplayer
-@@ -958,6 +992,11 @@ CableClub_EventScript_DirectCornerAttendant::
+@@ -958,6 +1003,11 @@ CableClub_EventScript_DirectCornerAttendant::
  	goto_if_unset FLAG_SYS_POKEDEX_GET, CableClub_EventScript_WirelessClubAdjustements
  	specialvar VAR_RESULT, IsBadEggInParty
  	goto_if_eq VAR_RESULT, TRUE, CableClub_EventScript_AbortLinkPlayerHasBadEgg
@@ -125,7 +136,7 @@ index 50b0c8e..b327de5 100644
  	specialvar VAR_RESULT, IsWirelessAdapterConnected
  	goto_if_eq VAR_RESULT, FALSE, CableClub_EventScript_WelcomeToCableClub
  	message CableClub_Text_WelcomeWhichDirectCornerRoom
-@@ -1291,6 +1330,11 @@ MossdeepCity_GameCorner_1F_EventScript_MinigameInfoExit::
+@@ -1291,6 +1341,11 @@ MossdeepCity_GameCorner_1F_EventScript_MinigameInfoExit::
  MossdeepCity_GameCorner_1F_EventScript_OldMan2::
  	lock
  	faceplayer
@@ -152,10 +163,10 @@ index 567978e..6f6f3b4 100644
 +	def_special LocalSession_Leave
 diff --git a/include/constants/local_link.h b/include/constants/local_link.h
 new file mode 100644
-index 0000000..4049202
+index 0000000..f06273c
 --- /dev/null
 +++ b/include/constants/local_link.h
-@@ -0,0 +1,23 @@
+@@ -0,0 +1,24 @@
 +#ifndef GUARD_CONSTANTS_LOCAL_LINK_H
 +#define GUARD_CONSTANTS_LOCAL_LINK_H
 +
@@ -167,6 +178,7 @@ index 0000000..4049202
 +#define LOCAL_SESSION_IN        2 // joined one, or hosting one
 +#define LOCAL_SESSION_FAILED    3 // the wireless couldn't be started (switched off?)
 +#define LOCAL_SESSION_NONE      4 // not in a session
++#define LOCAL_SESSION_OTHER_BUILD 5 // the players nearby have another build of the game
 +
 +// Which counter a session is for: players only meet others at the same kind
 +// of counter, as the GBA's wireless features only see their own kind.

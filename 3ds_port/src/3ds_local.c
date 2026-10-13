@@ -3,6 +3,14 @@
  * (3ds_rfu_adapter.c) is the 3DS's local wireless (the UDS service), so the
  * game's wireless features find other systems nearby. See include/3ds_local.h.
  *
+ * Builds. Only identical builds link: the game's link code exchanges its
+ * structures raw, and two builds can disagree on them. Every build carries a
+ * SHA-256 of its executable and data (engine/build_id.bin, written by
+ * scripts/gen_build_id.py). A session's beacon shows it and its passphrase
+ * holds it, so another build can neither find nor join the session; a player
+ * whose counter has only sessions of other builds nearby is told so, rather
+ * than left hosting a session nobody nearby can join.
+ *
  * Sessions. Wireless Adapters see every adapter in range; UDS has networks,
  * each with a host and up to 15 others. So players meet in a network, a
  * session: at a link counter the game looks for a session of that counter
@@ -36,11 +44,14 @@
 #include <string.h>
 #include "3ds_local.h"
 #include "3ds_log.h"
+#include "3ds_platform.h"
 #include "../../include/constants/local_link.h"
 
 /* UDS: our network's id and passphrase, and our data channel. */
 #define COMM_ID 0x45E3D501u
-#define PASSPHRASE "Pokemon Emerald 3DS local wireless"
+#define PASSPHRASE "EM3DS local"  /* then 16 bytes of the build id in hex: 45 bytes in all */
+#define BUILD_ID_PATH "engine/build_id.bin"
+#define BUILD_ID_SIZE 32
 #define DATA_CHANNEL 1
 #define SHAREDMEM_SIZE 0x3000
 #define MAX_NODES 5 /* a session: the host and four others, as the Union Room */
@@ -98,6 +109,18 @@ struct AppData
     uint8_t kind;
     uint8_t reserved[2];
     uint32_t token; /* the host's, at random: which of two lone hosts moves */
+    uint8_t build[BUILD_ID_SIZE]; /* the host's build (engine/build_id.bin) */
+};
+
+/* Ours, and the passphrase made with it. */
+static uint8_t sBuildId[BUILD_ID_SIZE];
+static char sPassphrase[sizeof(PASSPHRASE) + 2 * 16 + 2];
+
+enum
+{
+    SESSION_NO,    /* not one of ours, or another counter's */
+    SESSION_YES,   /* this counter's, this build, room for us */
+    SESSION_OTHER, /* this counter's, another build (or protocol) */
 };
 
 struct OutMessage
@@ -509,27 +532,46 @@ static bool StartUds(void)
     return true;
 }
 
-static bool SessionMatches(const udsNetworkScanInfo *net, uint8_t kind, uint32_t *token)
+static const char *BuildHex(char *out, const uint8_t *id)
+{
+    for (int i = 0; i < BUILD_ID_SIZE; i++)
+        snprintf(out + 2 * i, 3, "%02x", id[i]);
+    return out;
+}
+
+static int SessionCheck(const udsNetworkScanInfo *net, uint8_t kind, uint32_t *token)
 {
     struct AppData app;
     size_t size = 0;
 
     if (R_FAILED(udsGetNetworkStructApplicationData(&net->network, &app, sizeof(app), &size))
-     || size < sizeof(app) || memcmp(app.magic, kMagic, sizeof(kMagic)) != 0)
-        return false;
-    if (app.version != PROTOCOL_VERSION)
+     || size < 6 || memcmp(app.magic, kMagic, sizeof(kMagic)) != 0)
+        return SESSION_NO;
+    if (app.kind != kind)
+        return SESSION_NO;
+    if (app.version != PROTOCOL_VERSION || size < sizeof(app)
+     || memcmp(app.build, sBuildId, BUILD_ID_SIZE) != 0)
     {
-        CtrLog_Write(CTR_LOG_GAME, "local: a session of protocol %u nearby, not ours", app.version);
-        return false;
+        static uint8_t told[BUILD_ID_SIZE];
+
+        if (memcmp(told, app.build, sizeof(told)) != 0)
+        {
+            char hex[2 * BUILD_ID_SIZE + 1];
+
+            memcpy(told, app.build, sizeof(told));
+            CtrLog_Write(CTR_LOG_GAME, "local: a session of this counter nearby is another build (protocol %u, build %s)",
+                         app.version, BuildHex(hex, app.build));
+        }
+        return SESSION_OTHER;
     }
     if (token)
         *token = app.token;
-    return app.kind == kind && net->network.total_nodes < net->network.max_nodes;
+    return net->network.total_nodes < net->network.max_nodes ? SESSION_YES : SESSION_NO;
 }
 
 static bool Connect(const udsNetworkScanInfo *net)
 {
-    Result ret = udsConnectNetwork(&net->network, PASSPHRASE, sizeof(PASSPHRASE), &sL.bind,
+    Result ret = udsConnectNetwork(&net->network, sPassphrase, strlen(sPassphrase) + 1, &sL.bind,
                                    UDS_BROADCAST_NETWORKNODEID, UDSCONTYPE_Client, DATA_CHANNEL,
                                    UDS_DEFAULT_RECVBUFSIZE);
 
@@ -542,7 +584,8 @@ static bool Connect(const udsNetworkScanInfo *net)
     return true;
 }
 
-static bool JoinNearby(uint8_t kind, uint32_t lookMs)
+/* otherBuild: a session of this counter of another build was seen. */
+static bool JoinNearby(uint8_t kind, uint32_t lookMs, bool *otherBuild)
 {
     static uint32_t scanBuffer[0x4000 / 4];
     uint32_t until = LocalLink_Milliseconds() + lookMs;
@@ -562,7 +605,11 @@ static bool JoinNearby(uint8_t kind, uint32_t lookMs)
         }
         for (size_t i = 0; i < total; i++)
         {
-            if (SessionMatches(&nets[i], kind, NULL) && Connect(&nets[i]))
+            int check = SessionCheck(&nets[i], kind, NULL);
+
+            if (check == SESSION_OTHER)
+                *otherBuild = true;
+            else if (check == SESSION_YES && Connect(&nets[i]))
             {
                 free(nets);
                 return true;
@@ -576,12 +623,14 @@ static bool JoinNearby(uint8_t kind, uint32_t lookMs)
 static bool HostSession(uint8_t kind)
 {
     udsNetworkStruct net;
-    struct AppData app = {{0}, PROTOCOL_VERSION, kind, {0, 0}, sL.token};
+    struct AppData app = {{0}, PROTOCOL_VERSION, kind, {0, 0}, sL.token, {0}};
     Result ret;
 
     memcpy(app.magic, kMagic, sizeof(kMagic));
+    memcpy(app.build, sBuildId, BUILD_ID_SIZE);
     udsGenerateDefaultNetworkStruct(&net, COMM_ID, 0, MAX_NODES);
-    ret = udsCreateNetwork(&net, PASSPHRASE, sizeof(PASSPHRASE), &sL.bind, DATA_CHANNEL, UDS_DEFAULT_RECVBUFSIZE);
+    ret = udsCreateNetwork(&net, sPassphrase, strlen(sPassphrase) + 1, &sL.bind, DATA_CHANNEL,
+                           UDS_DEFAULT_RECVBUFSIZE);
     if (R_FAILED(ret))
     {
         CtrLog_Write(CTR_LOG_ERROR, "local: hosting failed (%08lx)", ret);
@@ -669,7 +718,7 @@ static void MergeAlone(void)
     {
         uint32_t token = 0;
 
-        if (!SessionMatches(&nets[i], sL.kind, &token) || token == sL.token)
+        if (SessionCheck(&nets[i], sL.kind, &token) != SESSION_YES || token == sL.token)
             continue;
         if (nets[i].network.total_nodes <= 1 && token > sL.token)
             continue;
@@ -701,7 +750,7 @@ static void MergeAlone(void)
 
 static void StartSession(uint8_t kind)
 {
-    bool in;
+    bool in, otherBuild = false;
 
     LeaveNetwork();
     EndSession(LOCAL_SESSION_SEARCHING);
@@ -711,7 +760,14 @@ static void StartSession(uint8_t kind)
         return;
     }
     CtrLog_Write(CTR_LOG_GAME, "local: looking for a session of kind %u", kind);
-    in = JoinNearby(kind, SEARCH_MS + (uint32_t)(rand() % SEARCH_JITTER_MS));
+    in = JoinNearby(kind, SEARCH_MS + (uint32_t)(rand() % SEARCH_JITTER_MS), &otherBuild);
+    if (!in && otherBuild)
+    {
+        /* Hosting, we would wait for players who can't come: the ones nearby
+         * have another build. */
+        EndSession(LOCAL_SESSION_OTHER_BUILD);
+        return;
+    }
     if (!in)
         in = HostSession(kind);
     if (!in)
@@ -832,6 +888,27 @@ void LocalLink_Init(void)
         return;
     LightLock_Init(&sL.lock);
     sL.state = LOCAL_SESSION_NONE;
+    {
+        FILE *file = CtrFs_OpenAsset(BUILD_ID_PATH);
+        size_t got = file ? fread(sBuildId, 1, BUILD_ID_SIZE, file) : 0;
+        int n = snprintf(sPassphrase, sizeof(sPassphrase), "%s ", PASSPHRASE);
+
+        if (file)
+            fclose(file);
+        if (got != BUILD_ID_SIZE)
+        {
+            /* Links only with builds without one too. */
+            memset(sBuildId, 0, sizeof(sBuildId));
+            CtrLog_Write(CTR_LOG_ERROR, "local: no %s", BUILD_ID_PATH);
+        }
+        for (int i = 0; i < 16 && n + 2 < (int)sizeof(sPassphrase); i++)
+            n += snprintf(sPassphrase + n, sizeof(sPassphrase) - n, "%02x", sBuildId[i]);
+        {
+            char hex[2 * BUILD_ID_SIZE + 1];
+
+            CtrLog_Write(CTR_LOG_GAME, "local: build %s", BuildHex(hex, sBuildId));
+        }
+    }
     if (R_FAILED(svcCreateEvent(&sL.wake, RESET_ONESHOT)))
     {
         CtrLog_Write(CTR_LOG_ERROR, "local: no event, local wireless off");
