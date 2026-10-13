@@ -271,10 +271,10 @@ index b53b69c..c6f0674 100644
      {
          return LMAN_ERROR_NOW_LINK_RECOVERY;
 diff --git a/src/battle_controllers.c b/src/battle_controllers.c
-index 602a289..a39b6f8 100644
+index 602a289..fe04605 100644
 --- a/src/battle_controllers.c
 +++ b/src/battle_controllers.c
-@@ -13,6 +13,47 @@
+@@ -13,6 +13,50 @@
  #include "util.h"
  #include "constants/abilities.h"
  
@@ -295,6 +295,9 @@ index 602a289..a39b6f8 100644
 +// Per battler and player: "done" messages still to come for commands the
 +// master didn't wait for, to be ignored when they arrive.
 +static u8 sSkippedDones[MAX_BATTLERS_COUNT][MAX_LINK_PLAYERS];
++// On a client, per battler: the master's "done"s held until our own
++// controller for that battler has finished (see ProcessReceivedLinkBuffer).
++static u8 sHeldMasterDones[MAX_BATTLERS_COUNT];
 +
 +// Our own answers for the engine and "done"s count straight away. Going
 +// round the receive queue they could wait behind a command for the same
@@ -322,7 +325,7 @@ index 602a289..a39b6f8 100644
  static EWRAM_DATA u8 sLinkSendTaskId = 0;
  static EWRAM_DATA u8 sLinkReceiveTaskId = 0;
  static EWRAM_DATA u8 sUnused = 0; // Debug? Never read
-@@ -708,6 +749,13 @@ static void CreateTasksForSendRecvLinkBuffers(void)
+@@ -708,6 +752,14 @@ static void CreateTasksForSendRecvLinkBuffers(void)
      gTasks[sLinkReceiveTaskId].tCurrentBlock_Start    = 0;
  
      sUnused = 0;
@@ -330,13 +333,14 @@ index 602a289..a39b6f8 100644
 +#ifdef PLATFORM_3DS
 +    sDirectBattleLink = gWirelessCommType && PlatformLocalLinkActive();
 +    memset(sSkippedDones, 0, sizeof(sSkippedDones));
++    memset(sHeldMasterDones, 0, sizeof(sHeldMasterDones));
 +    if (sDirectBattleLink)
 +        PlatformLinkBattleReset();
 +#endif
  }
  
  enum
-@@ -812,6 +860,26 @@ static void Task_HandleSendLinkBuffersData(u8 taskId)
+@@ -812,6 +864,26 @@ static void Task_HandleSendLinkBuffersData(u8 taskId)
          }
          break;
      case SENDTASK_STATE_BEGIN_SEND_BLOCK:
@@ -363,7 +367,7 @@ index 602a289..a39b6f8 100644
          if (gTasks[taskId].tCurrentBlock_Start != gTasks[taskId].tCurrentBlock_End)
          {
              if (gTasks[taskId].tBlockSendDelayTimer == 0)
-@@ -862,12 +930,73 @@ static void Task_HandleSendLinkBuffersData(u8 taskId)
+@@ -862,12 +934,73 @@ static void Task_HandleSendLinkBuffersData(u8 taskId)
  // handled uniformly unless a game specifically decides to do
  // otherwise. Pokemon, evidently, did not specifically decide to do
  // otherwise.
@@ -437,7 +441,7 @@ index 602a289..a39b6f8 100644
      if (gReceivedRemoteLinkPlayers && (gBattleTypeFlags & BATTLE_TYPE_LINK_IN_BATTLE))
      {
          DestroyTask_RfuIdle();
-@@ -900,7 +1029,8 @@ void TryReceiveLinkBattleData(void)
+@@ -900,7 +1033,8 @@ void TryReceiveLinkBattleData(void)
      }
  }
  
@@ -447,7 +451,7 @@ index 602a289..a39b6f8 100644
  {
      u16 blockSize;
      u8 battler;
-@@ -909,7 +1039,8 @@ static void Task_HandleCopyReceivedLinkBuffersData(u8 taskId)
+@@ -909,7 +1043,8 @@ static void Task_HandleCopyReceivedLinkBuffersData(u8 taskId)
      #define BYTE_TO_RECEIVE(offset) \
          gLinkBattleRecvBuffer[gTasks[taskId].tCurrentBlock_Start + offset]
  
@@ -457,7 +461,7 @@ index 602a289..a39b6f8 100644
      {
          if (gTasks[taskId].tCurrentBlock_Start >  gTasks[taskId].tCurrentBlock_End
           && gTasks[taskId].tCurrentBlock_Start == gTasks[taskId].tCurrentBlock_WrapFrom)
-@@ -924,10 +1055,31 @@ static void Task_HandleCopyReceivedLinkBuffersData(u8 taskId)
+@@ -924,10 +1059,31 @@ static void Task_HandleCopyReceivedLinkBuffersData(u8 taskId)
          {
          case B_COMM_TO_CONTROLLER:
              if (IS_BATTLE_CONTROLLER_ACTIVE_ON_LOCAL(battler))
@@ -490,7 +494,7 @@ index 602a289..a39b6f8 100644
  
              if (!(gBattleTypeFlags & BATTLE_TYPE_IS_MASTER))
              {
-@@ -942,16 +1094,61 @@ static void Task_HandleCopyReceivedLinkBuffersData(u8 taskId)
+@@ -942,16 +1098,77 @@ static void Task_HandleCopyReceivedLinkBuffersData(u8 taskId)
              break;
          case B_COMM_CONTROLLER_IS_DONE:
              playerId = BYTE_TO_RECEIVE(LINK_BUFF_DATA);
@@ -504,10 +508,17 @@ index 602a289..a39b6f8 100644
 +            // frames later, but a burst (a resent message, everything after
 +            // it at once) brings both together, the flag goes before the
 +            // command has run, and the battle waits for it forever. The
-+            // master's "done" waits until our own controller has finished.
++            // master's "done" is held until our own controller has finished
++            // (Task_HandleCopyReceivedLinkBuffersData applies it); the
++            // messages after it go on meanwhile; waiting in line, the master's
++            // "done" for our battler's action held up the master's own
++            // commands while we chose, and the master waited for us.
 +            if (sDirectBattleLink && !(gBattleTypeFlags & BATTLE_TYPE_IS_MASTER) && playerId == 0
 +             && GetMultiplayerId() != 0 && IS_BATTLE_CONTROLLER_ACTIVE_FOR_PLAYER(battler, GetMultiplayerId()))
-+                return FALSE;
++            {
++                sHeldMasterDones[battler]++;
++                break;
++            }
 +            if (sDirectBattleLink && playerId < MAX_LINK_PLAYERS && sSkippedDones[battler][playerId])
 +            {
 +                sSkippedDones[battler][playerId]--;
@@ -535,6 +546,15 @@ index 602a289..a39b6f8 100644
 +    if (sDirectBattleLink)
 +    {
 +        u8 i;
++        // The master's "done"s held for our own controllers that have finished.
++        for (i = 0; i < MAX_BATTLERS_COUNT; i++)
++        {
++            if (sHeldMasterDones[i] && !IS_BATTLE_CONTROLLER_ACTIVE_FOR_PLAYER(i, GetMultiplayerId()))
++            {
++                sHeldMasterDones[i]--;
++                MARK_BATTLE_CONTROLLER_IDLE_FOR_PLAYER(i, 0);
++            }
++        }
 +        for (i = 0; i < 32; i++)
 +        {
 +            s16 next = gTasks[taskId].tCurrentBlock_Start;
