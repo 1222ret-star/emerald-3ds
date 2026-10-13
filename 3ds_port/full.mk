@@ -155,9 +155,12 @@ build/root/%.o: $(ROOT)/%.c Makefile full.mk
 		| "$(CC)" $(FULLFLAGS) $(FULLCFLAGS) -x c -c -o $(CURDIR)/$@ -
 
 # Screens staged as one whole GBA picture: GBA geometry, and their VBlank
-# callbacks reported to the bridge (compat/ctr_gba_stage.h).
-CTR_GBA_STAGE_SRCS := intro title_screen credits intro_credits_graphics
+# callbacks reported to the bridge (compat/ctr_gba_stage.h). The cable car too:
+# built wide, its scene sat in a corner of the screen with black around it.
+CTR_GBA_STAGE_SRCS := intro title_screen credits intro_credits_graphics cable_car
 CTR_GBA_STAGE_OBJS := $(patsubst %,build/root/src/%.o,$(CTR_GBA_STAGE_SRCS))
+# Its scenery scrolls, but its margins fade like the intro's.
+build/root/src/cable_car.o: FULLCFLAGS += -DCTR_STAGE_FADED
 $(CTR_GBA_STAGE_OBJS): FULLCFLAGS += -DCTR_GBA_STAGE -include $(abspath compat/ctr_gba_stage.h)
 $(CTR_GBA_STAGE_OBJS): compat/ctr_gba_stage.h $(ROOT)/include/gba/defines.h
 # GBA screens shown centred, margins only from layers that wrap on the GBA
@@ -219,14 +222,16 @@ build/root/src/pokedex.o: compat/ctr_gba_centred.h
 # out to the whole top screen by the compositor (compat/ctr_gba_battle.h).
 # The evolution scene is the battle's: its text box, its backgrounds and the
 # mon at the middle of a 240x160 screen. Built as a wide screen it was drawn
-# off the left of the top screen, half of the mon on a black screen.
+# off the left of the top screen, half of the mon on a black screen. The egg
+# hatching is laid out the same way, and built wide it was drawn the same:
+# its text box and backgrounds repeated across a black screen.
 CTR_GBA_BATTLE_SRCS := battle_main battle_bg battle_intro battle_interface battle_gfx_sfx_util \
 	battle_controllers battle_controller_player battle_controller_opponent \
 	battle_controller_link_opponent battle_controller_link_partner battle_controller_player_partner \
 	battle_controller_recorded_opponent battle_controller_recorded_player battle_controller_safari \
 	battle_controller_wally battle_message battle_script_commands battle_util battle_util2 \
 	battle_tv battle_arena battle_palace battle_ai_script_commands battle_ai_switch_items \
-	pokeball reshow_battle_screen evolution_scene evolution_graphics \
+	pokeball reshow_battle_screen evolution_scene evolution_graphics egg_hatch \
 	$(patsubst $(ROOT)/src/%.c,%,$(wildcard $(ROOT)/src/battle_anim*.c))
 CTR_GBA_BATTLE_OBJS := $(patsubst %,build/root/src/%.o,$(CTR_GBA_BATTLE_SRCS))
 $(CTR_GBA_BATTLE_OBJS): FULLCFLAGS += -DCTR_GBA_STAGE -include $(abspath compat/ctr_gba_battle.h)
@@ -563,7 +568,7 @@ check-voxel-relief:
 .PHONY: verify-voxel-relief
 verify: verify-voxel-relief
 verify-voxel-relief: build/voxel_relief_test.exe romfs/voxel/relief.bin
-	./build/voxel_relief_test.exe $$("$(PYTHON)" -c "import json; l = json.load(open('$(ROOT)/data/layouts/layouts.json'))['layouts']; ids = [e['id'] for e in l]; print(ids.index('LAYOUT_ROUTE101') + 1, ids.index('LAYOUT_ROUTE116') + 1)")
+	./build/voxel_relief_test.exe $$("$(PYTHON)" -c "import json; l = json.load(open('$(ROOT)/data/layouts/layouts.json'))['layouts']; ids = [e['id'] for e in l]; print(ids.index('LAYOUT_ROUTE101') + 1, ids.index('LAYOUT_ROUTE116') + 1, ids.index('LAYOUT_RUSTURF_TUNNEL') + 1)")
 
 build/voxel_relief_test.exe: tests/voxel_relief_test.c src/voxel/voxel_relief.c src/voxel/voxel_relief.h
 	@mkdir -p $(@D)

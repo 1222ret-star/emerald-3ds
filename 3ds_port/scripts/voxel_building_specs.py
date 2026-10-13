@@ -36,7 +36,7 @@ side eave, so no gable wall of plaster ever shows.
 
 import math
 
-from voxel_building import (Band, BakedLathe, VoxelLathe, Card, Grown, PlanHip, PlanPrism, PlanPyramid, PlatePrism, SectionPrism, Cylinder, Frustum, HeightSolid, HipRoof, Mound, PlainWall, Prism, Proj,
+from voxel_building import (Band, ProjCanopy, ProjDome, ProjHull, ProjLathe, ProjSection, BakedLathe, VoxelLathe, Card, Grown, PlanHip, PlanPrism, PlanPyramid, PlatePrism, SectionPrism, Cylinder, Frustum, HeightSolid, HipRoof, Mound, PlainWall, Prism, Proj,
                             Strip, Tile, Vault, Volume, Walls, clip, own_bands, _unit, strip_face,
                             SHADE_ART, SHADE_BACK, SHADE_EAST, SHADE_WEST)
 
@@ -184,8 +184,10 @@ def center_or_mart(rib_repeat, crown=False):
     of its own ribs, which run front to back and so repeat without a seam.
     """
     front, back = 64, 16
-    plan = [(8, front), (56, front), (64, front - 8), (64, back + 8),
-            (56, back), (8, back), (0, back + 8), (0, front - 8)]
+    # the front chamfers a pixel out: the plinth's outline is drawn on the
+    # diagonal's outer side, and on it stood on the ground
+    plan = [(7, front), (57, front), (64, front - 7), (64, back + 8),
+            (56, back), (8, back), (0, back + 8), (0, front - 7)]
     parts = [Frustum(
         "body", plan, wall_top=26,
         wall_side=Strip((38, 64), wrap=(8, 16)),
@@ -366,6 +368,15 @@ def kit_house(width):
 
 def kit_house_exact(width):
     return [(2, 38, width - 2, 64), (8, 16, width - 8, 38)]
+
+
+def kit_house_keep(width):
+    """The kit house's own pixels: its roof, and of its facade's rows what its
+    ground floor stands on (x 2 to width - 2). The lawn either side and its
+    shadow on the ground are the map's, laid under it (patch_own): as its
+    own, nothing drew them and the ground round it showed there (the strip
+    of paving between Slateport's two houses)."""
+    return [(0, 0, width, 38), (2, 38, width - 2, 64)]
 
 
 def dewford_house(width):
@@ -649,22 +660,16 @@ class Awning:
             strip_face(mesh, inner, (origin[0] if sdir[0] else o[0], origin[1],
                                      origin[2] if sdir[2] else o[2]),
                        sdir, up, val, SHADE_BACK, n + ".valance_in")
-        # the posts: a box under each corner, every side the drawn front
-        # post's - the foot as drawn, then the shaft up to the valance. The
-        # back ones the roof hides at 45 degrees.
-        for (pa, pb), (za, zf) in [(p, z) for p in self.posts
-                                   for z in ((zf - (p[1] - p[0]), zf), (zb, zb + p[1] - p[0]))]:
-            for quad, origin, sdir, shade, du in (
-                    ([(pa, 0, zf), (pb, 0, zf), (pb, yb, zf), (pa, yb, zf)],
-                     (0.0, 0.0, zf), (1.0, 0.0, 0.0), SHADE_ART, 0.0),
-                    ([(pb, 0, za), (pa, 0, za), (pa, yb, za), (pb, yb, za)],
-                     (0.0, 0.0, za), (1.0, 0.0, 0.0), SHADE_BACK, 0.0),
-                    ([(pa, 0, za), (pa, 0, zf), (pa, yb, zf), (pa, yb, za)],
-                     (pa, 0.0, 0.0), (0.0, 0.0, 1.0), SHADE_WEST, pa - za),
-                    ([(pb, 0, zf), (pb, 0, za), (pb, yb, za), (pb, yb, zf)],
-                     (pb, 0.0, 0.0), (0.0, 0.0, 1.0), SHADE_EAST, pa - za)):
-                strip = Strip(self.foot, repeat=self.shaft, offset=du)
-                strip_face(mesh, quad, origin, sdir, up, strip, shade, n + ".post")
+        # the posts: thin legs, so each is one flat card facing south with
+        # the drawn front post on it - the foot as drawn, then the shaft up
+        # to the valance. As boxes, every side repeated the front and from
+        # the game's camera each leg read as two. The back ones (the roof
+        # hides them at 45 degrees) stand at the back edge.
+        for (pa, pb) in self.posts:
+            for z in (zf, zb + (pb - pa)):
+                strip_face(mesh, [(pa, 0, z), (pb, 0, z), (pb, yb, z), (pa, yb, z)],
+                           (0.0, 0.0, z), (1.0, 0.0, 0.0), up,
+                           Strip(self.foot, repeat=self.shaft), SHADE_ART, n + ".post")
 
 
 class Tent(Awning):
@@ -811,6 +816,77 @@ class Posts:
                        (a, y1, z0, a, top + 1)], SHADE_ART, n + "~proj")
 
 
+class Canopy:
+    """A porch roof over a door: a flat slab standing straight out of the
+    facade (at `zw`) to its front at `zf`, on two posts.
+
+    Drawn: its top, `y1` high, from the wall out (its flutes run away from
+    the wall, so they are drawn as columns), then its front down to the
+    posts' tops at `y0`, the front's lower edge arched over the door
+    (`arch`: (x, y) from post to post). The top's back corners are cut
+    (`chamfer` = (dx, dz)) as the drawing rounds them. Every face the
+    drawing shows is projected; the vault under the arch takes the
+    doorway's dark `inside` texel, the two ends the front's edge columns
+    laid across the depth. The posts are one flat card each, facing south,
+    as drawn down to their foot (`last`: their last drawn row goes on to
+    the ground). Under it the wall paints what the drawing has there (the
+    flutes, the posts again), seen past the posts as a second porch: a
+    skin of the wall's own column beside the porch (`skin`) covers it
+    beside the door, and the doorway's dark over it down to the row of its
+    sill (`sill`).
+    """
+
+    def __init__(self, name, x0, x1, zw, zf, y0, y1, arch, chamfer, posts, inside, last,
+                 skin, sill):
+        self.name, self.x0, self.x1, self.zw, self.zf = name, x0, x1, zw, zf
+        self.sill = sill
+        self.y0, self.y1, self.arch, self.chamfer = y0, y1, arch, chamfer
+        self.posts, self.inside, self.last, self.skin = posts, inside, last, skin
+
+    def emit(self, mesh):
+        n, x0, x1, zw, zf, y0, y1 = (self.name, self.x0, self.x1, self.zw, self.zf,
+                                     self.y0, self.y1)
+        cx, cz = self.chamfer
+        iu, iv = self.inside
+
+        def proj(pts):
+            return [(x, y, z, x, z - y) for (x, y, z) in pts]
+        mesh.poly(proj([(x0 + cx, y1, zw), (x1 - cx, y1, zw), (x1, y1, zw + cz), (x1, y1, zf),
+                        (x0, y1, zf), (x0, y1, zw + cz)][::-1]), SHADE_ART, n + ".top~proj")
+        edge = [(x0, y0)] + list(self.arch) + [(x1, y0)]
+        for (xa, ya), (xb, yb) in zip(edge, edge[1:]):
+            if xb - xa > 1e-6:
+                mesh.poly(proj([(xa, ya, zf), (xb, yb, zf), (xb, y1, zf), (xa, y1, zf)]),
+                          SHADE_ART, n + ".front~proj")
+            # under it: flat over the posts, the vault under the arch
+            mesh.poly([(xa, ya, zw, iu, iv), (xb, yb, zw, iu, iv), (xb, yb, zf, iu, iv),
+                       (xa, ya, zf, iu, iv)], SHADE_BACK, n + ".under~clamp")
+        # the ends: the front's edge columns laid across the depth; their cut
+        # corners as drawn
+        zc = zw + cz
+        for x, xc, inward, shade in ((x0, x0 + cx, 1, SHADE_WEST), (x1, x1 - cx, -1, SHADE_EAST)):
+            mesh.poly([(x, y, z, x + inward * (zf - z) * 0.5, zf - y) for (x, y, z) in
+                       ((x, y0, zf), (x, y0, zc), (x, y1, zc), (x, y1, zf))],
+                      shade, n + ".end~proj")
+            mesh.poly(proj([(x, y0, zc), (xc, y0, zw), (xc, y1, zw), (x, y1, zc)]),
+                      shade, n + ".end~proj")
+        (pa, pb), (qa, qb) = self.posts
+        (wa, wb) = self.skin
+        for xa, xb, col in ((pa, pb, wa), (qa, qb, wb)):
+            mesh.poly([(x, y, zw + 0.25, col, zw - max(y, 0)) for (x, y) in
+                       ((xa, -1), (xb, -1), (xb, y0), (xa, y0))], SHADE_ART, n + ".skin~proj")
+        sill = zw + 0.25 - self.sill            # the doorway's dark down to its sill
+        for (xa, ya), (xb, yb) in zip(self.arch, self.arch[1:]):
+            if xb - xa > 1e-6:
+                mesh.poly([(xa, sill, zw + 0.25, iu, iv), (xb, sill, zw + 0.25, iu, iv),
+                           (xb, yb, zw + 0.25, iu, iv), (xa, ya, zw + 0.25, iu, iv)],
+                          SHADE_ART, n + ".door~clamp")
+        last = self.last - 0.5
+        for (a, b) in self.posts:
+            mesh.poly([(x, y, zf, x, min(zf - y, last)) for (x, y) in
+                       ((a, -1), (b, -1), (b, y0), (a, y0))], SHADE_ART, n + ".post~proj")
+
+
 def fan_club():
     """Slateport's Pokemon Fan Club (80 x 80, cells 2..6 x 22..26).
 
@@ -828,18 +904,28 @@ def fan_club():
                    front_rows=(40, 54), hip_rows=(16, 54),
                    deck=Strip((12, 40), repeat=(12, 16), tail=(8, 12)),
                    back=Strip((12, 16), repeat=(12, 16)))
-    walls = Walls("facade", [(1, 73), (8, 80), (72, 80), (79, 73)], -1, ye)
+    # its sides on the drawing's outermost columns (their outline): on 1
+    # and 79 the outline columns 0 and 79 stood on the ground beside it
+    walls = Walls("facade", [(0, 73), (7, 80), (73, 80), (80, 73)], -1, ye)
     pilaster = Tile(8, 55, 16, 79)
-    sides = [PlainWall("side_w", (1, 73), (1, zb), -1, ye, pilaster),
-             PlainWall("side_e", (79, zb), (79, 73), -1, ye, pilaster),
-             PlainWall("back", (1, zb), (79, zb), -1, ye, pilaster)]
-    posts = Posts("door_posts", [(29, 33), (47, 51)], 83, 87, 10, last=80)
-    return [roof, walls, posts] + sides
+    sides = [PlainWall("side_w", (0, 73), (0, zb), -1, ye, pilaster),
+             PlainWall("side_e", (80, zb), (80, 73), -1, ye, pilaster),
+             PlainWall("back", (0, zb), (80, zb), -1, ye, pilaster)]
+    # the door's porch: a flat roof at Y 24, just under the eave, from the
+    # wall out to Z 87 (its fluted top rows 56-63, its front 63-73), the
+    # front arched over the door up to row 69; the posts under its front
+    # (in steps, as drawn: a slope across a step cut its outline's pixels)
+    arch = [(33, 14), (33, 15), (35, 15), (35, 16), (37, 16), (37, 17), (39, 17), (39, 18),
+            (41, 18), (41, 17), (43, 17), (43, 16), (45, 16), (45, 15), (47, 15), (47, 14)]
+    porch = Canopy("porch", 28, 52, 80, 87, 14, 24, arch, chamfer=(3, 2),
+                   posts=[(29, 33), (47, 51)], inside=(40.5, 74.5), last=87, skin=(27.5, 53.5),
+                   sill=77)
+    return [roof, walls, porch] + sides
 
 
 # the door posts' tops, which the drawing does not show, stand over 73-77; the
 # grass beside the chamfers is drawn in the facade's own blocks
-FAN_CLUB_EXACT = [(14, 12, 66, 54), (0, 16, 14, 54), (66, 16, 80, 54), (1, 55, 79, 73),
+FAN_CLUB_EXACT = [(14, 12, 66, 54), (0, 16, 14, 54), (66, 16, 80, 54), (0, 55, 80, 73),
                   (3, 73, 29, 77), (33, 73, 47, 77), (51, 73, 77, 77)]
 
 
@@ -928,10 +1014,12 @@ def contest_hall():
     zf, zb = 88, 16
     roof = FlatSlab("roof", 0, 96, zf, zb, 32, 40, front=(16, 48), fill=((24, 32), (8, 40)),
                     rim=8, tail=(8, 16), edge=Tile(40, 48, 56, 56))
-    walls = Walls("facade", [(0, 72), (8, 80), (88, 80), (96, 72)], -1, 32)
+    # the chamfers a pixel out: their outline, drawn on the diagonal's outer
+    # side, stood on the lawn
+    walls = Walls("facade", [(0, 73), (7, 80), (89, 80), (96, 73)], -1, 32)
     side = Tile(16, 56, 24, 80)
-    sides = [PlainWall("side_w", (0, 72), (0, zb), -1, 32, side),
-             PlainWall("side_e", (96, zb), (96, 72), -1, 32, side),
+    sides = [PlainWall("side_w", (0, 73), (0, zb), -1, 32, side),
+             PlainWall("side_e", (96, zb), (96, 73), -1, 32, side),
              PlainWall("back", (0, zb), (96, zb), -1, 32, side)]
     columns = Posts("columns", [(8, 16), (24, 32), (64, 72), (80, 88)], 80, zf, 32)
     steps = Relief_top([(32, 80), (64, 80), (64, 88), (32, 88)], 0.5)
@@ -1054,41 +1142,87 @@ def battle_tent(art):
 # planked side v 32-40), a mast at u 28-31 up to v 3, and two sails in the
 # plane of the boat's keel: the striped jib before the mast, the white
 # mainsail behind it.
+# the harbour bollard's profile, (y, radius) from its foot
+BOLLARD = [(0, 6.5), (2, 6), (5, 6), (6, 5.5), (7, 7), (8.5, 7), (9, 4), (11, 0)]
 BOAT_Z = 35
+# the sails (x, y) in the keel's plane, and the mast (x0, x1, y0, y1)
+BOAT_SAILS = [[(27, 33), (9, 12), (27, 12)], [(32, 32), (44, 11), (32, 11)]]
+BOAT_MAST = (27.5, 31.5, 8, 33)
+# the hull's plan and sheer (ProjHull)
+BOAT_HULL = dict(cx=24.5, rx=24.5, rz=5.5, p=3.0, sheer=6, keel=0)
 
 
-def sailboat_volume(vol, dx=0.0, dz=0.0):
-    z = BOAT_Z + dz
-    vol.slab(24 + dx, z, 23.8, 5.5, -1, 8, p=2.5, sheer=6, keel=6)
-    vol.tube([(29.5 + dx, 8, z), (29.5 + dx, 32, z)], 1.6)
-    for poly in ([(27, 33), (9, 12), (27, 12)], [(32, 32), (44, 11), (32, 11)]):
-        vol.plate([(x + dx, y) for (x, y) in poly], z - 1, z + 1)
-    return vol
+def _grown(poly, d):
+    """A polygon's corners pushed `d` out from its middle."""
+    cx = sum(p[0] for p in poly) / len(poly)
+    cy = sum(p[1] for p in poly) / len(poly)
+    out = []
+    for (x, y) in poly:
+        dx, dy = x - cx, y - cy
+        k = math.hypot(dx, dy) or 1.0
+        out.append((x + dx / k * d, y + dy / k * d))
+    return out
+
+
+def _inside(poly, x, y):
+    inside = False
+    for i in range(len(poly)):
+        (xa, ya), (xb, yb) = poly[i], poly[i - 1]
+        if (ya > y) != (yb > y) and x < xa + (y - ya) * (xb - xa) / (yb - ya):
+            inside = not inside
+    return inside
+
+
+class SailCards:
+    """A boat's sails and mast as flat cards in its keel's plane, the
+    drawing projected on them: at 45 degrees exactly the drawing, its
+    transparency cutting their outline. In the hull's height field they
+    were plates two pixels thick, cut column by column, and from the game's
+    camera their slanted edges stood in spikes. Each card is its outline
+    grown a pixel and a half, so that the outline's own pixels are in it."""
+
+    def __init__(self, name, zs, dx=0.0):
+        self.name, self.zs, self.dx = name, zs, dx
+        x0, x1, y0, y1 = BOAT_MAST
+        self.polys = [_grown([(x + dx, y) for (x, y) in poly], 1.5) for poly in BOAT_SAILS]
+        self.polys.append([(x0 + dx, y0), (x1 + dx, y0), (x1 + dx, y1), (x0 + dx, y1)])
+
+    def owns(self, u, v):
+        """Whether the 45-degree ray of pixel (u, v) meets a card."""
+        return any(_inside(poly, u + 0.5, z - v - 0.5) for z in self.zs for poly in self.polys)
+
+    def emit(self, mesh):
+        for z in self.zs:
+            for poly in self.polys:
+                mesh.poly([(x, y, z, x, z - y) for (x, y) in poly], 1.0, self.name + "~proj")
 
 
 def sailboat(art, boats=(0,), keel=0.0):
     """One sailboat, or several drawn one behind another (`boats`: how many
     rows lower each is drawn than the whole one's own art). `keel` moves
     the boat north: where a pier's edge hides its hull, the drawing ends
-    at that edge and the boat lies behind it."""
-    tex = Mound.with_ring(art, ())
-    vol = Volume()
-    for dv in boats:
-        sailboat_volume(vol, dz=dv + keel)
-    return [HeightSolid("boat", tex, art.size[1], vol, depth=(0.0, float(art.size[1])),
-                        step=1, mirror_z=BOAT_Z + boats[0])], tex
+    at that edge and the boat lies behind it. Each hull a smooth decked
+    ProjHull on a long, blunt-ended oval plan (BOAT_HULL: the drawing takes
+    its ends down to the water square), its deck 8 high rising 6 to the
+    ends; the sails and mast flat cards in its keel's plane (a height field
+    had stood the hull in steps, the sails in spikes)."""
+    zs = [BOAT_Z + dv + keel for dv in boats]
+    h = BOAT_HULL
+    # its foot a pixel under the water: on the console the vertices are
+    # rounded, and a hull ending on the drawing's last row lost it in places
+    return [ProjHull("boat", h["cx"], z, h["rx"], h["rz"], -2, 8, p=h["p"], sheer=h["sheer"],
+                     keel=h["keel"], seg=24) for z in zs] + [SailCards("sail", zs)]
 
 
 def rowboat(art):
     """The rowboat by the shipyard, up on stands: an open hull, its gunwale
     15 high (the rim's oval, v 0-19), its floor 8, a thwart across it at
-    u 36-40."""
-    tex = Mound.with_ring(art, ())
-    vol = Volume().slab(24, 22.5, 22.8, 8.5, 0, 15, p=2.3, sheer=2)
-    vol.hollow(vol.slab, 23.5, 22.5, 19.5, 6.5, 8, 40, p=2.3)
-    vol.box(36, 40, 0, 14, 15, 30)
-    return [HeightSolid("rowboat", tex, art.size[1], vol, depth=(0.0, 32.0), step=1,
-                        mirror_z=22.5)], tex
+    u 36-40. Smooth surfaces under its drawing (ProjHull)."""
+    return [ProjHull("rowboat", 24, 22.5, 22.8, 8.5, 0, 15, p=2.3, sheer=2,
+                     inner=(23.5, 22.5, 19.5, 6.5, 8),
+                     # the thwart; the stand under the stern, drawn past the
+                     # hull's curve down to row 30
+                     boxes=[(36, 40, 8, 14, 15, 30), (33, 45, 0, 4, 25, 31)])]
 
 
 # The stone lantern in Slateport's square (art 32x64, its foot at v 63): a
@@ -1489,37 +1623,98 @@ def sootopolis_flat_house(art):
                   2 * art.size[1])], Mound.with_ring(art, ())
 
 
-# Route 109's beach parasol (art 32x48): a round canopy, drawn as a disc
-# seen from above (v 0-30), on a pole (v 30-40) over its shadow on the sand
-# (v 27-47). The canopy stands 22 high over the shadow's middle (z 37):
-# a horizontal disc is drawn as itself at 45 degrees, so the drawing holds
-# together. Three solids, each off its own pixels: the canopy a shallow cone
-# lifted along the ray, the pole, the shadow a disc on the sand.
+# Route 109's beach parasol (art 32x48): a round canopy (v 3-31) on a pole
+# (v 32-39). The pole's foot is its last row: it stands at z 38.5. The
+# canopy's rim, drawn as a ring 32 wide round v 19, is 19.25 high over it,
+# its hub (v 13, where the panels meet) 6 higher. Its shadow drawn on the
+# sand (v 27-47, these colours) is the ground's (`ground_rgb`): the sand
+# lies plain under it and the console casts the canopy's own shadow.
 PARASOL_SHADOW = {(205, 156, 82), (213, 180, 106), (222, 205, 131)}
 
 
 def parasol(art):
+    """Two parts of smooth faces, each with the drawing projected from a
+    band of its own pixels (own_bands): the canopy a shallow cone, round
+    (ProjCanopy: its rim lifted 3.5 at the front, where the drawing ends
+    higher than a round rim would - exact at 45 degrees) and closed
+    underneath; the pole a thin turned post up into it. (Solids of height
+    fields had stood the canopy in fins and its drawn shadow in a mound.)"""
     tex = Mound.with_ring(art, ())
     px = art.load()
-    H = art.size[1]
+    W, H = art.size
 
     def own(u, v):
         if px[u, v][3] < 128:
             return None
-        if px[u, v][:3] in PARASOL_SHADOW:
-            return "shadow"
         return "canopy" if v <= 31 else "pole"
     tex, band = own_bands(tex, H, {n: (lambda n: lambda u, v: own(u, v) == n)(n)
-                                   for n in ("canopy", "pole", "shadow")})
-    parts = []
-    for name, vol, lift, st in (
-            ("canopy", Volume().lathe(16, 15, [(0, 15.5), (1.5, 15.5), (3, 9), (5, 2), (5.5, 0)]), 22, 2),
-            ("pole", Volume().box(13.5, 18.5, 0, 23, 36, 38), 0, 1),
-            ("shadow", Volume().slab(16, 37, 16.5, 11.5, 0, 0.3, p=2.8), 0, 4)):
-        parts.append(HeightSolid(name, tex, H, vol, depth=(0.0, float(H)), step=st, mirror_z=37 - lift,
-                                 mask=(lambda n: lambda u, v: own(u, v) not in (None, n))(name),
-                                 lift=lift, band=band[name]))
+                                   for n in ("canopy", "pole")})
+    # each band cut to the drawing where the part's edge is drawn: the
+    # canopy's to its own pixels (its polygon stands a pixel past the drawn
+    # stair here and there), the pole's round foot (its last row) to its own
+    tpx = tex.load()
+    for v in range(H):
+        for u in range(W):
+            o = own(u, v)
+            if o != "canopy":
+                tpx[u, v + band["canopy"] * H] = (0, 0, 0, 0)
+            if v == 39 and o != "pole":
+                tpx[u, v + band["pole"] * H] = (0, 0, 0, 0)
+    return [ProjCanopy("canopy", 16, 38.5, 16.2, 19.25, 25.25, front=3.5, y_under=20.5,
+                       offset=band["canopy"] * H, seg=24),
+            ProjLathe("pole", 16, 38.5, [(0, 2), (21, 2)], seg=8, offset=band["pole"] * H)], tex
+
+
+def sun_lounger(art):
+    """Route 109's sun lounger (art 16x48, drawn v 9-37, x 1-14): a frame
+    on four legs, open underneath. The seat (the footrest and the middle
+    cushion, v 20-33) flat 5 high, 2 thick, its front (v 34-35, the rail
+    between the legs) at z 39; the back (v 9-19) a cushion raised 40
+    degrees from the hinge (z 24.5), 7.5 long, 1.2 thick; the front legs
+    (v 35-37: x 1-5 and 10-14) stand at z 38, the back ones are struts
+    under the back, inside its drawn outline, in the frame's colour (the
+    drawing never shows them). Every face takes the drawing projected
+    (ProjSection): exact at 45 degrees, and from the side a lounger, not a
+    block (a height field had stood it on the sand whole)."""
+    H = art.size[1]
+    tex = Mound.with_ring(art, ())
+    a = math.radians(40)
+    t, L = 1.2, 7.5
+    hz, top = 24.5, 5.0
+    ez, ey = hz - L * math.cos(a), top + L * math.sin(a)
+    nz, ny = math.sin(a), math.cos(a)
+    seat = top - 2
+    # where the back's underside meets the seat's
+    k = (top - t * ny - seat) / math.sin(a)
+    frame = [(39, seat), (39, top), (hz, top), (ez, ey), (ez - t * nz, ey - t * ny),
+             (hz - t * nz + k * math.cos(a), seat)]
+
+    def under_back(z):
+        """The height of the back's underside over z."""
+        return top - t * ny + (hz - t * nz - z) * math.tan(a)
+    parts = [ProjSection("frame", frame, 1, 14, grown=2 * H)]
+    for (x0, x1) in ((1, 5), (10, 14)):
+        parts.append(ProjSection("leg", [(36.5, 0), (38, 0), (38, seat), (36.5, seat)], x0, x1,
+                                 grown=2 * H))
+    for (x0, x1) in ((2, 3.5), (11.5, 13)):
+        parts.append(ProjSection("strut", [(20.5, 0), (21.5, 0), (21.5, under_back(21.5)),
+                                           (20.5, under_back(20.5))], x0, x1, uv=(1.5, 20.5)))
     return parts, tex
+
+
+def beach_mat(art):
+    """Route 109's air mattress (art 16x48, drawn v 9-36, x 0-16), flat on
+    the sand: its tubes 2 thick (the front, v 35-36, at z 37), the pillow
+    across its head a tube 2.5 round on the same floor, 4.5 high (v 9-15).
+    Every face takes the drawing projected (ProjSection); the pillow's back,
+    which the view grazes, reads the grown band (`graze`): the drawing
+    rounds the pillow's top corners, and they were holes from the side."""
+    H = art.size[1]
+    r, y0 = 2.5, 2.0
+    zc = 9 + y0 + r * math.sqrt(2)      # the pillow's top at 45 degrees is row 9
+    arc = [(zc + r * math.cos(math.pi * k / 8), y0 + r * math.sin(math.pi * k / 8)) for k in range(9)]
+    sec = [(37, 0), (37, y0)] + arc + [(zc - r, 0)]
+    return [ProjSection("mat", sec, 0, 16, grown=2 * H, graze=0.6)], Mound.with_ring(art, ())
 
 
 def abandoned_ship(art):
@@ -1786,38 +1981,86 @@ def fallarbor_house_exact(width):
     return [(3, 39, width - 2, 62), (10, 13, width - 10, 39)]
 
 
+# the pitch of the shipyard's back half (shipyard): at 20 degrees, from the
+# game's camera at its default 40, the band of slats beyond the ridge stands
+# to the corrugated half as in the drawing (about 0.3); at 25 it read as a
+# thin line, the camera's view of the roof's back being lower than 40
+SHIPYARD_BACK_PITCH = 20.0
+
+
 def shipyard():
     """Stern's shipyard in Slateport (128 x 112, cells 24..31 x 32..38).
 
-        rows  1-15  the ridge: its white vent standing up, the hatches' tops
-        rows 16-63  the corrugated roof, period 4 across; two hatches by the
-                    ridge (x 16-31, 96-111, rows 8-31); gold verges x 0-4
+        rows  1-15  the roof's back half beyond the ridge, its white slats
+                    (low enough for the view to see it), the hatches' lids
+        row  16     the ridge: the short line dividing the two halves
+        rows 16-63  the front half, corrugated, period 4 across; two hatches
+                    across the ridge (x 16-31, 96-111, rows 8-31); gold verges
+                    x 0-4 down both: a gabled roof, not a hipped one
         rows 64-71  fascia: teeth, gold, purple
         rows 72-111 the facade: pink corner pilasters, boards, the door
 
-    Real depth: six collision rows, Z 16-112. The roof grows by its own
-    corrugations between the eave and the hatches, which stay by the ridge.
+    Real depth: six collision rows, Z 16-112. The front half at 20 degrees
+    spans its 48 drawn rows from the eave (Y 48) to the ridge. The back half
+    falls at SHIPYARD_BACK_PITCH over the rest of the depth: drawn in its 15
+    rows, it would fall at 37, and the game's camera (34-46 degrees) would
+    hardly see it; so its slats run on back (more of the same rows), its
+    outline and trim at its real eave. The gable ends and the back wall take the
+    facade's boards. (It was a hipped roof with the slats as a tall ridge
+    standing up like a sheet.)
     """
-    front, back = 112, 16
-    wall = 40
-    columns = (8, 120)
-    roof = HipRoof(
-        "roof", 0, 128, zf=front, zb=back, y0=wall,
-        fascia=Strip((64, 72), wrap=columns),
-        slope=Strip((32, 64), repeat=(40, 48), tail=(16, 32), wrap=columns),
-        teeth=(2, 16), cap=(1, 2), pitch=20.0, run=12,
-        ridge_u=(0, 128), end_tile=Tile(40, 2, 41, 16))
+    front, back, wall = 112, 16, 40
+    ye = 48                                     # the fascia's top at the eave
+    run = 48 / (1 + math.tan(math.radians(20.0)))
+    zr, yr = front - run, ye + run * math.tan(math.radians(20.0))
+    yb = yr - (zr - back) * math.tan(math.radians(SHIPYARD_BACK_PITCH))
     post = Tile(0, 72, 5, 112, top=wall)
     boards = Tile(8, 72, 30, 112, top=wall)
+    gable = Tile(8, 72, 30, 112)
     body = Prism(
         "ground_floor", 0, 128,
-        [(front, 0), (front, wall), (back, wall), (back, 0)],
-        edges={0: Proj(72, 112), 2: boards}, skip=(1, 3),
-        caps=[Band(0, wall, boards, front, front=post, back=post, z1=back)])
-    return [body, roof]
+        [(back, 0), (front, 0), (front, ye), (zr, yr), (back, yb)],
+        edges={1: Proj(), 4: boards}, skip=(0, 2, 3),
+        caps=[Band(0, wall, boards, front, front=post, back=post, z1=back),
+              Band(wall, yr + 1, gable, front, z1=back)])
+    return [body, ShipyardRoof(0, 128, front, back, ye, zr, yr, yb)]
 
 
-SHIPYARD_EXACT = [(0, 72, 128, 112), (8, 32, 120, 72)]
+class ShipyardRoof:
+    """The shipyard's two roof halves, the drawing projected on both. The
+    back half is seen foreshortened, less than one texel per pixel down its
+    fall line: so is it drawn ("~proj")."""
+
+    def __init__(self, x0, x1, zf, zb, ye, zr, yr, yb):
+        self.x0, self.x1, self.zf, self.zb = x0, x1, zf, zb
+        self.ye, self.zr, self.yr, self.yb = ye, zr, yr, yb
+
+    def emit(self, mesh):
+        x0, x1 = self.x0, self.x1
+
+        def proj(pts):
+            return [(x, y, z, x, z - y) for (x, y, z) in pts]
+        mesh.poly(proj([(x0, self.ye, self.zf), (x1, self.ye, self.zf), (x1, self.yr, self.zr),
+                        (x0, self.yr, self.zr)]), SHADE_ART, "roof.slope_s")
+        back = proj([(x0, self.yr, self.zr), (x1, self.yr, self.zr), (x1, self.yb, self.zb),
+                     (x0, self.yb, self.zb)])
+        # as drawn from the ridge to the slats' first row; then that row
+        # held back to the last three rows, which are its trim and outline
+        slats, end = 4.0, self.zb - self.yb
+        near = clip(back, 4, slats, True)
+        rest = clip(back, 4, slats, False)
+        mid = clip(rest, 4, end + 3, True) if len(rest) >= 3 else []
+        edge = clip(rest, 4, end + 3, False) if len(rest) >= 3 else []
+        if len(near) >= 3:
+            mesh.poly(near, SHADE_ART, "roof.slope_n~proj")
+        if len(mid) >= 3:
+            mesh.poly([q[:4] + (slats + 1.5,) for q in mid], SHADE_ART, "roof.slope_n~clamp")
+        if len(edge) >= 3:
+            mesh.poly([q[:4] + (q[4] - end + 1,) for q in edge], SHADE_ART, "roof.slope_n~proj")
+
+
+# its back half's top rows lie further back than drawn (ShipyardRoof)
+SHIPYARD_EXACT = [(0, 4, 128, 112)]
 
 
 def stall(x1, ridge_e, fills):
@@ -2727,6 +2970,8 @@ SPECS = [
         "layout": "LAYOUT_SLATEPORT_CITY",
         "rect": (4, 16, 4, 4),
         "ground": [GRASS],
+        "keep": kit_house_keep(64),
+        "patch_own": True,
         "parts": lambda: kit_house(64),
         "exact": kit_house_exact(64),
     },
@@ -2744,6 +2989,8 @@ SPECS = [
         "layout": "LAYOUT_SLATEPORT_CITY",
         "rect": (24, 41, 6, 4),
         "ground": [0x202],
+        "keep": kit_house_keep(96),
+        "patch_own": True,
         "parts": lambda: kit_house(96),
         "exact": kit_house_exact(96),
     },
@@ -2757,6 +3004,14 @@ SPECS = [
         "match_rows": (0, 2),
         "ground": [GRASS],
         "ground_px": True,
+        # the market's gate stands over the market's path, not on the grass
+        # round it: the path runs on under the roof, in its shade as the row
+        # of the posts draws it (the roof's back rows show the path still in
+        # the sun above it)
+        "cell_ground_at": {("LAYOUT_SLATEPORT_CITY", 8, 30): {
+            (1, 0): 0x210, (2, 0): 0x211, (3, 0): 0x212,
+            (1, 1): 0x286, (2, 1): 0x285, (3, 1): 0x287,
+            (1, 2): 0x286, (2, 2): 0x285, (3, 2): 0x287}},
         "parts": lambda: [Awning("awning", 8, 72, top_v=1, valance_v=24, post_v=32,
                                  foot_v=47, back=0, lift=12, repeat=(3, 11),
                                  posts=[(8, 14), (66, 72)], shaft=(34, 43), foot=(43, 47))],
@@ -2764,9 +3019,17 @@ SPECS = [
     },
     {
         "name": "fan_club",
+        # its projected shapes stand past its drawing: cut to it
+        "clip_art": True,
         "layout": "LAYOUT_SLATEPORT_CITY",
-        "rect": (2, 22, 5, 5),
-        "ground": [GRASS],
+        # with the row of cells under it, where the door posts' feet are
+        # drawn: as the ground's they lay flat on the paving beside the posts
+        "rect": (2, 22, 5, 6),
+        "ground": [GRASS, 0x209, 0x218, 0x219],
+        "patch_cells": [(i, 5) for i in range(5)],
+        # of that row only the posts' feet are its own: the path's edge
+        # drawn there is the map's (as the model's, nothing drew it)
+        "keep": [(0, 0, 80, 80), (29, 80, 33, 96), (47, 80, 51, 96)],
         "parts": fan_club,
         "exact": FAN_CLUB_EXACT,
     },
@@ -2807,6 +3070,10 @@ SPECS = [
         "layout": "LAYOUT_SLATEPORT_CITY",
         "rect": (8, 8, 5, 5),
         "ground": [GRASS],
+        # on its lawn: the paving in front of it is commoner round it; and
+        # every cell as the map paints it round the tent (its grass's dots)
+        "ground_fixed": {"LAYOUT_SLATEPORT_CITY": GRASS},
+        "patch_own": True,
         "ground_px": True,
         "parts_art": battle_tent,
         "exact": [(0, 0, 80, 80)],
@@ -2815,14 +3082,13 @@ SPECS = [
         # Slateport's sailboat; the copies the pier hides the hull of are
         # found from its top rows (the drawing cuts the hull there)
         "name": "sailboat",
-        # a coarser grid for its round parts (2026-10-10: the console's
-        # budgets), the drawing still projected wherever the view sees it
-        "lod": (6, 6, 3),
-        # the coarse grid misses 10 pixels of its outline at 45 degrees
-        "tolerance": 10,
+        # its projected shapes stand past its drawing: cut to it
+        "clip_art": True,
         "layout": "LAYOUT_SLATEPORT_CITY",
         "rect": (34, 44, 3, 3),
         "ground": [0x170],
+        # on the sea, not on the pier round it
+        "ground_fixed": True,
         "ground_px": True,
         "parts_art": sailboat,
         "exact": [(0, 0, 48, 48)],
@@ -2830,12 +3096,13 @@ SPECS = [
     {
         # the same boat with its hull behind the pier's edge
         "name": "sailboat_cut",
-        # a coarser grid for its round parts (2026-10-10: the console's
-        # budgets), the drawing still projected wherever the view sees it
-        "lod": (6, 6, 3),
+        # its projected shapes stand past its drawing: cut to it
+        "clip_art": True,
         "layout": "LAYOUT_SLATEPORT_CITY",
         "rect": (36, 37, 3, 2),
         "ground": [0x170],
+        # on the sea, not on the pier round it
+        "ground_fixed": True,
         "ground_px": True,
         "parts_art": lambda art: sailboat(art, keel=-6),
         "exact": [(0, 0, 48, 32)],
@@ -2844,19 +3111,24 @@ SPECS = [
         # two of them moored one behind the other, drawn 8 and 24 rows lower
         # than the whole one; the seawall's shadow across the top is not theirs
         "name": "sailboat_pair",
-        # a coarser grid for its round parts (2026-10-10: the console's
-        # budgets), the drawing still projected wherever the view sees it
-        "lod": (6, 6, 3),
+        # its projected shapes stand past its drawing: cut to it
+        "clip_art": True,
         "layout": "LAYOUT_SLATEPORT_CITY",
         "rect": (33, 35, 3, 4),
         "ground": [0x170],
+        # on the sea, not on the pier round it
+        "ground_fixed": True,
         "ground_px": True,
         "keep": [(0, 8, 48, 64)],
+        # the seawall's shadow on its top row stays as the map paints it
+        "patch_cells": [(0, 0), (1, 0), (2, 0)],
         "parts_art": lambda art: sailboat(art, (8, 24)),
         "exact": [(0, 8, 48, 64)],
     },
     {
         "name": "rowboat",
+        # its projected shapes stand past its drawing: cut to it
+        "clip_art": True,
         "layout": "LAYOUT_SLATEPORT_CITY",
         "rect": (21, 35, 3, 2),
         "ground": [GRASS],
@@ -2891,95 +3163,99 @@ SPECS = [
     {
         # Slateport's round bush: a low dome of leaves
         "name": "slateport_bush",
-        # a coarser grid for its round parts (2026-10-10: the console's
-        # budgets), the drawing still projected wherever the view sees it
-        "lod": (6, 6, 3),
+        # its projected shapes stand past its drawing: cut to it
+        "clip_art": True,
         "layout": "LAYOUT_SLATEPORT_CITY",
         "rect": (7, 10, 1, 1),
         "ground": [GRASS],
+        # on its lawn, whatever paving is round it
+        "ground_fixed": True,
+        # and its cell as the map paints it round the bush (the grass
+        # dots its outline leaves out)
+        "patch_own": True,
         "ground_px": True,
         # the bush's own outline: the grass dots drawn round it (its top
         # row, beside its crown and foot) would stand up as part of it
         "keep": [(6, 1, 10, 2), (4, 2, 12, 3), (3, 3, 13, 4), (2, 4, 14, 6), (1, 6, 14, 10),
                  (2, 10, 14, 12), (3, 12, 13, 14), (5, 14, 11, 15)],
-        "parts_art": small_round("bush", Volume().dome(7, 8.5, 7.5, 6, 8)),
+        # a smooth dome under its drawing: the height field cut column by
+        # column left fins on its flanks and stood in steps
+        "parts": lambda: [ProjDome("bush", 7.5, 8.6, 7.6, 7.0, 8.0)],
         "exact": [(0, 0, 16, 16)],
     },
     {
         # the harbour's bollard: a white cap on a short post, its shadow a
         # disc on the paving
         "name": "slateport_bollard",
+        # its projected shapes stand past its drawing: cut to it
+        "clip_art": True,
         "layout": "LAYOUT_SLATEPORT_CITY",
         "rect": (33, 34, 1, 1),
         "ground": [0x202],
+        # on the pier, not on the sea beside it
+        "ground_fixed": True,
         "ground_px": True,
         # its plan half as deep as wide, as the drawing's rings are (round,
         # it stood past the drawing's top and was cut flat behind)
-        "parts_art": small_round("bollard", Volume().lathe(
-            8, 11.5, [(0, 6.5), (1, 5.5), (2, 6), (5, 6), (6, 5.5), (7, 7), (8.5, 7), (9, 4),
-                      (10.5, 3.5), (11, 0)], squash=0.5)),
+        # turned smooth (ProjLathe): a height field cut column by column had
+        # left a fin on its flank
+        "parts": lambda: [ProjLathe("bollard", 8, 11.5, BOLLARD, squash=0.5, seg=10)],
         "exact": [(0, 0, 16, 16)],
     },
     {
         # Route 109's beach parasols (red, blue and green: found by their own
         # pixels from this one when the drawing matches)
         "name": "parasol",
-        # a coarser grid for its round parts (2026-10-10: the console's
-        # budgets), the drawing still projected wherever the view sees it
-        "lod": (6, 6, 3),
         "layout": "LAYOUT_ROUTE109",
         "rect": (9, 6, 2, 3),
         "ground": [0x124],
         "ground_px": True,
+        "ground_rgb": PARASOL_SHADOW,
         "parts_art": parasol,
         "exact": [(0, 0, 32, 48)],
     },
     {
         "name": "parasol_blue",
-        # a coarser grid for its round parts (2026-10-10: the console's
-        # budgets), the drawing still projected wherever the view sees it
-        "lod": (6, 6, 3),
         "layout": "LAYOUT_ROUTE109",
         "rect": (18, 4, 2, 3),
         "ground": [0x124],
         "ground_px": True,
+        "ground_rgb": PARASOL_SHADOW,
         "parts_art": parasol,
         "exact": [(0, 0, 32, 48)],
     },
     {
         "name": "parasol_green",
-        # a coarser grid for its round parts (2026-10-10: the console's
-        # budgets), the drawing still projected wherever the view sees it
-        "lod": (6, 6, 3),
         "layout": "LAYOUT_ROUTE109",
         "rect": (13, 14, 2, 3),
         "ground": [0x124],
         "ground_px": True,
+        "ground_rgb": PARASOL_SHADOW,
         "parts_art": parasol,
         "exact": [(0, 0, 32, 48)],
     },
     {
-        # a sun lounger (art 16x48, v 8-37): its back raised to the north
-        # (v 8-18), the seat and footrest 4 high, the feet below
+        # a sun lounger (art 16x48, v 9-37): a frame on legs, its back
+        # raised to the north
         "name": "sun_lounger",
         "layout": "LAYOUT_ROUTE109",
         "rect": (17, 8, 1, 3),
         "ground": [0x124],
         "ground_px": True,
-        "parts_art": small_round("lounger", Volume().profile(
-            [(17, 0), (17, 9), (21, 13), (25, 5), (37, 5), (37, 0)], 1, 15), depth=48.0),
+        "parts_art": sun_lounger,
         "exact": [(0, 0, 16, 48)],
     },
     {
-        # a round bin (art 16x48, v 9-36): a drum with its lid
-        "name": "beach_bin",
+        # an air mattress (art 16x48, v 9-36), flat on the sand
+        "name": "beach_mat",
         "layout": "LAYOUT_ROUTE109",
         "rect": (9, 9, 1, 3),
         "ground": [0x124],
         "ground_px": True,
-        "parts_art": small_round("bin", Volume().lathe(8, 31, [(0, 7), (20, 7), (21, 6), (21.5, 0)]),
-                                 depth=48.0),
+        "parts_art": beach_mat,
         "exact": [(0, 0, 16, 48)],
+        # the pillow's square top corners (row 9), which the drawing rounds
+        "tolerance": 5,
     },
     {
         # the Abandoned Ship; the rock beside its bow is the sea's (a prop)
@@ -2988,6 +3264,9 @@ SPECS = [
         "rect": (27, 3, 6, 4),
         "ground": [0x19E, 0x194, 0x1BE, 0x1BD, 0x1A3, 0x1A4, 0x170],
         "ground_px": True,
+        # the shallows (0x19E) under it, and its bottom row as the map paints
+        # it: the shallows' edge on the deep sea
+        "patch_cells": [(i, 3) for i in range(6)],
         "keep": [(0, 0, 80, 64), (80, 19, 96, 64)],
         "parts_art": abandoned_ship,
         "exact": [(0, 0, 96, 64)],
@@ -3008,6 +3287,9 @@ SPECS = [
         "layout": "LAYOUT_ROUTE110",
         "rect": (14, 12, 6, 5),
         "ground": [GRASS, 0x149],
+        # the southern gate's east column, one pixel of the sea beside it
+        # (the ground under it is the lawn round it)
+        "cell_ground_at": {("LAYOUT_ROUTE110", 15, 84): {(5, 1): 0x170}},
         "parts": lambda: flat_block(96, 80, ((10, 32), (10, 18), (0, 10)), (32, 40), 40),
         "exact": [(1, 10, 95, 80)],
     },
@@ -3433,6 +3715,9 @@ SPECS = [
         "rect": (4, 30, 15, 9),
         "ground": [0x189, 0x170, 0x172, 0x19A, 0x198, 0x180, 0x181, 0x05E],
         "ground_px": True,
+        # its platform, which its front row shows, not the sea of its back
+        # corners (more of its cells, but behind it)
+        "ground_fixed": {"LAYOUT_BATTLE_FRONTIER_OUTSIDE_WEST": 0x05E},
         "keep": [(0, 4, 232, 144), (88, 0, 152, 4), (232, 44, 240, 144)],
         "parts_art": flat(battle_factory),
         "exact": [(0, 0, 240, 144)],
@@ -3637,6 +3922,8 @@ SPECS = [
         "layout": "LAYOUT_SLATEPORT_CITY",
         "rect": (24, 32, 8, 7),
         "ground": [0x202, GRASS],
+        # its top row is the sea behind it, not its roof's
+        "keep": [(0, 1, 128, 112)],
         "parts": shipyard,
         "exact": SHIPYARD_EXACT,
     },
@@ -3653,6 +3940,9 @@ SPECS = [
         "ground": [0x211, 0x285],
         "ground_px": True,
         "keep": stall_keep(72),
+        # its outer column as the map paints it (the paving's edge): under
+        # the roof the goods stand on their own, not laid flat again
+        "patch_cells": [(0, 0), (0, 1), (0, 2)],
         "parts": lambda: [stall(72, 57.5, ((24, 3, 55, 8), (9, 12, 12, 20), (60, 12, 69, 20)))],
         "exact": [(8, 11, 72, 29)],
     },
@@ -3664,6 +3954,7 @@ SPECS = [
         "ground": [0x211, 0x285],
         "ground_px": True,
         "keep": stall_keep(56),
+        "patch_cells": [(3, 0), (3, 1), (3, 2)],
         "parts": lambda: [stall(56, 41.5, ((24, 3, 39, 8), (9, 12, 12, 20), (44, 12, 53, 20)))],
         "exact": [(8, 11, 56, 29)],
     },
@@ -3770,7 +4061,13 @@ SPECS = [
             "upper": True,
             "flank": 0x149,
         },
+        # under the fence its own bottom layer, the same in every one of its
+        # metatiles and drawn whole by the grass: the patches lay that layer
+        # a hair over the ground, and the commonest cell round a run (a path
+        # beside it, the sea's edge along Slateport's market, the grass with
+        # flowers) showed in a line at their edges in the game's view
         "ground": [GRASS],
+        "ground_fixed": True,
     },
     {
         # the same grey fence in the Lavaridge tileset's own metatiles (Route
@@ -3811,6 +4108,10 @@ SPECS = [
             # floor to walk on, not a curb
             "skip": ("LAYOUT_BATTLE_FRONTIER_OUTSIDE_WEST", "LAYOUT_BATTLE_FRONTIER_OUTSIDE_EAST"),
         },
+        # every cell as the map paints it under the slabs: one ground for a
+        # whole run laid paving over the lawn drawn beside it (Slateport's
+        # beach steps)
+        "patch_own": True,
         "ground": [GRASS, 0x001],
     },
     {
@@ -3861,6 +4162,16 @@ SPECS = [
         # was the sea under a pier's edge
         "patch_own": True,
         "ground": [0x202],
+        # and the pier's bricks under the slabs themselves: the commonest
+        # ground round a run along the edge is the sea or the pier's rocky
+        # side, and a patch, lying a hair above the ground, shows a line of
+        # whatever is under it along its edges in the game's view
+        "ground_fixed": True,
+        # the paving and the lawn beside a run (the Contest Hall's east
+        # edge), drawn in the run's own cells, rose with it as a ragged
+        # lump: the slabs are white, grey and their outline, never these
+        "ground_rgb": {(65, 180, 131), (115, 197, 164), (164, 213, 197), (205, 205, 222),
+                       (230, 230, 238)},
     },
     {
         # The grey rock in the sea, found by its four tiles wherever they are
@@ -3910,17 +4221,24 @@ SPECS = [
 ] + [
     # Slateport market's goods: round things, each a dome off its own
     # drawing like the rocks, on the paving's own cells
-    {"name": "urn", "props": "urn", "ground": [0x211], "rise": 1.0, "step": 2},
+    # a pot, turned smooth (ProjLathe): its foot, its belly, a neck under the
+    # lip round its dark mouth. As a Mound it was a lump in steps.
+    # Static: one mesh drawn at each of its places, not copied into the
+    # market's chunk at every one (it was, as a Mound, for its triangles).
+    {"name": "urn", "props": "urn", "clip_art": True, "ground": [0x211], "shape": "lathe", "static": True,
+     "lathe": {"cx": 8, "cz": 13, "squash": 0.7,
+               "profile": [(0, 6), (3.5, 8.5), (7, 7.5), (9, 5.1), (10, 5.5)]}},
 ] + [
     # the baskets: an oval drawn round, its rim and goods on top, 5 rows of
-    # wicker in front
-    {"name": name, "props": name, "ground": [0x211], "shape": "cylinder",
-     "cylinder": {"cx": 8, "cz": 10.5, "rx": 8, "rz": 5, "h": 5, "side": (3, 11, 13, 15)},
-     "exact": [(3, 3, 13, 13)]}
+    # wicker in front. A smooth drum under its drawing (ProjLathe), cut to
+    # it: exact to its outline (a 24-sided cylinder missed it by a pixel)
+    {"name": name, "props": name, "ground": [0x211], "shape": "lathe", "clip_art": True,
+     "lathe": {"cx": 8, "cz": 11, "squash": 0.7, "seg": 16, "profile": [(0, 8.5), (5, 8.5)]}}
     for name in ("basket_green", "basket_orange", "basket_red")
 ] + [
-    # a pile of fruit: a dome a little taller than deep
-    {"name": "fruit", "props": "fruit", "ground": [0x211], "rise": 1.2, "step": 2},
+    # a pile of fruit: a smooth dome under its drawing (ProjDome)
+    {"name": "fruit", "props": "fruit", "clip_art": True, "ground": [0x211], "shape": "dome", "static": True,
+     "dome": {"cx": 8.5, "cz": 9, "rx": 8.5, "rz": 7.5, "h": 7}},
     {
         # flowers in a low box: the box's front 3 rows, the flowers on its top
         "name": "flower_crate",

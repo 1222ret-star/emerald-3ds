@@ -3450,7 +3450,9 @@ static void VisitView(float playerX, float playerZ, unsigned *missing, bool atla
         return;
     {
         VoxelAtlasSlot *atlas = FindAtlas(current);
-        int oy0 = py0 - sBeltOriginY, oy1 = py1 - 1 - sBeltOriginY;
+        /* A belt laid as drawn stands its squares' blocks rows south of them
+         * (VoxelMesh_EmitBorder): the squares that far north reach the ring. */
+        int oy0 = py0 - (int)VoxelRelief_Belt(current) - sBeltOriginY, oy1 = py1 - 1 - sBeltOriginY;
         int ox0 = px0 - sBeltOriginX, ox1 = px1 - 1 - sBeltOriginX;
         int cy0 = (int)floorf(oy0 / (float)VOXEL_CHUNK), cy1 = (int)floorf(oy1 / (float)VOXEL_CHUNK);
         int cx0 = (int)floorf(ox0 / (float)VOXEL_CHUNK), cx1 = (int)floorf(ox1 / (float)VOXEL_CHUNK);

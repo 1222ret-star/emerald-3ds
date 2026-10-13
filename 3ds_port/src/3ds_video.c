@@ -302,6 +302,8 @@ static float sShiftZoom = 1.0f;
 #define CTR_VIEW_Y sViewY
 /* Requested by the game bridge, and what the current frame is composed as. */
 static bool sStageRequested, sStage;
+/* A stage whose every layer fades into the margins (CtrVideo_SetStageFaded). */
+static bool sStageFadedRequested, sStageFaded;
 static bool sCentred;
 static unsigned sCentredRequested, sCentredScreen;
 static bool sBattleRequested, sBattle;
@@ -438,9 +440,23 @@ void CtrVideo_MarkMachineOam(unsigned first, unsigned end)
 /* OAM entries of the fog's sprites (CtrVideo_MarkFogOam). */
 static uint32_t sFogOam[4];
 
+/* Weather carried over the whole view (CtrVideo_MarkWeatherOam). */
+static uint32_t sLatticeOam[4], sParticleOam[4];
+
 void CtrVideo_ClearFogOam(void)
 {
     memset(sFogOam, 0, sizeof(sFogOam));
+    memset(sLatticeOam, 0, sizeof(sLatticeOam));
+    memset(sParticleOam, 0, sizeof(sParticleOam));
+}
+
+void CtrVideo_MarkWeatherOam(unsigned first, unsigned end, bool lattice)
+{
+    uint32_t *marks = lattice ? sLatticeOam : sParticleOam;
+
+    if (end > 128) end = 128;
+    for (unsigned i = first; i < end; ++i)
+        marks[i >> 5] |= 1u << (i & 31);
 }
 
 void CtrVideo_MarkFogOam(unsigned first, unsigned end)
@@ -2034,11 +2050,18 @@ static void DrawStageBg(unsigned bg)
     bool wraps = sScrolls[bg];
 
     PictureRows(bg, &top, &bottom);
+    /*
+     * The cable car's ride: its trees, ground and pylons scroll, and wrapped
+     * across the margins they showed the parts of their maps the GBA never
+     * does (pieces of ground not laid yet, trees above the sky). Like the
+     * intro, every layer is the picture with its edges faded into black.
+     */
+    if (sStageFaded) wraps = false;
     if (!wraps)
     {
         MeasureStill(bg);
         /* A still panorama wraps too when the scene around it scrolls. */
-        if (sPanorama[bg])
+        if (sPanorama[bg] && !sStageFaded)
             for (unsigned other = 0; other < 4; ++other)
                 if (other != bg && sScrolls[other] && (Reg(0) & (0x100u << other))) wraps = true;
     }
@@ -4435,12 +4458,63 @@ static bool DrawLeavesMargins(unsigned bg)
  * 8-pixel band along each edge repeated outwards, the corners stretched from
  * the corner block - and faded to black.
  */
+/*
+ * A faded stage's margins (the cable car): the picture mirrored about its
+ * edges and faded into black, as the intro's carried edges are. Carried, the
+ * edge columns of its dirt, trees and pylons smeared into streaks; mirrored,
+ * the margins hold the scene's own texture. Drawn in strips so the fade stays
+ * a gradient: a mirrored cut is drawn flipped, which flips its tint too, and
+ * across a strip that thin the difference does not show. Above the picture
+ * only a still layer (the sky) is mirrored: the scrolling ones hold nothing
+ * there, and a pylon's head would hang upside down.
+ */
+static bool MarginBlack(int x, int y)
+{
+    return sUnderlaid && EdgeFade(x, y, 0, 160) >= 1.0f;
+}
+
+static void DrawFadedStageTex(unsigned bg)
+{
+    DrawLayerRect(bg, 0, 240, 0, 160, 0, 0, 1, 1, false, 0, 160);
+    for (int x = 0; x > VIEW_LEFT && !MarginBlack(x, 80); x -= 8)
+        DrawLayerRect(bg, x - 8, x, 0, 160, (float)(8 - x), 0, -1, 1, true, 0, 160);
+    for (int x = 240; x < VIEW_RIGHT && !MarginBlack(x, 80); x += 8)
+        DrawLayerRect(bg, x, x + 8, 0, 160, (float)(480 - x), 0, -1, 1, true, 0, 160);
+    for (int y = 160; y < VIEW_BOTTOM && !MarginBlack(120, y); y += 4)
+    {
+        float sy = (float)(320 - y);
+
+        DrawLayerRect(bg, 0, 240, y, y + 4, 0, sy, 1, -1, true, 0, 160);
+        for (int x = 0; x > VIEW_LEFT && !MarginBlack(x, y); x -= 16)
+            DrawLayerRect(bg, x - 16, x, y, y + 4, (float)(16 - x), sy, -1, -1, true, 0, 160);
+        for (int x = 240; x < VIEW_RIGHT && !MarginBlack(x, y); x += 16)
+            DrawLayerRect(bg, x, x + 16, y, y + 4, (float)(480 - x), sy, -1, -1, true, 0, 160);
+    }
+    if (sScrolls[bg]) return;
+    for (int y = 0; y > VIEW_TOP && !MarginBlack(120, y); y -= 4)
+    {
+        float sy = (float)(4 - y);
+
+        DrawLayerRect(bg, 0, 240, y - 4, y, 0, sy, 1, -1, true, 0, 160);
+        for (int x = 0; x > VIEW_LEFT && !MarginBlack(x, y); x -= 16)
+            DrawLayerRect(bg, x - 16, x, y - 4, y, (float)(16 - x), sy, -1, -1, true, 0, 160);
+        for (int x = 240; x < VIEW_RIGHT && !MarginBlack(x, y); x += 16)
+            DrawLayerRect(bg, x, x + 16, y - 4, y, (float)(480 - x), sy, -1, -1, true, 0, 160);
+    }
+}
+
 static bool DrawStageBgTex(unsigned bg)
 {
     int top, bottom;
     bool wraps;
 
     if (!sStage || !LayerDrawable(bg)) return false;
+    if (sStageFaded)
+    {
+        ViewBase();
+        DrawFadedStageTex(bg);
+        return true;
+    }
     PictureRows(bg, &top, &bottom);
     wraps = sScrolls[bg];
     if (!wraps)
@@ -4495,8 +4569,9 @@ static bool DrawStageBgTex(unsigned bg)
 static bool DrawLineBg(unsigned bg)
 {
     unsigned baseX = Reg(0x10 + bg * 4) & 511, baseY = Reg(0x12 + bg * 4) & 511;
-    /* A still stage fades its margins (DrawEdgeRegion); so do these layers. */
-    bool fade = sStage && !sScrolls[bg];
+    /* A still stage fades its margins (DrawEdgeRegion); so do these layers,
+     * and every layer of a faded one (the cable car). */
+    bool fade = sStage && (!sScrolls[bg] || sStageFaded);
     int top = 0, bottom = 160;
     int clipX0 = sClipX0, clipX1 = sClipX1, clipY0 = sClipY0, clipY1 = sClipY1;
     /* The battle terrain repeats its top tile row above the picture, as
@@ -4701,8 +4776,10 @@ static void PlaceScreenObject(int i, unsigned boxW, unsigned boxH, bool voxel, i
 #endif
         if (!voxel)
         {
+            /* The 2D field shows the picture 8 lines above the stage's
+             * centre: the player's tile, GBA (112, 72), is at (192, 104). */
             *x += CTR_STAGE_X;
-            *y += CTR_STAGE_Y - 16;
+            *y += CTR_STAGE_Y - 8;
         }
         return;
     }
@@ -4818,6 +4895,85 @@ static bool SpriteBatchRoom(unsigned tiles)
     return true;
 }
 
+/*
+ * One sprite, already placed: its tiles batched when they can be, drawn one by
+ * one otherwise (an affine sprite, a fractional position, a full batch).
+ */
+static void DrawObjectAt(int x, int y, unsigned attr1, unsigned attr2, unsigned width, unsigned height,
+                         unsigned boxW, unsigned boxH, bool affine, bool color256, bool effects, unsigned mode)
+{
+    if (x >= sClipX1 || x + (int)boxW <= sClipX0
+     || y >= sClipY1 || y + (int)boxH <= sClipY0) return;
+    ++sStats.sprites;
+    {
+        /* A new blend state ends the batch: Blend changes the GPU state. */
+        static unsigned batchKey = ~0u;
+        unsigned key = (effects ? 1u : 0u) | (mode == 1 ? 2u : 0u);
+        float shiftX = x + CTR_VIEW_X + sLayerShift;
+        int whole = (int)shiftX;
+
+        if (sSpritePending && key != batchKey) SpriteBatchFlush();
+        /* At any zoom: the view is the GPU's, for these quads as for
+         * Citro2D's; the battle scene composes its sprites at 2x. */
+        if (!affine && (float)whole == shiftX
+            && SpriteBatchRoom((width / 8) * (height / 8)))
+        {
+            bool flipX = (attr1 & 0x1000) != 0, flipY = (attr1 & 0x2000) != 0;
+
+            /* A batch just opened: its blend state and tint. */
+            if (sSpriteCount == 0) Blend(4, effects, mode == 1);
+            batchKey = key;
+            sSpritePending = true;
+            for (unsigned ty = 0; ty < height / 8; ++ty)
+                for (unsigned tx = 0; tx < width / 8; ++tx)
+                {
+                    unsigned sx = flipX ? width / 8 - 1 - tx : tx;
+                    unsigned sy = flipY ? height / 8 - 1 - ty : ty;
+                    unsigned tile = CtrVideo_ObjTile(attr2 & 1023, sx, sy, width, color256, Reg(0) & 0x40);
+                    int slot = GetTileSlot(0x10000 + tile * 32, 16 + (attr2 >> 12), color256);
+
+                    if (slot < 0) continue;
+                    ++sStats.tiles;
+                    FastQuad(sFastVertices + sFastUsed * 4, whole + (int)tx * 8, y + CTR_VIEW_Y + (int)ty * 8,
+                             slot, flipX, flipY);
+                    ++sFastUsed;
+                    ++sSpriteCount;
+                }
+            return;
+        }
+        SpriteBatchFlush();
+        batchKey = ~0u;
+    }
+    Blend(4, effects, mode == 1);
+    ViewBase();
+    if (affine)
+    {
+        unsigned index = ((attr1 >> 9) & 31) * 16;
+        float a = (int16_t)sMemory.oam[index + 3] / 256.0f;
+        float b = (int16_t)sMemory.oam[index + 7] / 256.0f;
+        float c = (int16_t)sMemory.oam[index + 11] / 256.0f;
+        float d = (int16_t)sMemory.oam[index + 15] / 256.0f;
+        float det = a * d - b * c;
+        if (fabsf(det) < 0.00001f) { Error(9, "singular OBJ affine matrix"); return; }
+        C3D_Mtx matrix;
+        Mtx_Identity(&matrix);
+        matrix.r[0] = FVec4_New(d / det, -b / det, 0, x + CTR_VIEW_X + sLayerShift + boxW / 2.0f - (d * width - b * height) / (2 * det));
+        matrix.r[1] = FVec4_New(-c / det, a / det, 0, y + CTR_VIEW_Y + boxH / 2.0f - (a * height - c * width) / (2 * det));
+        ViewAffine(&matrix);
+    }
+    bool flipX = !affine && (attr1 & 0x1000), flipY = !affine && (attr1 & 0x2000);
+    for (unsigned ty = 0; ty < height / 8; ++ty)
+        for (unsigned tx = 0; tx < width / 8; ++tx)
+        {
+            unsigned sx = flipX ? width / 8 - 1 - tx : tx;
+            unsigned sy = flipY ? height / 8 - 1 - ty : ty;
+            unsigned tile = CtrVideo_ObjTile(attr2 & 1023, sx, sy, width, color256, Reg(0) & 0x40);
+            DrawTile(0x10000 + tile * 32, 16 + (attr2 >> 12), color256,
+                     (affine ? 0 : x + CTR_VIEW_X + sLayerShift) + (int)tx * 8,
+                     (affine ? 0 : y + CTR_VIEW_Y) + (int)ty * 8, flipX, flipY);
+        }
+}
+
 static void DrawObjects(unsigned priority, bool effects)
 {
     static const uint8_t dimensions[3][4][2] = {
@@ -4825,15 +4981,18 @@ static void DrawObjects(unsigned priority, bool effects)
         {{16,8},{32,8},{32,16},{64,32}},
         {{8,16},{8,32},{16,32},{32,64}}
     };
-    bool fogDrawn = false;
+    bool fogDrawn = false, latticeDrawn = false;
     float layerShift = sLayerShift;
 
     for (int i = 127; i >= 0; --i)
     {
         bool fog = (sFogOam[i >> 5] & (1u << (i & 31))) != 0;
+        bool lattice = (sLatticeOam[i >> 5] & (1u << (i & 31))) != 0;
+        bool particle = (sParticleOam[i >> 5] & (1u << (i & 31))) != 0;
 
-        /* The fog is one picture: drawn once, over the whole view. */
-        if (fog && fogDrawn) continue;
+        /* The fog is one picture: drawn once, over the whole view. So are
+         * the ash and the sandstorm's sand. */
+        if ((fog && fogDrawn) || (lattice && latticeDrawn)) continue;
 #if CTR_VOXEL_ENABLED
         /* The voxel world draws a fog of its own, in the scene. */
         if (fog && sVoxelObjPass != VOXEL_OBJ_NONE && CtrVoxel_DrawsFog()) continue;
@@ -4919,7 +5078,7 @@ static void DrawObjects(unsigned priority, bool effects)
          * screen or not: as a map is entered the game can have all twenty
          * of them outside it until the camera first moves.
          */
-        if (fog && !affine)
+        if ((fog || lattice) && !affine)
         {
             ++sStats.sprites;
             SpriteBatchFlush();
@@ -4927,79 +5086,28 @@ static void DrawObjects(unsigned priority, bool effects)
             ViewBase();
             DrawFogLattice(attr2, width, height, color256, x, y,
                            (attr1 & 0x1000) != 0, (attr1 & 0x2000) != 0);
-            fogDrawn = true;
+            if (fog) fogDrawn = true;
+            else latticeDrawn = true;
             continue;
         }
-        if (x >= sClipX1 || x + (int)boxW <= sClipX0
-         || y >= sClipY1 || y + (int)boxH <= sClipY0) continue;
-        ++sStats.sprites;
+        /*
+         * Rain, snow, the sand swirls and the bubbles fall over the GBA's
+         * 240x160 screen and wrap round its edges: copies of the screen side
+         * by side carry them over the whole view, without a seam.
+         */
+        if (particle && !affine)
         {
-            /* A new blend state ends the batch: Blend changes the GPU state. */
-            static unsigned batchKey = ~0u;
-            unsigned key = (effects ? 1u : 0u) | (mode == 1 ? 2u : 0u);
-            float shiftX = x + CTR_VIEW_X + sLayerShift;
-            int whole = (int)shiftX;
+            int left = x, top = y;
 
-            if (sSpritePending && key != batchKey) SpriteBatchFlush();
-            /* At any zoom: the view is the GPU's, for these quads as for
-             * Citro2D's; the battle scene composes its sprites at 2x. */
-            if (!affine && (float)whole == shiftX
-                && SpriteBatchRoom((width / 8) * (height / 8)))
-            {
-                bool flipX = (attr1 & 0x1000) != 0, flipY = (attr1 & 0x2000) != 0;
-
-                /* A batch just opened: its blend state and tint. */
-                if (sSpriteCount == 0) Blend(4, effects, mode == 1);
-                batchKey = key;
-                sSpritePending = true;
-                for (unsigned ty = 0; ty < height / 8; ++ty)
-                    for (unsigned tx = 0; tx < width / 8; ++tx)
-                    {
-                        unsigned sx = flipX ? width / 8 - 1 - tx : tx;
-                        unsigned sy = flipY ? height / 8 - 1 - ty : ty;
-                        unsigned tile = CtrVideo_ObjTile(attr2 & 1023, sx, sy, width, color256, Reg(0) & 0x40);
-                        int slot = GetTileSlot(0x10000 + tile * 32, 16 + (attr2 >> 12), color256);
-
-                        if (slot < 0) continue;
-                        ++sStats.tiles;
-                        FastQuad(sFastVertices + sFastUsed * 4, whole + (int)tx * 8, y + CTR_VIEW_Y + (int)ty * 8,
-                                 slot, flipX, flipY);
-                        ++sFastUsed;
-                        ++sSpriteCount;
-                    }
-                continue;
-            }
-            SpriteBatchFlush();
-            batchKey = ~0u;
+            while (left + (int)boxW > sClipX0) left -= 240;
+            while (top + (int)boxH > sClipY0) top -= 160;
+            for (int cy = top; cy < sClipY1; cy += 160)
+                for (int cx = left; cx < sClipX1; cx += 240)
+                    DrawObjectAt(cx, cy, attr1, attr2, width, height, boxW, boxH, false, color256, effects,
+                                 mode);
+            continue;
         }
-        Blend(4, effects, mode == 1);
-        ViewBase();
-        if (affine)
-        {
-            unsigned index = ((attr1 >> 9) & 31) * 16;
-            float a = (int16_t)sMemory.oam[index + 3] / 256.0f;
-            float b = (int16_t)sMemory.oam[index + 7] / 256.0f;
-            float c = (int16_t)sMemory.oam[index + 11] / 256.0f;
-            float d = (int16_t)sMemory.oam[index + 15] / 256.0f;
-            float det = a * d - b * c;
-            if (fabsf(det) < 0.00001f) { Error(9, "singular OBJ affine matrix"); continue; }
-            C3D_Mtx matrix;
-            Mtx_Identity(&matrix);
-            matrix.r[0] = FVec4_New(d / det, -b / det, 0, x + CTR_VIEW_X + sLayerShift + boxW / 2.0f - (d * width - b * height) / (2 * det));
-            matrix.r[1] = FVec4_New(-c / det, a / det, 0, y + CTR_VIEW_Y + boxH / 2.0f - (a * height - c * width) / (2 * det));
-            ViewAffine(&matrix);
-        }
-        bool flipX = !affine && (attr1 & 0x1000), flipY = !affine && (attr1 & 0x2000);
-        for (unsigned ty = 0; ty < height / 8; ++ty)
-            for (unsigned tx = 0; tx < width / 8; ++tx)
-            {
-                unsigned sx = flipX ? width / 8 - 1 - tx : tx;
-                unsigned sy = flipY ? height / 8 - 1 - ty : ty;
-                unsigned tile = CtrVideo_ObjTile(attr2 & 1023, sx, sy, width, color256, Reg(0) & 0x40);
-                DrawTile(0x10000 + tile * 32, 16 + (attr2 >> 12), color256,
-                         (affine ? 0 : x + CTR_VIEW_X + sLayerShift) + (int)tx * 8,
-                         (affine ? 0 : y + CTR_VIEW_Y) + (int)ty * 8, flipX, flipY);
-            }
+        DrawObjectAt(x, y, attr1, attr2, width, height, boxW, boxH, affine, color256, effects, mode);
     }
     SpriteBatchFlush();
     sLayerShift = layerShift;
@@ -5450,7 +5558,9 @@ static unsigned WindowPartition(int top, int bottom, int rects[WINDOW_RECTS][4],
     for (unsigned y = 0; y + 1 < ny; ++y) for (unsigned x = 0; x + 1 < nx; ++x)
     {
         if (xs[x] == xs[x+1] || ys[y] == ys[y+1]) continue;
-        unsigned mask = (display & 0x6000) ? Reg(0x4a) & 63 : 63;
+        /* Outside every window: WINOUT once any window is on, the OBJ
+         * window too (a stat change after the bag has only that one). */
+        unsigned mask = (display & 0xE000) ? Reg(0x4a) & 63 : 63;
         for (int w = 1; w >= 0; --w)
             if ((display & (0x2000u << w)) && Inside(xs[x], ys[y], (unsigned)w))
                 mask = (Reg(0x48) >> (8*w)) & 63;
@@ -5805,7 +5915,11 @@ static void Compose(void)
     int top = sNavBand ? sClipY0 : VIEW_TOP, bottom = sNavBand ? sClipY1 : VIEW_BOTTOM;
     int first = top > 0 ? top : 0, end = bottom < 160 ? bottom : 160;
 
-    if (!(display & 0x6000)) { Layers(63); return; }
+    /* No window at all. With only the OBJ window on - a stat change after
+     * the bag or party menu, which leave windows 0 and 1 off - outside it is
+     * WINOUT's: composed as if there were no windows, the stat pattern
+     * covered the whole screen. */
+    if (!(display & 0xE000)) { Layers(63); return; }
     if (!LineWindows())
         ComposeBand(top, bottom);
     else
@@ -9685,6 +9799,7 @@ void CtrVideo_Present(void)
      * only waits on the voxel decision in the unlikely case both are asked.
      */
     sStage = sStageRequested;
+    sStageFaded = sStage && sStageFadedRequested;
     sCentred = sCentredRequested != CTR_CENTRED_NONE && !sStage;
     sCentredScreen = sCentred ? sCentredRequested : CTR_CENTRED_NONE;
     sBattle = sBattleRequested && !sStage && !sCentred;
@@ -10200,6 +10315,7 @@ void CtrVideo_Present(void)
 const CtrVideoStats *CtrVideo_GetStats(void) { return &sStats; }
 
 void CtrVideo_SetStage(bool stage) { sStageRequested = stage; }
+void CtrVideo_SetStageFaded(bool faded) { sStageFadedRequested = faded; }
 void CtrVideo_SetCentred(unsigned screen) { sCentredRequested = screen < CTR_CENTRED_SCREENS ? screen : CTR_CENTRED_NONE; }
 void CtrVideo_SetBattle(bool battle) { sBattleRequested = battle; }
 void CtrVideo_SetTransition(bool transition) { sTransitionRequested = transition; }

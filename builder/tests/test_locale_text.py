@@ -41,6 +41,7 @@ int main(void)
                               0xB4, 0xB0, 0xB5, 0xB6};
     const uint8_t fallback[] = {0xAC};
     const uint8_t spanish[] = {0x6F, 0x23, 0x27, 0x5A, 0x0E, 0x12, 0x52, 0x51};
+    const uint8_t italian[] = {0x1E, 0x22, 0x09, 0x0D};
     const uint8_t punctuation[] = {0x2D, 0xB8, 0x5B};
     uint8_t tiny[4] = {0x77, 0x77, 0x77, 0x77};
 
@@ -48,6 +49,7 @@ int main(void)
     expect("ÀÂÇÈÉÊËÎÏÔÙÛàâçèéêëîïôùû", french, sizeof(french));
     expect("ñÑüÜ,%&’…♂♀", special, sizeof(special));
     expect("íóúÍÓÚ¡¿", spanish, sizeof(spanish));
+    expect("ìòÌÒ", italian, sizeof(italian));
     expect("&,%", punctuation, sizeof(punctuation)); /* All three languages. */
     expect("\xC3", fallback, 1);             /* incomplete code point */
     expect("\xE0\x80\xAF", fallback, 1);     /* overlong slash */
@@ -64,11 +66,13 @@ int main(void)
     assert(tiny[0] == 0x1B && tiny[1] == 0xff);
 
 #if GAME_LANGUAGE == LANGUAGE_FRENCH
-    assert(strcmp(CTR_TEXT("EN", "ES", "FR"), "FR") == 0);
+    assert(strcmp(CTR_TEXT("EN", "ES", "FR", "IT"), "FR") == 0);
 #elif GAME_LANGUAGE == LANGUAGE_SPANISH
-    assert(strcmp(CTR_TEXT("EN", "ES", "FR"), "ES") == 0);
+    assert(strcmp(CTR_TEXT("EN", "ES", "FR", "IT"), "ES") == 0);
+#elif GAME_LANGUAGE == LANGUAGE_ITALIAN
+    assert(strcmp(CTR_TEXT("EN", "ES", "FR", "IT"), "IT") == 0);
 #else
-    assert(strcmp(CTR_TEXT("EN", "ES", "FR"), "EN") == 0);
+    assert(strcmp(CTR_TEXT("EN", "ES", "FR", "IT"), "EN") == 0);
 #endif
     return 0;
 }
@@ -78,10 +82,10 @@ int main(void)
             (root / "constants").mkdir()
             (root / "constants/global.h").write_text(
                 "#define LANGUAGE_ENGLISH 2\n#define LANGUAGE_FRENCH 3\n"
-                "#define LANGUAGE_SPANISH 7\n", encoding="utf-8")
+                "#define LANGUAGE_ITALIAN 4\n#define LANGUAGE_SPANISH 7\n", encoding="utf-8")
             source = root / "locale.c"
             source.write_text(code, encoding="utf-8")
-            for language in (2, 3, 7):
+            for language in (2, 3, 4, 7):
                 with self.subTest(language=language):
                     executable = root / "locale.exe"
                     subprocess.run([CC, "-std=c99", "-Wall", "-Wextra", "-Werror",

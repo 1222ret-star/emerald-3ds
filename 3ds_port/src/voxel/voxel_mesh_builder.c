@@ -1346,6 +1346,14 @@ void VoxelMesh_EmitInstance(VoxelBuilder *builder, const VoxelMapInstance *inst,
  * Instance 0 only: the border belongs to the map the player is standing on,
  * and running it for every connection would stack four copies of it on the
  * same tiles.
+ *
+ * A map can say how tall its belt stands (VoxelRelief_Belt): a cave carved
+ * out of the rock, its edges standing that high all round. Then the block is
+ * laid as the drawing lays everything else, each of its cells at (u, h,
+ * v + h): stood the map's courses and as many rows south of where the 2D game
+ * tiles it, it meets the rock at the map's edges without a step or a gap -
+ * stood where it is tiled, it left a trench along the north edge as wide as
+ * it is tall, and doubled the rock along the south one.
  */
 #define VOXEL_BORDER_COURSES 2
 
@@ -1364,6 +1372,7 @@ static bool BorderAt(int x, int y)
 void VoxelMesh_EmitBorder(VoxelBuilder *builder, int x0, int y0, int x1, int y1)
 {
     float u0, v0, u1, v1;
+    unsigned drawn, courses;
 
     if (builder->atlas == NULL)
         return;
@@ -1372,10 +1381,15 @@ void VoxelMesh_EmitBorder(VoxelBuilder *builder, int x0, int y0, int x1, int y1)
      * the doorway. The 2D game shows black there, and so does the clear. */
     if (VoxelWorld_Instance(0) != NULL && VoxelWorld_Instance(0)->indoor)
         return;
+    /* A belt laid as the drawing (above): each cell stands `drawn` courses,
+     * that many rows south. Its cells are the window's; their blocks may
+     * stand past it. */
+    drawn = VoxelWorld_Instance(0) != NULL ? VoxelRelief_Belt(VoxelWorld_Instance(0)) : 0u;
+    courses = drawn ? drawn : VOXEL_BORDER_COURSES;
     for (int y = y0; y < y1; ++y)
         for (int x = x0; x < x1; ++x)
         {
-            float wx = (float)x, wz = (float)y;
+            float wx = (float)x, wz = (float)(y + (int)drawn);
             /* Only where the border meets something else: the inside of a
              * belt that reaches the whole way to the horizon is never seen,
              * and drawing it is most of the tiles in the window. */
@@ -1390,17 +1404,22 @@ void VoxelMesh_EmitBorder(VoxelBuilder *builder, int x0, int y0, int x1, int y1)
             south = !BorderAt(x, y + 1);
             east = !BorderAt(x + 1, y);
             west = !BorderAt(x - 1, y);
-            if (MetatileUV(builder, VoxelWorld_BorderMetatile(x, y - VOXEL_BORDER_COURSES + 1),
+            /* Laid as drawn, a cell's top is its own drawing; stood where it
+             * is tiled, the column reads the rows above it. */
+            if (MetatileUV(builder, VoxelWorld_BorderMetatile(x, drawn ? y : y - (int)courses + 1),
                            &u0, &v0, &u1, &v1))
-                VoxelMesh_Top(builder, wx, wz, (float)VOXEL_BORDER_COURSES, 0.0f,
+                VoxelMesh_Top(builder, wx, wz, (float)courses, 0.0f,
                               u0, v0, u1, v1, SHADE_TOP);
-            if (!south && !east && !west)
+            /* Laid as drawn it meets the map at its own height: the map's
+             * faces close every step there, and a wall of the belt's would
+             * stand in the same place as the cave's north wall. */
+            if (drawn || (!south && !east && !west))
                 continue;
-            for (int h = 0; h < VOXEL_BORDER_COURSES; ++h)
+            for (int h = 0; h < (int)courses; ++h)
             {
                 float yBottom = (float)h, yTop = (float)(h + 1);
 
-                if (!MetatileUV(builder, VoxelWorld_BorderMetatile(x, y - h),
+                if (!MetatileUV(builder, VoxelWorld_BorderMetatile(x, drawn ? y : y - h),
                                 &u0, &v0, &u1, &v1))
                     continue;
                 if (south) VoxelMesh_South(builder, wx, wz, yBottom, yTop, 0.0f, u0, v0, u1, v1);

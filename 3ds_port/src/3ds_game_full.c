@@ -227,6 +227,13 @@ static StageSet sStage = {.name = "GBA stage"}, sCentred = {.name = "GBA centred
 static StageSet sBattle = {.name = "GBA battle"};
 /* The battle transitions (ctr_gba_transition.h), over the field. */
 static StageSet sTransition = {.name = "GBA transition"};
+/* A transition drawn over the field's own VBlank callback (UpdateStage). */
+static bool sFieldTransition;
+
+static bool TransitionOn(void)
+{
+    return sTransition.on || sFieldTransition;
+}
 
 static void RememberCallback(StageSet *set, IntrCallback callback, unsigned screen)
 {
@@ -243,6 +250,13 @@ static void RememberCallback(StageSet *set, IntrCallback callback, unsigned scre
 void CtrStage_SetVBlankCallback(IntrCallback callback)
 {
     RememberCallback(&sStage, callback, 0);
+    SetVBlankCallback(callback);
+}
+
+/* A stage whose every layer fades into the margins (ctr_gba_stage.h). */
+void CtrStageFaded_SetVBlankCallback(IntrCallback callback)
+{
+    RememberCallback(&sStage, callback, 1);
     SetVBlankCallback(callback);
 }
 
@@ -375,10 +389,25 @@ static void UpdateStage(void)
         UpdateSet(&sBattle, callback);
         UpdateSet(&sTransition, callback);
     }
+    /* A transition that keeps the field's VBlank callback - the Poké Balls
+     * trail, the grid squares, the spiral, the Frontier's squares and
+     * circles - draws only BG0 and its sprites over the field, which then
+     * runs as CB2_OverworldBasic: only BattleTransition_StartOnField sets
+     * that. Shown as a transition too, or its GBA picture covers a 240x160
+     * part of the wide field. */
+    {
+        bool field = !sTransition.on && gMain.callback2 == CB2_OverworldBasic;
+
+        if (field != sFieldTransition)
+            CtrLog_Write(CTR_LOG_VIDEO, "GBA transition over the field's callback %s at frame %lu",
+                         field ? "on" : "off", (unsigned long)sFrames);
+        sFieldTransition = field;
+    }
     CtrVideo_SetStage(sStage.on);
+    CtrVideo_SetStageFaded(sStage.on && sStage.screen == 1);
     CtrVideo_SetCentred(sCentred.on ? sCentred.screen : CTR_CENTRED_NONE);
     CtrVideo_SetBattle(sBattle.on);
-    CtrVideo_SetTransition(sTransition.on);
+    CtrVideo_SetTransition(TransitionOn());
 }
 
 /*
@@ -427,7 +456,7 @@ static void CaptureLineRegisters(void)
     bool hblank = REG_IME && (REG_IE & INTR_FLAG_HBLANK) && (REG_DISPSTAT & DISPSTAT_HBLANK_INTR)
                && gIntrTable[INTR_INDEX_HBLANK];
 
-    if (!sTransition.on)
+    if (!TransitionOn())
     {
         CtrVideo_SetLineRegisters(NULL, 0);
         return;

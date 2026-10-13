@@ -236,6 +236,26 @@ index 005a48f2d564ab06e292568130397c131b6b56ba..d8d827cbe294b573a4391b13c360ffe8
 +#endif
 +
  #endif // GUARD_FIELD_PLAYER_AVATAR_H
+diff --git a/include/field_weather.h b/include/field_weather.h
+index 8ce0cc9e5052d5979de9d640b38571c2c02f1805..d116ad8297e2edea1a5e6a68f79de4e684937f64 100644
+--- a/include/field_weather.h
++++ b/include/field_weather.h
+@@ -230,5 +230,15 @@ void SetWeather(u32 weather);
+ void DoCurrentWeather(void);
+ void UpdateWeatherPerDay(u16 increment);
+ void ResumePausedWeather(void);
++#ifdef PLATFORM_3DS
++bool8 Weather_IsFogSpriteTemplate(const struct SpriteTemplate *template);
++bool8 Weather_IsBubbleSpriteTemplate(const struct SpriteTemplate *template);
++enum {
++    WEATHER_TILING_NONE,
++    WEATHER_TILING_LATTICE,   // one picture on a 64-pixel lattice
++    WEATHER_TILING_PARTICLES, // wrapping round the 240x160 screen
++};
++u8 Weather_SpriteTiling(const struct Sprite *sprite);
++#endif
+ 
+ #endif // GUARD_WEATHER_H
 diff --git a/include/fieldmap.h b/include/fieldmap.h
 index 212dfb65a6868042e59f140df99fba7c8d134729..673224515c3d8c0c5d8522bc46fd6717b03ab9a7 100644
 --- a/include/fieldmap.h
@@ -3682,7 +3702,7 @@ index 760b07e382f31eed650f84faa61abe9b46f0f309..5fdf762b8e8ea880653de77dbff43b2d
  
  static void InitLowerWindowText(u32 whichText)
 diff --git a/src/egg_hatch.c b/src/egg_hatch.c
-index 00a194ea7014445559b2872b04ef33fd85c34560..5aa955d7e9796dad69d2cb7df965d1a64f950ddd 100644
+index 00a194ea7014445559b2872b04ef33fd85c34560..49cf5c7974efe3dd93d7517006eac7484daecfbb 100644
 --- a/src/egg_hatch.c
 +++ b/src/egg_hatch.c
 @@ -362,7 +362,7 @@ static void AddHatchedMonToParty(u8 id)
@@ -3694,6 +3714,21 @@ index 00a194ea7014445559b2872b04ef33fd85c34560..5aa955d7e9796dad69d2cb7df965d1a6
      struct Pokemon *mon = &gPlayerParty[id];
  
      CreateHatchedMon(mon, &gEnemyParty[0]);
+@@ -557,7 +557,14 @@ static void CB2_LoadEggHatch(void)
+     case 7:
+         SetGpuReg(REG_OFFSET_DISPCNT, DISPCNT_OBJ_ON | DISPCNT_OBJ_1D_MAP);
+         LoadPalette(gTradeGba2_Pal, BG_PLTT_ID(1), 5 * PLTT_SIZE_4BPP);
++#ifdef PLATFORM_3DS
++        // The sheet is 0x1400 bytes and 0x1420 reads a tile past its end. A
++        // copy past an asset's end is not resolved to the asset, so the
++        // platform under the egg was drawn from the stub's own bytes: noise.
++        LoadBgTiles(1, gTradeGba_Gfx, 0x1400, 0);
++#else
+         LoadBgTiles(1, gTradeGba_Gfx, 0x1420, 0);
++#endif
+         CopyToBgTilemapBuffer(1, gTradePlatform_Tilemap, 0x1000, 0);
+         CopyBgTilemapBufferToVram(1);
+         gMain.state++;
 diff --git a/src/event_object_lock.c b/src/event_object_lock.c
 index 7cb260757c4267c4d9b1c1cf6cd460f5b99c2526..c66b4e9c9d17cb246ace0f2f42b119c1a95e0db2 100644
 --- a/src/event_object_lock.c
@@ -5037,6 +5072,46 @@ index bc86bcdc7d7bee8941a903f625c90bdd3567ae59..d0fabe84d697667f377915c674f4e1e4
                  r2 = color2.r;
                  g2 = color2.g;
                  b2 = color2.b;
+diff --git a/src/field_weather_effect.c b/src/field_weather_effect.c
+index 10ce1bc37a9bdbd78c1601ca857fe67bf6fbac69..821dc7edce6e0b0262b8c72ac8f20a0ec52e3339 100644
+--- a/src/field_weather_effect.c
++++ b/src/field_weather_effect.c
+@@ -2634,3 +2634,35 @@ static void UpdateRainCounter(u8 newWeather, u8 oldWeather)
+ }
+ 
+ 
++#ifdef PLATFORM_3DS
++// The fog's and the underwater bubbles' sprites, by their template (sprite.c).
++// Compared, never read: a map object's template pointer is left to the stack
++// frame that spawned it.
++bool8 Weather_IsFogSpriteTemplate(const struct SpriteTemplate *template)
++{
++    return template == &sFogHorizontalSpriteTemplate || template == &sFogDiagonalSpriteTemplate;
++}
++
++bool8 Weather_IsBubbleSpriteTemplate(const struct SpriteTemplate *template)
++{
++    return template == &sBubbleSpriteTemplate;
++}
++
++// How a weather sprite carries over the 3DS's wide view (sprite.c): the ash
++// and the sandstorm's sand are one picture on a 64-pixel lattice, like the
++// fog; the rain, snow, the sandstorm's swirls (its template at 32x32) and the
++// bubbles are particles that wrap round the GBA's screen.
++u8 Weather_SpriteTiling(const struct Sprite *sprite)
++{
++    const struct SpriteTemplate *template = sprite->template;
++
++    if (template == &sAshSpriteTemplate)
++        return WEATHER_TILING_LATTICE;
++    if (template == &sSandstormSpriteTemplate)
++        return sprite->oam.size == SPRITE_SIZE(64x64) ? WEATHER_TILING_LATTICE : WEATHER_TILING_PARTICLES;
++    if (template == &sRainSpriteTemplate || template == &sSnowflakeSpriteTemplate
++     || template == &sBubbleSpriteTemplate)
++        return WEATHER_TILING_PARTICLES;
++    return WEATHER_TILING_NONE;
++}
++#endif
 diff --git a/src/fieldmap.c b/src/fieldmap.c
 index 97db758caac9fefa27d6c2809df48086dc4ef4e1..d8097a34dfae4fb5176c72d5a06cc2670a0467e9 100644
 --- a/src/fieldmap.c
@@ -15890,7 +15965,7 @@ index 171678cddbf9ef41a725fc8b4c7f4cdc3be1fa18..9d8c85d5cd8c3b47465ee3e6498be9cd
      ClearPokemonCrySongs();
  }
 diff --git a/src/sprite.c b/src/sprite.c
-index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..a46937e198a0556ec4d4646c67dd31ca1b217891 100644
+index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..f92c27050d8589c205027fd9e0cbdf9b021883f9 100644
 --- a/src/sprite.c
 +++ b/src/sprite.c
 @@ -2,6 +2,17 @@
@@ -15946,7 +16021,7 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..a46937e198a0556ec4d4646c67dd31ca
  void ResetSpriteData(void)
  {
      ResetOamRange(0, 128);
-@@ -479,16 +518,119 @@ void CopyMatricesToOamBuffer(void)
+@@ -479,16 +518,132 @@ void CopyMatricesToOamBuffer(void)
      }
  }
  
@@ -15959,10 +16034,13 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..a46937e198a0556ec4d4646c67dd31ca
 + */
 +static bool8 IsFogSprite(const struct Sprite *sprite)
 +{
-+    // By the sheet, not by the weather's sprite pointers: those outlive the
-+    // field (a battle reuses the slots) while the tags are the fog's alone.
-+    return sprite->template != NULL
-+        && (sprite->template->tileTag == GFXTAG_FOG_H || sprite->template->tileTag == GFXTAG_FOG_D);
++    // By the template, not by the weather's sprite pointers: those outlive
++    // the field (a battle reuses the slots). Only its address is compared: a
++    // map object's template was a local of the function that spawned it, so
++    // reading it read whatever the stack held there. When that matched the
++    // fog's tag, the object was drawn over the whole screen as fog (the old
++    // lady of Route 111's rest house, mid-step).
++    return Weather_IsFogSpriteTemplate(sprite->template);
 +}
 +#endif
 +
@@ -16008,7 +16086,7 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..a46937e198a0556ec4d4646c67dd31ca
 +            if (gWeatherPtr->sprites.s2.fogDSprites[i] == sprite) return TRUE;
 +        break;
 +    case WEATHER_UNDERWATER_BUBBLES:
-+        return sprite->template != NULL && sprite->template->tileTag == GFXTAG_BUBBLE;
++        return Weather_IsBubbleSpriteTemplate(sprite->template);
 +    }
 +    return FALSE;
 +}
@@ -16056,6 +16134,16 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..a46937e198a0556ec4d4646c67dd31ca
 +            }
 +            if (IsFogSprite(sprite))
 +                CtrVideo_MarkFogOam(first, oamIndex);
++            // The rest of the weather, carried over the whole view too.
++            switch (Weather_SpriteTiling(sprite))
++            {
++            case WEATHER_TILING_LATTICE:
++                CtrVideo_MarkWeatherOam(first, oamIndex, TRUE);
++                break;
++            case WEATHER_TILING_PARTICLES:
++                CtrVideo_MarkWeatherOam(first, oamIndex, FALSE);
++                break;
++            }
 +#endif
 +#if defined(PLATFORM_3DS) && CTR_VOXEL_ENABLED
 +            if (IsVoxelWeatherSprite(sprite))
@@ -16068,7 +16156,7 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..a46937e198a0556ec4d4646c67dd31ca
          i++;
      }
  
-@@ -544,6 +686,9 @@ u8 CreateSpriteAt(u8 index, const struct SpriteTemplate *template, s16 x, s16 y,
+@@ -544,6 +699,9 @@ u8 CreateSpriteAt(u8 index, const struct SpriteTemplate *template, s16 x, s16 y,
      ResetSprite(sprite);
  
      sprite->inUse = TRUE;
@@ -16078,7 +16166,7 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..a46937e198a0556ec4d4646c67dd31ca
      sprite->animBeginning = TRUE;
      sprite->affineAnimBeginning = TRUE;
      sprite->usingSheet = TRUE;
-@@ -562,8 +707,19 @@ u8 CreateSpriteAt(u8 index, const struct SpriteTemplate *template, s16 x, s16 y,
+@@ -562,8 +720,19 @@ u8 CreateSpriteAt(u8 index, const struct SpriteTemplate *template, s16 x, s16 y,
      if (template->tileTag == TAG_NONE)
      {
          s16 tileNum;
@@ -16099,7 +16187,7 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..a46937e198a0556ec4d4646c67dd31ca
          if (tileNum == -1)
          {
              ResetSprite(sprite);
-@@ -622,7 +778,13 @@ void DestroySprite(struct Sprite *sprite)
+@@ -622,7 +791,13 @@ void DestroySprite(struct Sprite *sprite)
          if (!sprite->usingSheet)
          {
              u16 i;
@@ -16114,7 +16202,7 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..a46937e198a0556ec4d4646c67dd31ca
              for (i = sprite->oam.tileNum; i < tileEnd; i++)
                  FREE_SPRITE_TILE(i);
          }
-@@ -791,6 +953,10 @@ void ProcessSpriteCopyRequests(void)
+@@ -791,6 +966,10 @@ void ProcessSpriteCopyRequests(void)
          while (sSpriteCopyRequestCount > 0)
          {
              CpuCopy16(sSpriteCopyRequests[i].src, sSpriteCopyRequests[i].dest, sSpriteCopyRequests[i].size);
@@ -16125,7 +16213,7 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..a46937e198a0556ec4d4646c67dd31ca
              sSpriteCopyRequestCount--;
              i++;
          }
-@@ -803,9 +969,17 @@ void RequestSpriteFrameImageCopy(u16 index, u16 tileNum, const struct SpriteFram
+@@ -803,9 +982,17 @@ void RequestSpriteFrameImageCopy(u16 index, u16 tileNum, const struct SpriteFram
  {
      if (sSpriteCopyRequestCount < MAX_SPRITE_COPY_REQUESTS)
      {
@@ -16145,7 +16233,7 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..a46937e198a0556ec4d4646c67dd31ca
          sSpriteCopyRequestCount++;
      }
  }
-@@ -814,6 +988,9 @@ void RequestSpriteCopy(const u8 *src, u8 *dest, u16 size)
+@@ -814,6 +1001,9 @@ void RequestSpriteCopy(const u8 *src, u8 *dest, u16 size)
  {
      if (sSpriteCopyRequestCount < MAX_SPRITE_COPY_REQUESTS)
      {
@@ -16155,7 +16243,7 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..a46937e198a0556ec4d4646c67dd31ca
          sSpriteCopyRequests[sSpriteCopyRequestCount].src = src;
          sSpriteCopyRequests[sSpriteCopyRequestCount].dest = dest;
          sSpriteCopyRequests[sSpriteCopyRequestCount].size = size;
-@@ -1485,7 +1662,11 @@ void SetOamMatrixRotationScaling(u8 matrixNum, s16 xScale, s16 yScale, u16 rotat
+@@ -1485,7 +1675,11 @@ void SetOamMatrixRotationScaling(u8 matrixNum, s16 xScale, s16 yScale, u16 rotat
  
  u16 LoadSpriteSheet(const struct SpriteSheet *sheet)
  {
@@ -16168,7 +16256,7 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..a46937e198a0556ec4d4646c67dd31ca
  
      if (tileStart < 0)
      {
-@@ -1493,8 +1674,12 @@ u16 LoadSpriteSheet(const struct SpriteSheet *sheet)
+@@ -1493,8 +1687,12 @@ u16 LoadSpriteSheet(const struct SpriteSheet *sheet)
      }
      else
      {
@@ -16183,7 +16271,7 @@ index 708a3e7fdf5fe77dff62d0e2d908b9e9e089f39a..a46937e198a0556ec4d4646c67dd31ca
          return (u16)tileStart;
      }
  }
-@@ -1617,6 +1802,9 @@ void LoadSpritePalettes(const struct SpritePalette *palettes)
+@@ -1617,6 +1815,9 @@ void LoadSpritePalettes(const struct SpritePalette *palettes)
  
  void DoLoadSpritePalette(const u16 *src, u16 paletteOffset)
  {
@@ -17526,10 +17614,27 @@ index 1d605d1fc056e63002b3f7a6c1fd9cb48c770531..ae9a812d54a855ac3bd045eef6fc9598
 +}
 +#endif
 diff --git a/src/trade.c b/src/trade.c
-index e9c2984087302e2858d7617fce6d0408d3427513..4e573976a45a0b277803f5ca9e881376994f5872 100644
+index e9c2984087302e2858d7617fce6d0408d3427513..57c1bd6ff0d3d17e4537480d96d2120b5b1fd62f 100644
 --- a/src/trade.c
 +++ b/src/trade.c
-@@ -2673,7 +2673,7 @@ static void SpriteCB_LinkMonShadow(struct Sprite *sprite)
+@@ -51,6 +51,16 @@
+ #include "constants/songs.h"
+ #include "constants/union_room.h"
+ 
++// The GBA sheet of the trade scene is 0x1400 bytes; the GBA copies 0x1420,
++// a tile past its end. On the 3DS a copy past an asset's end is not
++// resolved to the asset, so its last 32 tiles were drawn from the stub's
++// own bytes.
++#ifdef PLATFORM_3DS
++#define TRADE_GBA_GFX_SIZE 0x1400
++#else
++#define TRADE_GBA_GFX_SIZE 0x1420
++#endif
++
+ // IDs for RunTradeMenuCallback
+ enum {
+     CB_MAIN_MENU,
+@@ -2673,7 +2683,7 @@ static void SpriteCB_LinkMonShadow(struct Sprite *sprite)
          if (++sprite->data[0] == 12)
              sprite->data[0] = 0;
  
@@ -17538,7 +17643,34 @@ index e9c2984087302e2858d7617fce6d0408d3427513..4e573976a45a0b277803f5ca9e881376
      }
  }
  
-@@ -4552,7 +4552,7 @@ static void CreateInGameTradePokemonInternal(u8 whichPlayerMon, u8 whichInGameTr
+@@ -3174,7 +3184,7 @@ static void SetTradeSequenceBgGpuRegs(u8 state)
+                                      BGCNT_SCREENBASE(18) |
+                                      BGCNT_TXT512x256);
+         LoadPalette(gTradeGba2_Pal, BG_PLTT_ID(1), 3 * PLTT_SIZE_4BPP);
+-        DmaCopyLarge16(3, gTradeGba_Gfx, (void *) BG_CHAR_ADDR(1), 0x1420, 0x1000);
++        DmaCopyLarge16(3, gTradeGba_Gfx, (void *) BG_CHAR_ADDR(1), TRADE_GBA_GFX_SIZE, 0x1000);
+         DmaCopy16Defvars(3, gTradePlatform_Tilemap, (void *) BG_SCREEN_ADDR(18), 0x1000);
+         break;
+     case 1:
+@@ -3201,7 +3211,7 @@ static void SetTradeSequenceBgGpuRegs(u8 state)
+             DmaCopy16Defvars(3, sGbaMapWireless, (void *) BG_SCREEN_ADDR(5), 0x1000);
+         }
+ 
+-        DmaCopyLarge16(3, gTradeGba_Gfx, (void *) BG_CHAR_ADDR(0), 0x1420, 0x1000);
++        DmaCopyLarge16(3, gTradeGba_Gfx, (void *) BG_CHAR_ADDR(0), TRADE_GBA_GFX_SIZE, 0x1000);
+         SetGpuReg(REG_OFFSET_DISPCNT, DISPCNT_MODE_0 |
+                                       DISPCNT_OBJ_1D_MAP |
+                                       DISPCNT_BG1_ON |
+@@ -3310,7 +3320,7 @@ static void SetTradeSequenceBgGpuRegs(u8 state)
+                                      BGCNT_SCREENBASE(18) |
+                                      BGCNT_TXT512x256);
+         LoadPalette(gTradeGba2_Pal, BG_PLTT_ID(1), 3 * PLTT_SIZE_4BPP);
+-        DmaCopyLarge16(3, gTradeGba_Gfx, (void *) BG_CHAR_ADDR(1), 0x1420, 0x1000);
++        DmaCopyLarge16(3, gTradeGba_Gfx, (void *) BG_CHAR_ADDR(1), TRADE_GBA_GFX_SIZE, 0x1000);
+         DmaCopy16Defvars(3, gTradePlatform_Tilemap, (void *) BG_SCREEN_ADDR(18), 0x1000);
+         break;
+     }
+@@ -4552,7 +4562,7 @@ static void CreateInGameTradePokemonInternal(u8 whichPlayerMon, u8 whichInGameTr
      u8 level = GetMonData(&gPlayerParty[whichPlayerMon], MON_DATA_LEVEL);
  
      struct Mail mail;
@@ -17547,7 +17679,7 @@ index e9c2984087302e2858d7617fce6d0408d3427513..4e573976a45a0b277803f5ca9e881376
      u8 mailNum;
      struct Pokemon *pokemon = &gEnemyParty[0];
  
-@@ -4896,14 +4896,14 @@ static void Task_AnimateWirelessSignal(u8 taskId)
+@@ -4896,14 +4906,14 @@ static void Task_AnimateWirelessSignal(u8 taskId)
          if (paletteIdx == 256)
              LoadPalette(sWirelessSignalNone_Pal, BG_PLTT_ID(3), PLTT_SIZE_4BPP);
          else

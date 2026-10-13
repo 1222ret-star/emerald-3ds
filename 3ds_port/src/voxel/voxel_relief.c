@@ -5,7 +5,8 @@
  * Layout (little endian):
  *   "VXL4", u16 layouts, u16 side (5)
  *   layouts x 14: u16 layout id, u16 cells, u16 width, u16 height (bit 15:
- *                 drawn; bit 14: heights in units of 2 pixels), u32 offset,
+ *                 drawn; bit 14: heights in units of 2 pixels; bits 10-13:
+ *                 the belt's courses, see VoxelRelief_Belt), u32 offset,
  *                 s16 base (pixels: the level the whole map stands at)
  *   cells x (2 + 25): u8 x, u8 y, int8 heights[25] (row major, over the base)
  *
@@ -54,6 +55,7 @@ typedef struct
     uint16_t layoutId, width, height, count;
     int16_t base;          /* pixels */
     bool drawn;            /* the relief is all of this map's terrain */
+    uint8_t belt;          /* courses the border stands, as drawn (0: as ever) */
     const uint8_t *cells;  /* into sBlob: x, y and the stored heights */
     int16_t *heights;      /* GRID per cell, pixels */
     /* A drawn map's surface where it stands, for the sun to be stopped by:
@@ -166,8 +168,9 @@ bool VoxelRelief_Init(void)
         l->width = (uint16_t)U16(row + 4);
         unsigned unit = (U16(row + 6) & 0x4000) ? 2 : 1;
 
-        l->height = (uint16_t)(U16(row + 6) & 0x3FFF);
+        l->height = (uint16_t)(U16(row + 6) & 0x03FF);
         l->drawn = (U16(row + 6) & 0x8000) != 0;
+        l->belt = (uint8_t)((U16(row + 6) >> 10) & 0x0F);
         l->cells = sBlob + offset;
         l->count = (uint16_t)cells;
         if (offset + (uint32_t)cells * CELL_BYTES > (uint32_t)size)
@@ -370,6 +373,12 @@ bool VoxelRelief_IsDrawn(const VoxelMapInstance *inst)
 {
     const ReliefLayout *l = LayoutOf(inst);
     return l != NULL && l->drawn;
+}
+
+unsigned VoxelRelief_Belt(const VoxelMapInstance *inst)
+{
+    const ReliefLayout *l = LayoutOf(inst);
+    return l != NULL ? l->belt : 0u;
 }
 
 bool VoxelRelief_IsSlope(const int16_t *grid)
