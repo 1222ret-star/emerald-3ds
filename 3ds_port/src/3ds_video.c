@@ -4680,6 +4680,37 @@ static bool DrawLineBg(unsigned bg)
 
 static void DrawAffineBg(unsigned bg)
 {
+    /*
+     * The Berry Blender's bowl turns on an affine layer that wraps round: in
+     * the margins, where centred screens carry their affine maps on (below),
+     * copies of the bowl went round the screen's edges. Kept to the picture.
+     */
+    if (sCentred && sCentredScreen == CTR_CENTRED_BLENDER
+     && (sClipX0 < 0 || sClipY0 < 0 || sClipX1 > 240 || sClipY1 > 160))
+    {
+        int clipX0 = sClipX0, clipY0 = sClipY0, clipX1 = sClipX1, clipY1 = sClipY1;
+        bool scissored = sScissored;
+
+        if (sClipX0 < 0) sClipX0 = 0;
+        if (sClipY0 < 0) sClipY0 = 0;
+        if (sClipX1 > 240) sClipX1 = 240;
+        if (sClipY1 > 160) sClipY1 = 160;
+        if (sClipX0 < sClipX1 && sClipY0 < sClipY1)
+        {
+            C2D_Flush();
+            sScissored = true;
+            Scissor(sClipX0, sClipY0, sClipX1, sClipY1);
+            DrawAffineBg(bg);
+            C2D_Flush();
+        }
+        sClipX0 = clipX0;
+        sClipY0 = clipY0;
+        sClipX1 = clipX1;
+        sClipY1 = clipY1;
+        sScissored = scissored;
+        RestoreScissor();
+        return;
+    }
     unsigned control = Reg(8 + bg * 2), base = bg == 2 ? 0x20 : 0x30;
     float a = (int16_t)Reg(base) / 256.0f, b = (int16_t)Reg(base + 2) / 256.0f;
     float c = (int16_t)Reg(base + 4) / 256.0f, d = (int16_t)Reg(base + 6) / 256.0f;

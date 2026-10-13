@@ -2,8 +2,8 @@
  * Force-included into the translation units whose screens are shown centred
  * as a GBA screen (full.mk, CTR_GBA_CENTRED_SRCS): the fly map, the Town Map,
  * the title menu with the professor's speech, the naming screen, the clock,
- * the choice of starter from the professor's bag and the communication
- * error screen;
+ * the choice of starter from the professor's bag, the communication error
+ * screen and the Berry Blender;
  * and into pokenav.c, pokemon_storage_system.c (the PC's boxes),
  * pokemon_summary_screen.c, item_menu.c (the bag), pokedex.c and trade.c,
  * whose screens are shown on the bottom screen instead.
@@ -44,6 +44,8 @@
 #define SetVBlankCallback CtrCentredShop_SetVBlankCallback
 #elif defined(CTR_CENTRED_TRADE)
 #define SetVBlankCallback CtrCentredTrade_SetVBlankCallback
+#elif defined(CTR_CENTRED_BLENDER)
+#define SetVBlankCallback CtrCentredBlender_SetVBlankCallback
 #else
 #define SetVBlankCallback CtrCentred_SetVBlankCallback
 #endif
