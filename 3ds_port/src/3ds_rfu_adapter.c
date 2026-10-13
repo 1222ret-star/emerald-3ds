@@ -197,6 +197,9 @@ static void QueuePush(struct FrameQueue *q, const u8 *data, u32 len)
     if (q->count == FRAME_QUEUE)
     {
         // The game stopped reading: keep the newest.
+        static unsigned told;
+        if (told++ < 8)
+            CtrLog_Write(CTR_LOG_ERROR, "rfu: frame queue full: oldest frame dropped");
         q->head = (q->head + 1) % FRAME_QUEUE;
         q->count--;
     }
@@ -450,7 +453,8 @@ static void QueuePushMessage(struct ChannelQueue *q, const u8 *data, u16 size, u
     u8 i;
     if (q->count == CHANNEL_QUEUE || size > CHANNEL_MSG_MAX)
     {
-        TRACE("channel queue full: message dropped");
+        /* A lost message stalls the battle or the link for good: say so. */
+        CtrLog_Write(CTR_LOG_ERROR, "rfu: channel queue full (%u, %u bytes): message dropped", q->count, size);
         return;
     }
     i = (q->head + q->count) % CHANNEL_QUEUE;

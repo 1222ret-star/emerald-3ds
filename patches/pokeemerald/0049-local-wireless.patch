@@ -271,7 +271,7 @@ index b53b69c..c6f0674 100644
      {
          return LMAN_ERROR_NOW_LINK_RECOVERY;
 diff --git a/src/battle_controllers.c b/src/battle_controllers.c
-index 602a289..85656cc 100644
+index 602a289..a39b6f8 100644
 --- a/src/battle_controllers.c
 +++ b/src/battle_controllers.c
 @@ -13,6 +13,47 @@
@@ -490,11 +490,24 @@ index 602a289..85656cc 100644
  
              if (!(gBattleTypeFlags & BATTLE_TYPE_IS_MASTER))
              {
-@@ -942,16 +1094,48 @@ static void Task_HandleCopyReceivedLinkBuffersData(u8 taskId)
+@@ -942,16 +1094,61 @@ static void Task_HandleCopyReceivedLinkBuffersData(u8 taskId)
              break;
          case B_COMM_CONTROLLER_IS_DONE:
              playerId = BYTE_TO_RECEIVE(LINK_BUFF_DATA);
 +#ifdef PLATFORM_3DS
++            // On a client a controller runs its command while the master's
++            // flag for its battler is set (BufferRunCommand checks
++            // gBitTable[battler]), and some commands need several frames of
++            // it (the link opponent's party summary waits 2 calls first). The
++            // master's own controller may finish at once and its "done" come
++            // straight after the command; through the link layer it came
++            // frames later, but a burst (a resent message, everything after
++            // it at once) brings both together, the flag goes before the
++            // command has run, and the battle waits for it forever. The
++            // master's "done" waits until our own controller has finished.
++            if (sDirectBattleLink && !(gBattleTypeFlags & BATTLE_TYPE_IS_MASTER) && playerId == 0
++             && GetMultiplayerId() != 0 && IS_BATTLE_CONTROLLER_ACTIVE_FOR_PLAYER(battler, GetMultiplayerId()))
++                return FALSE;
 +            if (sDirectBattleLink && playerId < MAX_LINK_PLAYERS && sSkippedDones[battler][playerId])
 +            {
 +                sSkippedDones[battler][playerId]--;
