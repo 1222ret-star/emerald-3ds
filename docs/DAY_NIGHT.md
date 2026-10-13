@@ -231,23 +231,28 @@ is added. Building draws with active emission omit sunlight dapples.
 
 Generated building files use VXB8: page height bit 15 marks an L8 glass mask
 immediately following that page's RGBA5551 pixels, in the same PICA order.
-Unmarked pages have no mask. The reader still accepts VXB7 without emission.
-At most four masks are resident, bounded by the existing page cache. A single
-384 KiB linear-memory pool is reserved alongside the 768 KiB colour-page arena.
-Each mask occupies the corresponding half-sized range, so page recycling does
-not allocate or fragment linear memory. This is the previous maximum mask
-budget, now reserved up front; world VRAM and draw-call budgets are unchanged.
-Pool or mask-read failure falls back to an ordinary unlit building and is
-logged explicitly. Rebuild the engine and pack
+Unmarked pages have no mask; VXB7 files are no longer read. A drawing with
+glass is compacted like any other: each mask texel moves with the faces that
+read it, and a drawing whose faces would then read one texel both with and
+without glass keeps its layout as drawn (none does today).
+
+Masks have no memory of their own. Each is an L8 piece of the 1 MiB building
+page arena in VRAM, taken only while windows glow (DAY / NIGHT on, outdoors,
+from mid-afternoon to dawn) and only from room the pages leave free: a mask
+never evicts a page, and masks give up their pieces before any page has to go.
+A mask streams in after its page's texels, is drawn only once complete, and is
+freed two frames after its last draw. A page whose mask finds no room shows
+unlit windows and asks again a couple of seconds later; the video log says so
+once per page. Nothing is reserved in linear memory, of which an Old 3DS has
+under 300 KiB left once the world is loaded. Rebuild the engine and pack
 together: the old pack does not contain these masks.
 
 The user confirms lights and Dewford 3D in the local preview on physical
-hardware. The original failure's cause was not independently reproduced. The
-preview removes map-time mask allocation as a failure path without changing
-the existing, mathematically valid amber texture stages. The video log reports
-`windows=ready`, `failed`, or `none` for each loaded page. If glass still fails
-to light, retain that log with the map/time and a screenshot; host tests do not
-prove the PICA output on a real console.
+hardware, where masks had a linear pool reserved at start-up. The original
+failure's cause was not independently reproduced. The video log reports
+`windows loaded` for each mask, or that one found no room yet. If glass still
+fails to light, retain that log with the map/time and a screenshot; host tests
+do not prove the PICA output on a real console.
 
 Preview hardware regression checklist (not individually reported):
 

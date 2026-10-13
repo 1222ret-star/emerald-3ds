@@ -1004,7 +1004,8 @@ static int sDynamicX, sDynamicZ; /* the billboards' origin this frame */
 /* Pages take their whole power-of-two texture (PageBytes): the Battle
  * Frontier's two halves, in view together, are 512 KiB each. */
 #define VOXEL_PAGE_VRAM_BUDGET (1024u * 1024u)
-#define VOXEL_GLOW_LINEAR_BUDGET (VOXEL_PAGE_VRAM_BUDGET / sizeof(uint16_t))
+/* The arena's pieces: a page's texture and its window mask. */
+#define VOXEL_PAGE_PIECES (VOXEL_BUILDING_PAGES * 2u)
 /* A page that found no room is asked for again only after this long. */
 #define VOXEL_PAGE_RETRY_FRAMES 120u
 
@@ -1015,8 +1016,18 @@ typedef struct
     unsigned loaded;    /* texels copied so far; w*h when ready */
     C3D_Tex tex;
     uint32_t used;      /* frame last needed */
+    /*
+     * The page's window-glass mask (buildings.bin's L8 glow), lit at night:
+     * a piece of the arena of its own, taken only while windows glow and
+     * only where it fits - it never pushes a page out, and gives up its
+     * piece before any page has to go. Streamed in after the texels.
+     */
     C3D_Tex glow;
-    bool glowValid;
+    unsigned glowLoaded;  /* mask bytes copied so far; w*h when ready */
+    uint32_t glowUsed;    /* frame last drawn from */
+    uint32_t glowRetry;   /* no piece asked for again before this frame */
+    uint32_t glowDropped; /* frame it stopped being drawn from */
+    bool glowDropping;    /* no longer drawn from: freed two frames on */
     uint64_t requested; /* tick it was asked for, for the log */
 } BuildingPageSlot;
 static BuildingPageSlot sPageSlots[VOXEL_BUILDING_PAGES];
@@ -1039,6 +1050,7 @@ static struct
     int page;
     unsigned first, count;
     uint16_t *buffer;   /* linear, VOXEL_PAGE_SLICE texels */
+    bool glow;          /* the slice is of the page's window mask (bytes) */
     bool copyQueued;    /* the buffer is the source of this frame's copy */
     bool systemCore;    /* the worker runs on the system core */
 } sStream;
@@ -1057,12 +1069,15 @@ static bool sBadPages[VOXEL_MAX_PAGES];
  * the small ones never strand a large gap.
  */
 static void *sPageBlock;
-static void *sGlowBlock;
 static VoxelArena sPageArena;
-static VoxelArenaPiece sPagePieces[VOXEL_BUILDING_PAGES];
+static VoxelArenaPiece sPagePieces[VOXEL_PAGE_PIECES];
 static uint32_t sPageRetry[VOXEL_MAX_PAGES];
 static uint32_t sPageRingRetry[VOXEL_MAX_PAGES];
 static bool sPageNoRoomLogged[VOXEL_MAX_PAGES];
+static bool sGlowNoRoomLogged[VOXEL_MAX_PAGES];
+/* Windows glow (DAY / NIGHT, outdoors, afternoon to dawn): the pages in
+ * view want their masks. */
+static bool sGlowWanted;
 
 /* A page texture over a piece of the arena. Never C3D_TexDelete'd: that
  * would hand the piece to the console's allocator, which never gave it.
@@ -1096,31 +1111,135 @@ static unsigned PageBytes(unsigned w, unsigned th)
     return w * th * sizeof(uint16_t);
 }
 
+/* The stream is reading into this slot, or copying what it read. */
+static bool StreamHolds(const BuildingPageSlot *slot)
+{
+    return sStream.slot == slot && (sStream.state != STREAM_IDLE || sStream.copyQueued);
+}
+
+/* Window masks (BuildingPageSlot.glow) */
+
+static void GlowFree(BuildingPageSlot *slot)
+{
+    if (slot->glow.data != NULL)
+        VoxelArena_Free(&sPageArena, slot->glow.data);
+    memset(&slot->glow, 0, sizeof(slot->glow));
+    slot->glowLoaded = 0;
+    slot->glowDropping = false;
+}
+
+/* No longer drawn from; its piece goes once no queued draw can read it. */
+static void GlowDrop(BuildingPageSlot *slot)
+{
+    if (slot->glow.data == NULL || slot->glowDropping)
+        return;
+    slot->glowDropping = true;
+    slot->glowDropped = sFrame;
+    /* and not asked for again at once: the room was wanted for a page */
+    slot->glowRetry = sFrame + VOXEL_PAGE_RETRY_FRAMES;
+}
+
+/* Frees the dropped masks drawn from two frames ago at the latest, and with
+ * `idle` also those not drawn from in that long. Whether any went. */
+static bool GlowRelease(bool idle)
+{
+    bool freed = false;
+
+    for (unsigned i = 0; i < VOXEL_BUILDING_PAGES; ++i)
+    {
+        BuildingPageSlot *slot = &sPageSlots[i];
+        uint32_t last = slot->glowDropping ? slot->glowDropped : slot->glowUsed;
+
+        if (slot->glow.data == NULL || (!slot->glowDropping && !idle)
+         || sFrame - last < 2u || StreamHolds(slot))
+            continue;
+        GlowFree(slot);
+        freed = true;
+    }
+    return freed;
+}
+
+/* Every other slot's mask dropped, for a page in view that finds no room;
+ * whether there was any (gone within two frames). */
+static bool GlowDropOthers(const BuildingPageSlot *keep)
+{
+    bool any = false;
+
+    for (unsigned i = 0; i < VOXEL_BUILDING_PAGES; ++i)
+        if (&sPageSlots[i] != keep && sPageSlots[i].glow.data != NULL)
+        {
+            GlowDrop(&sPageSlots[i]);
+            any = true;
+        }
+    return any;
+}
+
+/*
+ * A piece for a page's mask, if it has one and windows glow: only from
+ * the room there is - a mask never pushes anything out - and when there is
+ * none, asked for again a while later. Its windows stay unlit meanwhile.
+ */
+static void GlowWant(BuildingPageSlot *slot)
+{
+    unsigned bytes;
+    void *block;
+
+    if (!sGlowWanted)
+    {
+        GlowDrop(slot);
+        return;
+    }
+    if (slot->glow.data != NULL || slot->page < 0 || sFrame < slot->glowRetry
+     || !VoxelBuildings_PageHasGlow((unsigned)slot->page))
+        return;
+    /* as the page's texture: all the rows the GPU is told it has (PageBytes) */
+    bytes = slot->w * slot->tex.height;
+    block = VoxelArena_Alloc(&sPageArena, bytes, bytes < 256u * 1024u);
+    if (block == NULL)
+    {
+        slot->glowRetry = sFrame + VOXEL_PAGE_RETRY_FRAMES;
+        if (slot->page < VOXEL_MAX_PAGES && !sGlowNoRoomLogged[slot->page])
+        {
+            sGlowNoRoomLogged[slot->page] = true;
+            CtrLog_Write(CTR_LOG_VIDEO, "VOXEL: no room yet for building page %d's window mask "
+                         "(%u KiB, largest gap %lu KiB): its windows stay unlit until there is",
+                         slot->page, bytes >> 10,
+                         (unsigned long)(VoxelArena_LargestGap(&sPageArena) >> 10));
+        }
+        return;
+    }
+    PageTexInit(&slot->glow, block, slot->w, slot->tex.height);
+    slot->glow.fmt = GPU_L8;
+    slot->glow.size = bytes;
+    slot->glowLoaded = 0;
+    slot->glowUsed = sFrame;
+    slot->glowDropping = false;
+}
+
+/* The mask still to come in, after all of the page's texels. */
+static bool GlowPending(const BuildingPageSlot *slot)
+{
+    return slot->glow.data != NULL && !slot->glowDropping && slot->loaded == slot->w * slot->h
+        && slot->glowLoaded < slot->w * slot->h;
+}
+
+/* A page's mask to draw its windows with: all of it in and not dropped. */
+static C3D_Tex *GlowTex(BuildingPageSlot *slot)
+{
+    if (slot == NULL || slot->glow.data == NULL || slot->glowDropping
+     || slot->glowLoaded < slot->w * slot->h)
+        return NULL;
+    slot->glowUsed = sFrame;
+    return &slot->glow;
+}
+
 static void PageFree(BuildingPageSlot *slot)
 {
-    memset(&slot->glow, 0, sizeof(slot->glow));
-    slot->glowValid = false;
+    GlowFree(slot);
     VoxelArena_Free(&sPageArena, slot->tex.data);
     memset(&slot->tex, 0, sizeof(slot->tex));
     slot->page = -1;
     slot->loaded = 0;
-}
-
-static bool PageGlowInit(BuildingPageSlot *slot)
-{
-    uintptr_t offset = (uintptr_t)slot->tex.data - (uintptr_t)sPageBlock;
-    unsigned pixels = slot->w * slot->h;
-
-    memset(&slot->glow, 0, sizeof(slot->glow));
-    if (sGlowBlock == NULL || sPageBlock == NULL || offset % 128u != 0
-     || offset >= VOXEL_PAGE_VRAM_BUDGET
-     || pixels > (VOXEL_PAGE_VRAM_BUDGET - offset) / sizeof(uint16_t))
-        return false;
-    PageTexInit(&slot->glow, (uint8_t *)sGlowBlock + offset / sizeof(uint16_t),
-                slot->w, slot->h);
-    slot->glow.fmt = GPU_L8;
-    slot->glow.size = pixels;
-    return true;
 }
 
 /* Could this slot's page be dropped now? Not if needed in the last `keep`
@@ -1129,8 +1248,7 @@ static bool PageGlowInit(BuildingPageSlot *slot)
 static bool PageDroppable(const BuildingPageSlot *slot, uint32_t keep)
 {
     return slot->tex.data != NULL && sFrame - slot->used >= (keep > 2u ? keep : 2u)
-        && !(sStream.state != STREAM_IDLE && sStream.slot == slot)
-        && !(sStream.copyQueued && sStream.slot == slot);
+        && !StreamHolds(slot);
 }
 
 /* Asset reads share the page worker; region roles are resident. */
@@ -1147,24 +1265,12 @@ static struct
     int32_t failed;     /* the last payload that would not read */
 } sAssetAhead;
 
-static bool ReadPageSlice(BuildingPageSlot *slot, unsigned first, unsigned count, uint16_t *dest)
+/* A slice of a page: `count` of its texels from texel `first`, or with
+ * `glow` `count` bytes of its window mask from byte `first`. */
+static bool ReadPageSlice(int page, bool glow, unsigned first, unsigned count, void *dest)
 {
-    if (!VoxelBuildings_ReadPage((unsigned)slot->page, first, count, dest))
-        return false;
-    if (slot->glowValid)
-    {
-        uint8_t *mask = (uint8_t *)slot->glow.data + first;
-
-        if (!VoxelBuildings_ReadGlow((unsigned)slot->page, first, count, mask))
-        {
-            slot->glowValid = false;
-            CtrLog_Write(CTR_LOG_ERROR, "VOXEL: window mask page %d unreadable at %u",
-                         slot->page, first);
-        }
-        else
-            GSPGPU_FlushDataCache(mask, count);
-    }
-    return true;
+    return glow ? VoxelBuildings_ReadGlow((unsigned)page, first, count, dest)
+                : VoxelBuildings_ReadPage((unsigned)page, first, count, dest);
 }
 
 static void StreamWorker(void *arg)
@@ -1177,12 +1283,14 @@ static void StreamWorker(void *arg)
             break;
         if (sStream.state == STREAM_READING)
         {
-            bool ok = ReadPageSlice(sStream.slot, sStream.first, sStream.count, sStream.buffer);
+            bool ok = ReadPageSlice(sStream.page, sStream.glow, sStream.first, sStream.count,
+                                    sStream.buffer);
 
             /* Written from this core's cache: out to memory for the GPU's
              * copy before the render thread is told. */
             if (ok)
-                GSPGPU_FlushDataCache(sStream.buffer, sStream.count * sizeof(uint16_t));
+                GSPGPU_FlushDataCache(sStream.buffer,
+                                      sStream.count * (sStream.glow ? 1u : sizeof(uint16_t)));
             __sync_synchronize();
             sStream.state = ok ? STREAM_DONE : STREAM_FAILED;
         }
@@ -1353,9 +1461,12 @@ static void WantPage(int page, uint32_t keep, bool quiet)
     if ((victim = FindPage(page)) != NULL)
     {
         /* A ring map's page is not being drawn: it keeps its place only
-         * against other ring pages. */
+         * against other ring pages. Its mask is wanted once it is. */
         if (!ring)
+        {
             victim->used = sFrame;
+            GlowWant(victim);
+        }
         else if (victim->used < FramesAgo(keep / 2u))
             victim->used = FramesAgo(keep / 2u);
         return;
@@ -1378,6 +1489,9 @@ static void WantPage(int page, uint32_t keep, bool quiet)
     }
     if (victim == NULL || !VoxelBuildings_PageSize((unsigned)page, &w, &h, &th))
         return;
+    /* The texture is kept for a page of the same size; the mask is the old
+     * page's, and goes (the slot is droppable: not drawn from in two frames). */
+    GlowFree(victim);
     if (victim->tex.data != NULL && (victim->w != w || victim->h != h))
         PageFree(victim);
     /*
@@ -1400,12 +1514,24 @@ static void WantPage(int page, uint32_t keep, bool quiet)
             victim->h = h;
             break;
         }
+        /* Masks give up their room before any page does: first those not
+         * drawn from just now. */
+        if (GlowRelease(true))
+            continue;
         for (unsigned i = 0; i < VOXEL_BUILDING_PAGES; ++i)
         {
             BuildingPageSlot *slot = &sPageSlots[i];
 
             if (slot != victim && PageDroppable(slot, keep) && (drop == NULL || slot->used < drop->used))
                 drop = slot;
+        }
+        /* Then those of the pages in view, for a page in view: they stop
+         * being drawn from now, and the page asks again once they are gone. */
+        if (drop == NULL && !quiet && GlowDropOthers(victim))
+        {
+            victim->page = -1;
+            sPageRetry[page] = sFrame + 3u;
+            return;
         }
         if (drop == NULL && quiet)
         {
@@ -1443,15 +1569,12 @@ static void WantPage(int page, uint32_t keep, bool quiet)
         PageFree(drop);
     }
     victim->page = page;
-    memset(&victim->glow, 0, sizeof(victim->glow));
-    victim->glowValid = VoxelBuildings_PageHasGlow((unsigned)page)
-                     && PageGlowInit(victim);
-    if (VoxelBuildings_PageHasGlow((unsigned)page) && !victim->glowValid)
-        CtrLog_Write(CTR_LOG_ERROR, "VOXEL: window mask page %d allocation failed (%ux%u, linear free=%lu)",
-                     page, w, h, (unsigned long)linearSpaceFree());
     victim->loaded = 0;
     victim->used = ring ? FramesAgo(keep / 2u) : sFrame;
     victim->requested = svcGetSystemTick();
+    victim->glowRetry = 0;
+    if (!ring)
+        GlowWant(victim);
 }
 
 static void MarkBadPage(int page)
@@ -1471,18 +1594,29 @@ static BuildingPageSlot *NextPageSlot(void)
     {
         BuildingPageSlot *slot = &sPageSlots[i];
 
-        if (slot->page >= 0 && slot->tex.data != NULL && slot->loaded < slot->w * slot->h
+        if (slot->page >= 0 && slot->tex.data != NULL
+         && (slot->loaded < slot->w * slot->h || GlowPending(slot))
          && (next == NULL || slot->used > next->used))
             next = slot;
     }
     return next;
 }
 
+/* Its texels first, then its mask: is the next slice of the slot a mask's? */
+static bool SliceIsGlow(const BuildingPageSlot *slot)
+{
+    return slot->loaded == slot->w * slot->h;
+}
+
+/* The next slice's size: texels, or a mask's bytes - as many bytes as a
+ * slice of texels, the buffer's size. */
 static unsigned SliceOf(const BuildingPageSlot *slot)
 {
-    unsigned count = slot->w * slot->h - slot->loaded;
+    bool glow = SliceIsGlow(slot);
+    unsigned count = slot->w * slot->h - (glow ? slot->glowLoaded : slot->loaded);
+    unsigned most = glow ? VOXEL_PAGE_SLICE * sizeof(uint16_t) : VOXEL_PAGE_SLICE;
 
-    return count > VOXEL_PAGE_SLICE ? VOXEL_PAGE_SLICE : count;
+    return count > most ? most : count;
 }
 
 static void QueuePageCopy(BuildingPageSlot *slot, uint16_t *source, unsigned count)
@@ -1493,10 +1627,39 @@ static void QueuePageCopy(BuildingPageSlot *slot, uint16_t *source, unsigned cou
                         count * sizeof(uint16_t), 8);
     slot->loaded += count;
     if (slot->loaded == slot->w * slot->h)
-        CtrLog_Write(CTR_LOG_VIDEO, "VOXEL building page %d loaded (%ux%u) in %.0f ms; windows=%s",
-                     slot->page, slot->w, slot->h, MsSince(slot->requested),
-                     slot->glowValid ? "ready" : VoxelBuildings_PageHasGlow((unsigned)slot->page)
-                                               ? "failed" : "none");
+        CtrLog_Write(CTR_LOG_VIDEO, "VOXEL building page %d loaded (%ux%u) in %.0f ms",
+                     slot->page, slot->w, slot->h, MsSince(slot->requested));
+}
+
+/* A slice of the slot's mask, `count` bytes (whole 8x8 tiles: a page is
+ * whole tiles), to its piece of VRAM. */
+static void QueueGlowCopy(BuildingPageSlot *slot, void *source, unsigned count)
+{
+    GSPGPU_FlushDataCache(source, count);
+    C3D_SyncTextureCopy((u32 *)source, 0, (u32 *)((uint8_t *)slot->glow.data + slot->glowLoaded), 0,
+                        count, 8);
+    slot->glowLoaded += count;
+    if (slot->glowLoaded == slot->w * slot->h)
+        CtrLog_Write(CTR_LOG_VIDEO, "VOXEL building page %d windows loaded (%ux%u L8) in %.0f ms",
+                     slot->page, slot->w, slot->h, MsSince(slot->requested));
+}
+
+/* A mask that would not read: the page keeps its texels, unlit windows. */
+static void GlowBad(BuildingPageSlot *slot)
+{
+    ++sStats.errors;
+    CtrLog_Write(CTR_LOG_ERROR, "VOXEL: building page %d's window mask unreadable", slot->page);
+    GlowDrop(slot);
+    slot->glowRetry = UINT32_MAX;
+}
+
+/* A slice read for the slot, texels or mask: its copy queued. */
+static void QueueSlice(BuildingPageSlot *slot, bool glow, void *source, unsigned count)
+{
+    if (glow)
+        QueueGlowCopy(slot, source, count);
+    else
+        QueuePageCopy(slot, source, count);
 }
 
 /* One step of the page stream per frame: hand a finished slice to the GPU,
@@ -1507,20 +1670,33 @@ static void StreamPages(void)
 
     /* FrameBegin waited for last frame's copy: the buffer is free again. */
     sStream.copyQueued = false;
+    /* The masks dropped two frames ago are drawn from no more. */
+    GlowRelease(false);
     if (sStream.buffer == NULL)
     {
+        bool glow;
+        unsigned count;
+
         /* No buffer of its own: borrow the atlas staging on a frame that is
          * not uploading an atlas, and read here, one slice at a time. */
         if (sAtlasUploadPending || AtlasJobBusy() || sAtlasStaging == NULL
          || (next = NextPageSlot()) == NULL || !CtrVideo_TryVoxelUpload())
             return;
-        if (!ReadPageSlice(next, next->loaded, SliceOf(next), sAtlasStaging))
+        glow = SliceIsGlow(next);
+        count = SliceOf(next);
+        if (!ReadPageSlice(next->page, glow, glow ? next->glowLoaded : next->loaded, count,
+                           sAtlasStaging))
         {
-            MarkBadPage(next->page);
-            next->page = -1;
+            if (glow)
+                GlowBad(next);
+            else
+            {
+                MarkBadPage(next->page);
+                next->page = -1;
+            }
             return;
         }
-        QueuePageCopy(next, sAtlasStaging, SliceOf(next));
+        QueueSlice(next, glow, sAtlasStaging, count);
         sAtlasUploadPending = true;
         return;
     }
@@ -1528,20 +1704,30 @@ static void StreamPages(void)
     if (sStream.state == STREAM_DONE || sStream.state == STREAM_FAILED)
     {
         BuildingPageSlot *slot = sStream.slot;
-        bool current = slot->page == sStream.page && slot->loaded == sStream.first;
+        bool current = slot->page == sStream.page
+                    && (sStream.glow ? GlowPending(slot) && slot->glowLoaded == sStream.first
+                                     : slot->loaded == sStream.first);
 
         __sync_synchronize();
         if (sStream.state == STREAM_FAILED)
         {
-            MarkBadPage(sStream.page);
-            if (current)
-                slot->page = -1;
+            if (sStream.glow)
+            {
+                if (current)
+                    GlowBad(slot);
+            }
+            else
+            {
+                MarkBadPage(sStream.page);
+                if (current)
+                    slot->page = -1;
+            }
         }
         else if (current)
         {
             if (!CtrVideo_TryVoxelUpload())
                 return;
-            QueuePageCopy(slot, sStream.buffer, sStream.count);
+            QueueSlice(slot, sStream.glow, sStream.buffer, sStream.count);
             sStream.copyQueued = true;
         }
         sStream.state = STREAM_IDLE;
@@ -1550,7 +1736,8 @@ static void StreamPages(void)
         return;
     sStream.slot = next;
     sStream.page = next->page;
-    sStream.first = next->loaded;
+    sStream.glow = SliceIsGlow(next);
+    sStream.first = sStream.glow ? next->glowLoaded : next->loaded;
     sStream.count = SliceOf(next);
     if (sStream.thread != NULL)
     {
@@ -1561,7 +1748,8 @@ static void StreamPages(void)
     else
     {
         /* Picked up at the top of the next frame, like the worker's result. */
-        sStream.state = ReadPageSlice(sStream.slot, sStream.first, sStream.count, sStream.buffer)
+        sStream.state = ReadPageSlice(sStream.page, sStream.glow, sStream.first, sStream.count,
+                                      sStream.buffer)
                       ? STREAM_DONE : STREAM_FAILED;
     }
 }
@@ -1805,10 +1993,11 @@ bool CtrVoxel_Init(void)
      * as without buildings.bin. */
     sPageBlock = vramAlloc(VOXEL_PAGE_VRAM_BUDGET);
     VoxelArena_Init(&sPageArena, sPageBlock, sPageBlock != NULL ? VOXEL_PAGE_VRAM_BUDGET : 0,
-                    128, sPagePieces, VOXEL_BUILDING_PAGES);
+                    128, sPagePieces, VOXEL_PAGE_PIECES);
     memset(sPageRetry, 0, sizeof(sPageRetry));
     memset(sPageRingRetry, 0, sizeof(sPageRingRetry));
     memset(sPageNoRoomLogged, 0, sizeof(sPageNoRoomLogged));
+    memset(sGlowNoRoomLogged, 0, sizeof(sGlowNoRoomLogged));
 
     step = "chunk build scratch";
     sScratch = malloc(VOXEL_CHUNK_SCRATCH * sizeof(VoxelVertex));
@@ -1865,10 +2054,6 @@ bool CtrVoxel_Init(void)
     }
     C3D_TexSetFilter(&sTreeAtlas, GPU_NEAREST, GPU_NEAREST);
     C3D_TexSetWrap(&sTreeAtlas, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
-    sGlowBlock = sPageBlock != NULL ? linearAlloc(VOXEL_GLOW_LINEAR_BUDGET) : NULL;
-    if (sPageBlock != NULL && sGlowBlock == NULL)
-        CtrLog_Write(CTR_LOG_ERROR, "VOXEL: window mask pool unavailable (%lu bytes, linear free=%lu)",
-                     (unsigned long)VOXEL_GLOW_LINEAR_BUDGET, (unsigned long)linearSpaceFree());
 #if CTR_VOXEL_LIGHTING
     MakeDapple();
     MakeRays();
@@ -1994,8 +2179,6 @@ void CtrVoxel_Shutdown(void)
     if (sChunkBlock != NULL)
         vramFree(sChunkBlock);
     sPageBlock = sChunkBlock = NULL;
-    linearFree(sGlowBlock);
-    sGlowBlock = NULL;
     sHaveBuildings = false;
     StaticMeshesFree();
     VoxelBuildings_Shutdown();
@@ -4810,6 +4993,10 @@ bool CtrVoxel_Update(void)
         }
     }
 
+    /* The window masks take VRAM only while they light anything (GlowWant):
+     * none with DAY / NIGHT off, indoors, or from dawn to the afternoon. */
+    sGlowWanted = CtrDayNight_Get()->glow > 0.0f;
+
 #if CTR_VOXEL_LIGHTING
     {
         const CtrDayNightSun *sun = CtrDayNight_GetSun();
@@ -5148,7 +5335,7 @@ void CtrVoxel_ParkVram(void)
     }
     sAtlasCapped = false;
     VoxelArena_Init(&sChunkArena, NULL, 0, 16, sChunkPieces, VOXEL_CHUNK_SLOTS + 1);
-    VoxelArena_Init(&sPageArena, NULL, 0, 128, sPagePieces, VOXEL_BUILDING_PAGES);
+    VoxelArena_Init(&sPageArena, NULL, 0, 128, sPagePieces, VOXEL_PAGE_PIECES);
     if (sPageBlock != NULL)
         vramFree(sPageBlock);
     if (sChunkBlock != NULL)
@@ -5175,10 +5362,11 @@ bool CtrVoxel_UnparkVram(void)
                     sChunkPieces, VOXEL_CHUNK_SLOTS + 1);
     sPageBlock = vramAlloc(VOXEL_PAGE_VRAM_BUDGET);
     VoxelArena_Init(&sPageArena, sPageBlock, sPageBlock != NULL ? VOXEL_PAGE_VRAM_BUDGET : 0,
-                    128, sPagePieces, VOXEL_BUILDING_PAGES);
+                    128, sPagePieces, VOXEL_PAGE_PIECES);
     memset(sPageRetry, 0, sizeof(sPageRetry));
     memset(sPageRingRetry, 0, sizeof(sPageRingRetry));
     memset(sPageNoRoomLogged, 0, sizeof(sPageNoRoomLogged));
+    memset(sGlowNoRoomLogged, 0, sizeof(sGlowNoRoomLogged));
     sHaveBuildings = sPageBlock != NULL && sBuildingsLoaded;
     if (sHaveBuildings)
         StreamStart();
@@ -6769,7 +6957,7 @@ static void DrawStatics(const C3D_Mtx *view, bool dapples, bool glowing)
         {
             BuildingPageSlot *page = FindPage(chunk->buildingPage);
 
-            BuildingGlowEnv(page != NULL && page->glowValid ? &page->glow : NULL,
+            BuildingGlowEnv(GlowTex(page),
                             CtrDayNight_Get()->glow);
         }
         for (unsigned k = 0; k < chunk->staticCount; ++k)
@@ -6925,7 +7113,7 @@ void CtrVoxel_Draw(C3D_RenderTarget *target, int eye)
                 {
                     BuildingPageSlot *page = FindPage(chunk->buildingPage);
 
-                    BuildingGlowEnv(page != NULL && page->glowValid ? &page->glow : NULL,
+                    BuildingGlowEnv(GlowTex(page),
                                     CtrDayNight_Get()->glow);
                 }
             }

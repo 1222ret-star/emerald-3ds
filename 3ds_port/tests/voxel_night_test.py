@@ -1,6 +1,7 @@
-"""Validate authored glass masks and the production VXB7/VXB8 page reader."""
+"""Validate authored glass masks, the VXB8 page reader and the masks' VRAM."""
 
 import argparse
+import functools
 from pathlib import Path
 import struct
 import subprocess
@@ -12,6 +13,20 @@ from PIL import Image
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 from voxel_night import window_mask, building_mask, NIGHT_WINDOWS
+
+
+
+@functools.cache
+def sanitize(cc):
+    """Address and undefined-behaviour checks where the host compiler has
+    them: MinGW's has neither."""
+    with tempfile.TemporaryDirectory() as directory:
+        temporary = Path(directory)
+        (temporary / "probe.c").write_text("int main(void) { return 0; }\n", encoding="utf-8")
+        flags = ["-fsanitize=address,undefined"]
+        probe = subprocess.run([cc, *flags, str(temporary / "probe.c"), "-o", str(temporary / "probe")],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return flags if probe.returncode == 0 else []
 
 
 def mask_tests():
@@ -60,16 +75,28 @@ def reader_tests(cc):
 #include <assert.h>
 #include <stdint.h>
 #include "voxel_building.h"
+#include "voxel_relief.h"
 void VoxelGrade_Texels(uint16_t *pixels, unsigned count) { (void)pixels; (void)count; }
+/* What the loader never calls: linked without --gc-sections (MinGW). */
+void VoxelBuilder_Tri(VoxelBuilder *builder, const VoxelVertex *a, const VoxelVertex *b,
+                      const VoxelVertex *c) { (void)builder, (void)a, (void)b, (void)c; }
+void VoxelBuilder_Quad(VoxelBuilder *builder, const VoxelVertex *a, const VoxelVertex *b,
+                       const VoxelVertex *c, const VoxelVertex *d)
+{ (void)builder, (void)a, (void)b, (void)c, (void)d; }
+float VoxelRelief_CellLift(const VoxelMapInstance *inst, int x, int y) { (void)inst, (void)x, (void)y; return 0.0f; }
+float VoxelRelief_CellShift(const VoxelMapInstance *inst, int x, int y) { (void)inst, (void)x, (void)y; return 0.0f; }
+int VoxelWorld_GetMetatileId(int worldX, int worldY) { (void)worldX, (void)worldY; return 0; }
 int main(int argc, char **argv)
 {
-    unsigned width, height;
+    unsigned width, height, rows;
     uint16_t pixels[64];
     uint8_t mask[64];
     assert(argc == 2);
+    if (argv[1][0] == 'r')
+        return VoxelBuildings_Init() ? 1 : 0;
     assert(VoxelBuildings_Init());
-    assert(VoxelBuildings_PageSize(0, &width, &height) && width == 8 && height == 8);
-    assert(!VoxelBuildings_PageSize(1, &width, &height));
+    assert(VoxelBuildings_PageSize(0, &width, &height, &rows) && width == 8 && height == 8 && rows == 8);
+    assert(!VoxelBuildings_PageSize(1, &width, &height, &rows));
     assert(VoxelBuildings_ReadPage(0, 0, 64, pixels));
     assert(pixels[0] == 0xFFFF && pixels[63] == 0xFFFF);
     assert(!VoxelBuildings_ReadPage(0, UINT32_MAX, 2, pixels));
@@ -92,16 +119,17 @@ int main(int argc, char **argv)
 '''
     with tempfile.TemporaryDirectory() as directory:
         temporary = Path(directory)
-        (temporary / "test.c").write_text(source)
+        (temporary / "test.c").write_text(source, encoding="utf-8")
         subprocess.run([
             cc, "-std=c99", "-Wall", "-Wextra", "-Werror", "-ffunction-sections",
-            "-fdata-sections", "-fsanitize=address,undefined", "-DVOXEL_HOST_FILES",
+            "-fdata-sections", *sanitize(cc), "-DVOXEL_HOST_FILES",
             "-DPORT_LOG(...)=((void)0)", '-DVOXEL_BUILDINGS_PATH="buildings.bin"',
             "-I" + str(ROOT / "src/voxel"), "-I" + str(ROOT / "include"),
             str(temporary / "test.c"), str(ROOT / "src/voxel/voxel_building.c"),
             "-Wl,-dead_strip" if sys.platform == "darwin" else "-Wl,--gc-sections",
             "-o", str(temporary / "test"),
         ], check=True)
+        # VXB7, before the u16 decks and the pages of their own rows, is not read
         for magic, flag, truncated in ((b"VXB7", False, False), (b"VXB8", False, False),
                                        (b"VXB8", True, False), (b"VXB8", True, True)):
             header = magic + struct.pack("<HHHHHHIHH", 1, 0, 0, 0, 0, 0, 0, 0, 0)
@@ -110,90 +138,231 @@ int main(int argc, char **argv)
             if flag and not truncated:
                 data += bytes(range(64))
             (temporary / "buildings.bin").write_bytes(header + page + data)
-            subprocess.run([str(temporary / "test"), "1" if flag and not truncated else
-                            "2" if flag else "0"], cwd=temporary, check=True)
+            subprocess.run([str(temporary / "test"), "r" if magic != b"VXB8" else
+                            "1" if flag and not truncated else "2" if flag else "0"],
+                           cwd=temporary, check=True)
 
 
-def glow_pool_tests(cc):
-    text = (ROOT / "src/voxel/ctr_voxel.c").read_text()
-    functions = []
-    for signature in ("static void PageTexInit(", "static bool PageGlowInit("):
-        start = text.index(signature)
-        position = text.index("{", start) + 1
-        depth = 1
-        while depth:
-            depth += (text[position] == "{") - (text[position] == "}")
-            position += 1
-        functions.append(text[start:position])
+def extract(text, start):
+    """The C definition at `start` through its closing brace."""
+    position = text.index("{", start) + 1
+    depth = 1
+    while depth:
+        depth += (text[position] == "{") - (text[position] == "}")
+        position += 1
+    return text[start:position]
+
+
+def glow_arena_tests(cc):
+    """The window masks live in the page arena: taken only while wanted and
+    where they fit, never drawn from half in, freed two frames after the last
+    draw that could read them, and given up before any page is."""
+    text = (ROOT / "src/voxel/ctr_voxel.c").read_text(encoding="utf-8")
+    slot_end = text.index("} BuildingPageSlot;")
+    slot = text[text.rindex("typedef struct", 0, slot_end):slot_end] + "} BuildingPageSlot;"
+    functions = [extract(text, text.index(signature)) for signature in (
+        "static void PageTexInit(", "static bool StreamHolds(", "static void GlowFree(",
+        "static void GlowDrop(", "static bool GlowRelease(", "static bool GlowDropOthers(",
+        "static void GlowWant(", "static bool GlowPending(", "static C3D_Tex *GlowTex(")]
     source = r'''
 #include <assert.h>
-#include <stdint.h>
 #include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
+#include "voxel_arena.h"
 typedef uint16_t u16;
-enum { GPU_RGBA5551, GPU_L8, GPU_TEX_2D, GPU_NEAREST, GPU_CLAMP_TO_EDGE };
+enum { GPU_RGBA5551, GPU_L8, GPU_TEX_2D, GPU_NEAREST, GPU_CLAMP_TO_EDGE, CTR_LOG_VIDEO };
 #define GPU_TEXTURE_MODE(mode) (mode)
-#define VOXEL_PAGE_VRAM_BUDGET (768u * 1024u)
-#define VOXEL_GLOW_LINEAR_BUDGET (VOXEL_PAGE_VRAM_BUDGET / sizeof(uint16_t))
-typedef struct { void *data; unsigned fmt, size, width, height, param, maxLevel; } C3D_Tex;
-typedef struct { C3D_Tex tex, glow; unsigned w, h; } BuildingPageSlot;
-static uint8_t colourArena[VOXEL_PAGE_VRAM_BUDGET] __attribute__((aligned(128)));
-static uint8_t maskArena[VOXEL_GLOW_LINEAR_BUDGET] __attribute__((aligned(64)));
-static void *sPageBlock = colourArena, *sGlowBlock = maskArena;
+typedef struct { void *data; unsigned fmt, size; u16 width, height; unsigned param, maxLevel; } C3D_Tex;
 static void C3D_TexSetFilter(C3D_Tex *tex, int min, int mag) { (void)tex; (void)min; (void)mag; }
 static void C3D_TexSetWrap(C3D_Tex *tex, int first, int second) { (void)tex; (void)first; (void)second; }
+#define VOXEL_BUILDING_PAGES 4
+#define VOXEL_MAX_PAGES 256
+#define VOXEL_PAGE_RETRY_FRAMES 120u
+enum { STREAM_IDLE, STREAM_READING, STREAM_DONE, STREAM_FAILED };
+'''
+    source += slot + r'''
+static BuildingPageSlot sPageSlots[VOXEL_BUILDING_PAGES];
+static struct { BuildingPageSlot *slot; int state; bool copyQueued; } sStream;
+static uint32_t sFrame;
+static bool sGlowWanted, sGlowNoRoomLogged[VOXEL_MAX_PAGES];
+static VoxelArena sPageArena;
+static unsigned sLogs;
+static void CtrLog_Write(int kind, const char *format, ...) { (void)kind; (void)format; ++sLogs; }
+/* page 3 has no glass */
+static bool VoxelBuildings_PageHasGlow(unsigned page) { return page != 3; }
 '''
     source += "\n".join(functions)
     source += r'''
+static uint8_t sMemory[96 * 1024] __attribute__((aligned(128)));
+static VoxelArenaPiece sPieces[VOXEL_BUILDING_PAGES * 2];
+
+/* A page of `w` x `h` texels in its texture of `th` rows, all of them in. */
+static BuildingPageSlot *Page(unsigned index, int page, unsigned w, unsigned h, unsigned th)
+{
+    BuildingPageSlot *slot = &sPageSlots[index];
+    void *block = VoxelArena_Alloc(&sPageArena, w * th * 2u, false);
+
+    assert(block != NULL);
+    slot->page = page;
+    slot->w = w;
+    slot->h = h;
+    PageTexInit(&slot->tex, block, w, th);
+    slot->loaded = w * h;
+    slot->used = sFrame;
+    return slot;
+}
+
 int main(void)
 {
-    BuildingPageSlot slot = {0};
-    for (unsigned width = 8; width <= 512; width *= 2)
-        for (unsigned height = 8; height <= 512; height *= 2)
-        {
-            unsigned bytes = width * height * sizeof(uint16_t);
-            for (unsigned offset = 0; offset + bytes <= sizeof(colourArena); offset += 128)
-            {
-                slot.w = width; slot.h = height;
-                PageTexInit(&slot.tex, colourArena + offset, width, height);
-                assert(PageGlowInit(&slot));
-                assert(slot.glow.data == maskArena + offset / sizeof(uint16_t));
-                assert(slot.glow.size == width * height && slot.glow.fmt == GPU_L8);
-                assert(slot.glow.width == width && slot.glow.height == height);
-                assert(slot.glow.param == GPU_TEX_2D && slot.glow.maxLevel == 0);
-                assert((uintptr_t)slot.glow.data % 64 == 0);
-            }
-        }
-    slot.w = 512; slot.h = 512;
-    slot.tex.data = colourArena + sizeof(colourArena) - 128;
-    assert(!PageGlowInit(&slot) && slot.glow.data == NULL);
-    slot.tex.data = colourArena + 1;
-    assert(!PageGlowInit(&slot) && slot.glow.data == NULL);
-    slot.tex.data = NULL;
-    assert(!PageGlowInit(&slot) && slot.glow.data == NULL);
-    slot.tex.data = colourArena;
-    sGlowBlock = NULL;
-    assert(!PageGlowInit(&slot) && slot.glow.data == NULL);
-    sGlowBlock = maskArena; sPageBlock = NULL;
-    assert(!PageGlowInit(&slot) && slot.glow.data == NULL);
+    BuildingPageSlot *a, *b, *c;
+    void *rest[2] = {NULL, NULL}, *mask;
+
+    VoxelArena_Init(&sPageArena, sMemory, sizeof(sMemory), 128, sPieces, VOXEL_BUILDING_PAGES * 2);
+    for (unsigned i = 0; i < VOXEL_BUILDING_PAGES; ++i)
+        sPageSlots[i].page = -1;
+    sFrame = 10;
+    a = Page(0, 0, 64, 40, 64);          /* 8 KiB of texels */
+
+    /* Not wanted (DAY / NIGHT off, indoors, daytime): nothing taken. */
+    GlowWant(a);
+    assert(a->glow.data == NULL && GlowTex(a) == NULL);
+
+    /* Wanted: an L8 texture as tall as the page's, from the arena. */
+    sGlowWanted = true;
+    GlowWant(a);
+    assert(a->glow.data != NULL && a->glow.fmt == GPU_L8 && a->glow.size == 64u * 64u);
+    assert(a->glow.width == 64 && a->glow.height == 64 && a->glow.param == GPU_TEX_2D);
+    assert((uint8_t *)a->glow.data >= sMemory && (uintptr_t)a->glow.data % 128u == 0);
+    assert(sPageArena.used == 64u * 64u * 2u + 64u * 64u);
+    mask = a->glow.data;
+    GlowWant(a);                          /* once */
+    assert(a->glow.data == mask && sPageArena.count == 2);
+
+    /* Streamed in after the texels; never drawn from half in. */
+    assert(GlowPending(a) && GlowTex(a) == NULL);
+    a->loaded = 0;
+    assert(!GlowPending(a));
+    a->loaded = 64u * 40u;
+    a->glowLoaded = 64u * 40u - 512u;
+    assert(GlowPending(a) && GlowTex(a) == NULL);
+    a->glowLoaded = 64u * 40u;
+    assert(!GlowPending(a));
+    sFrame = 11;
+    assert(GlowTex(a) == &a->glow && a->glowUsed == 11);
+
+    /* A page without glass takes nothing. */
+    b = Page(1, 3, 64, 64, 64);
+    GlowWant(b);
+    assert(b->glow.data == NULL);
+
+    /* Dropped: drawn from no more at once, its piece kept while a queued
+     * draw or the stream may still read it, freed two frames on. */
+    GlowDrop(a);
+    assert(GlowTex(a) == NULL && !GlowPending(a) && a->glow.data != NULL);
+    sFrame = 12;
+    assert(!GlowRelease(false) && a->glow.data != NULL);
+    sFrame = 13;
+    sStream.slot = a;
+    sStream.state = STREAM_READING;
+    assert(!GlowRelease(false) && a->glow.data != NULL);
+    sStream.state = STREAM_IDLE;
+    sStream.copyQueued = true;
+    assert(!GlowRelease(false) && a->glow.data != NULL);
+    sStream.copyQueued = false;
+    assert(GlowRelease(false) && a->glow.data == NULL && a->glowLoaded == 0 && !a->glowDropping);
+    assert(sPageArena.used == 64u * 64u * 2u * 2u);
+
+    /* ...and not asked for again at once: the room was wanted. */
+    GlowWant(a);
+    assert(a->glow.data == NULL);
+    sFrame += VOXEL_PAGE_RETRY_FRAMES;
+    GlowWant(a);
+    assert(a->glow.data != NULL && a->glowLoaded == 0);
+
+    /* For a page: idle masks go first, drawn ones stay. */
+    a->glowLoaded = 64u * 40u;
+    assert(GlowTex(a) == &a->glow);
+    ++sFrame;
+    assert(!GlowRelease(true) && a->glow.data != NULL);
+    sFrame += 2;
+    assert(GlowRelease(true) && a->glow.data == NULL);
+
+    /* No room: no page pushed out, asked for again a while later, the
+     * line written once. */
+    c = Page(2, 2, 128, 128, 128);        /* 32 KiB */
+    for (unsigned i = 0; VoxelArena_LargestGap(&sPageArena) != 0; ++i)
+        assert(i < 2 && (rest[i] = VoxelArena_Alloc(&sPageArena,
+                                                    VoxelArena_LargestGap(&sPageArena), false)));
+    sFrame += VOXEL_PAGE_RETRY_FRAMES;
+    sLogs = 0;
+    GlowWant(c);
+    assert(c->glow.data == NULL && sLogs == 1 && c->glowRetry == sFrame + VOXEL_PAGE_RETRY_FRAMES);
+    assert(c->tex.data != NULL && sPageSlots[0].tex.data != NULL && sPageSlots[1].tex.data != NULL);
+    sFrame += VOXEL_PAGE_RETRY_FRAMES;
+    GlowWant(c);
+    assert(c->glow.data == NULL && sLogs == 1);
+    VoxelArena_Free(&sPageArena, rest[0]);
+    VoxelArena_Free(&sPageArena, rest[1]);
+    sFrame += VOXEL_PAGE_RETRY_FRAMES;
+    GlowWant(c);
+    assert(c->glow.data != NULL && c->glow.size == 128u * 128u);
+
+    /* A page in view finding no room: every other mask stops being drawn. */
+    GlowWant(a);
+    assert(a->glow.data != NULL);
+    assert(GlowDropOthers(c));
+    assert(a->glowDropping && !c->glowDropping && GlowTex(a) == NULL);
+    sFrame += 2;
+    GlowRelease(false);
+    assert(a->glow.data == NULL && c->glow.data != NULL);
+
+    /* No longer wanted (dawn, indoors): dropped like the rest. */
+    sFrame += VOXEL_PAGE_RETRY_FRAMES;
+    GlowWant(a);
+    assert(a->glow.data != NULL);
+    sGlowWanted = false;
+    GlowWant(a);
+    assert(a->glowDropping && GlowTex(a) == NULL);
+    sFrame += 2;
+    GlowRelease(false);
+    assert(a->glow.data == NULL);
+
+    /* Freeing a page frees its mask. */
+    sGlowWanted = true;
+    sFrame += VOXEL_PAGE_RETRY_FRAMES;
+    GlowWant(a);
+    assert(a->glow.data != NULL);
+    GlowFree(a);
+    GlowFree(c);
+    assert(a->glow.data == NULL && c->glow.data == NULL);
+    VoxelArena_Free(&sPageArena, a->tex.data);
+    VoxelArena_Free(&sPageArena, b->tex.data);
+    VoxelArena_Free(&sPageArena, c->tex.data);
+    assert(sPageArena.used == 0 && sPageArena.count == 0);
     return 0;
 }
 '''
     with tempfile.TemporaryDirectory() as directory:
         temporary = Path(directory)
-        (temporary / "pool.c").write_text(source)
-        subprocess.run([cc, "-std=c99", "-Wall", "-Wextra", "-Werror",
-                        "-fsanitize=address,undefined", str(temporary / "pool.c"),
-                        "-o", str(temporary / "pool")], check=True)
-        subprocess.run([str(temporary / "pool")], check=True)
+        (temporary / "glow.c").write_text(source, encoding="utf-8")
+        subprocess.run([cc, "-std=c99", "-Wall", "-Wextra", "-Werror", "-Wno-unused-function",
+                        *sanitize(cc), "-I" + str(ROOT / "src/voxel"),
+                        str(temporary / "glow.c"), str(ROOT / "src/voxel/voxel_arena.c"),
+                        "-o", str(temporary / "glow")], check=True)
+        subprocess.run([str(temporary / "glow")], check=True)
+    # one pool: the masks' pieces are counted in the arena's, and no other
+    # memory is claimed for them
+    assert "VoxelArena_Init(&sPageArena" in text
+    assert text.count("VoxelArena_Init(&sPageArena") == text.count("sPagePieces, VOXEL_PAGE_PIECES)")
     assert "C3D_TexDelete(&slot->glow)" not in text
-    assert "C3D_TexDelete(&sPageSlots[i].glow)" not in text
     assert "C3D_TexInit(&victim->glow" not in text
-    print("PASS window mask pool: bounded mapping, alignment, reuse and allocation fallback")
+    assert "linearAlloc(VOXEL_GLOW" not in text
+    print("PASS window masks: page arena, wanted only while lit, streamed whole, freed after use, pages first")
 
 
 def renderer_tests(cc):
-    text = (ROOT / "src/voxel/ctr_voxel.c").read_text()
+    text = (ROOT / "src/voxel/ctr_voxel.c").read_text(encoding="utf-8")
     functions = []
     for name in ("MoonlightColour", "TerrainTexEnv", "ReleaseGlowUnit", "BuildingGlowEnv", "LampTexEnv"):
         result_type = "uint32_t" if name == "MoonlightColour" else "void"
@@ -313,21 +482,21 @@ int main(void)
 '''
     with tempfile.TemporaryDirectory() as directory:
         temporary = Path(directory)
-        (temporary / "render.c").write_text(source)
+        (temporary / "render.c").write_text(source, encoding="utf-8")
         subprocess.run([cc, "-std=c99", "-Wall", "-Wextra", "-Werror",
-                        "-fsanitize=address,undefined", str(temporary / "render.c"),
+                        *sanitize(cc), str(temporary / "render.c"),
                         "-o", str(temporary / "render")], check=True)
         subprocess.run([str(temporary / "render")], check=True)
-    shader = (ROOT / "src/voxel/voxel.v.pica").read_text()
+    shader = (ROOT / "src/voxel/voxel.v.pica").read_text(encoding="utf-8")
     assert ".out outtc2 texcoord2" in shader and "mov outtc2, intex" in shader
     assert "C3D_TexBind(2, NULL)" not in text
 
 
 def compositor_tests(cc):
-    video = (ROOT / "src/3ds_video.c").read_text()
+    video = (ROOT / "src/3ds_video.c").read_text(encoding="utf-8")
     start = video.index("    if (night)\n", video.index("static void Blend("))
     end = video.index("    /* A semi-transparent sprite", start)
-    cycle = (ROOT / "src/3ds_daynight.c").read_text()
+    cycle = (ROOT / "src/3ds_daynight.c").read_text(encoding="utf-8")
     moon = cycle[cycle.index("CtrDayNightBlend CtrDayNight_Moonlight("):
                  cycle.index("static unsigned SunKey(")]
     source = r'''
@@ -392,9 +561,9 @@ int main(void)
 '''
     with tempfile.TemporaryDirectory() as directory:
         temporary = Path(directory)
-        (temporary / "compositor.c").write_text(source)
+        (temporary / "compositor.c").write_text(source, encoding="utf-8")
         subprocess.run([cc, "-std=c99", "-Wall", "-Wextra", "-Werror",
-                        "-fsanitize=address,undefined", "-I" + str(ROOT / "include"),
+                        *sanitize(cc), "-I" + str(ROOT / "include"),
                         str(temporary / "compositor.c"), "-o", str(temporary / "compositor")],
                        check=True)
         subprocess.run([str(temporary / "compositor")], check=True)
@@ -461,14 +630,14 @@ def main():
     arguments = parser.parse_args()
     mask_tests()
     reader_tests(arguments.cc)
-    glow_pool_tests(arguments.cc)
+    glow_arena_tests(arguments.cc)
     renderer_tests(arguments.cc)
     compositor_tests(arguments.cc)
     if arguments.assets:
         asset_tests(arguments.assets)
     if arguments.tree:
         production_tests(arguments.tree)
-    print("PASS night windows: masks, unchanged art, legacy pages, streaming slices, truncation, bounds")
+    print("PASS night windows: masks, unchanged art, VXB8 pages only, streaming slices, truncation, bounds")
 
 
 if __name__ == "__main__":
