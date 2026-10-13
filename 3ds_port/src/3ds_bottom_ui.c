@@ -4687,16 +4687,43 @@ static void DrawOptionTabs(const ViewState *s)
 {
     static const char *const names[CTR_EXTRAS_PAGES] = {CTR_TEXT("SETTINGS", "AJUSTES", "RÉGLAGES", "OPZIONI"), CTR_TEXT("ENHANCEMENTS", "MEJORAS", "AMÉLIOR.", "MIGLIORIE"), CTR_TEXT("CHEATS", "TRUCOS", "ASTUCES", "TRUCCHI")};
     u8 pages[CTR_EXTRAS_PAGES], count = 0;
-    int capTop, capBottom, cap;
+    int capTop, capBottom, cap, widths[CTR_EXTRAS_PAGES], need = 0, x = 4;
+    bool8 fit = TRUE;
 
     for (unsigned page = 0; page < CTR_EXTRAS_PAGES; ++page)
         if (page == CTR_EXTRAS_OPTIONS || CtrExtras_PageUsed(page))
             pages[count++] = page;
     CapRows(&sSmall, &capTop, &capBottom);
     cap = capBottom - capTop;
+    /*
+     * Equal tabs, as long as every label fits its own; otherwise each takes
+     * what its widest label needs ("ENHANCEMENTS 2/2"), and what is left is
+     * shared out evenly. Measured on the longest label a tab can show, so
+     * the tabs stay put as its screens turn.
+     */
     for (unsigned i = 0; i < count; ++i)
     {
-        int x0 = 4 + i * 232 / count, x1 = 4 + (i + 1) * 232 / count - 4;
+        char label[24];
+
+        if (PageSubs(pages[i]) > 1)
+            snprintf(label, sizeof(label), "%s %u/%u", names[pages[i]], PageSubs(pages[i]), PageSubs(pages[i]));
+        else
+            snprintf(label, sizeof(label), "%s", names[pages[i]]);
+        widths[i] = StrWidth(&sSmall, Ascii(label)) + 6;
+        need += widths[i];
+        if (widths[i] > 232 / count - 4)
+            fit = FALSE;
+    }
+    for (unsigned i = 0; !fit && i < count; ++i)
+    {
+        int share = 232 - 4 * (int)count - need;
+
+        widths[i] += share / (int)count + (i + 1 == count ? share % (int)count : 0);
+    }
+    for (unsigned i = 0; i < count; x += widths[i] + 4, ++i)
+    {
+        int x0 = fit ? 4 + (int)(i * 232 / count) : x;
+        int x1 = fit ? 4 + (int)((i + 1) * 232 / count) - 4 : x + widths[i];
         bool8 chosen = s->optPage == pages[i], pressed = s->pressed == HIT_PAGE + pages[i];
         int line = TAB_Y + 1 + (TAB_H - 4 - cap) / 2 + pressed;
 
