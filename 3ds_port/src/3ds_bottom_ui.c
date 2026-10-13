@@ -1853,6 +1853,12 @@ static bool8 RunSmoothJob(void)
 static float sRedrawLabelMs;
 static uint64_t sRedrawStart;
 static bool8 sRefineLabels;
+/* This redraw has built some of a label. Each redraw builds at least one
+ * slice, however long its plates took: on an Old 3DS the move menu's took
+ * the whole 2 ms before its first label, every label stayed flat, and the
+ * menu was drawn again every frame for as long as it was open (12 ms a
+ * frame, 30 fps). */
+static bool8 sRedrawLabelWorked;
 /* Labels found built, and built or left flat, since the last report. */
 static u32 sLabelHits, sLabelMisses;
 #define REDRAW_LABEL_MS 2.0f
@@ -1922,8 +1928,10 @@ static void DrawSmoothStr(const Font *font, const u8 *str, int x, int y, int k, 
          * into a cache kept beyond the frame, which would keep it flat. */
         bool8 timed = sRedrawLabelMs > 0.0f && sBuildBudget == 0xFF && sDst == sCanvas;
 
+        bool8 late = timed && CtrPlatform_TickMs(CtrPlatform_Ticks() - sRedrawStart) >= sRedrawLabelMs;
+
         ++sLabelMisses;
-        if (timed && CtrPlatform_TickMs(CtrPlatform_Ticks() - sRedrawStart) >= sRedrawLabelMs)
+        if (late && sRedrawLabelWorked)
         {
             DrawFlatStr(font, str, x, y, k, fg, outline);
             sRefineLabels = TRUE;
@@ -1957,8 +1965,10 @@ static void DrawSmoothStr(const Font *font, const u8 *str, int x, int y, int k, 
             uint64_t sliceStart = sSliceStart;
             bool8 done;
 
+            /* Past the redraw's time, still this one slice of its own. */
             sSliceMs = sRedrawLabelMs;
-            sSliceStart = sRedrawStart;
+            sSliceStart = late ? CtrPlatform_Ticks() : sRedrawStart;
+            sRedrawLabelWorked = TRUE;
             done = RunSmoothJob();
             sSliceMs = slice;
             sSliceStart = sliceStart;
@@ -8053,6 +8063,7 @@ void CtrBottom_Frame(void)
         sRedrawStart = start;
         sRedrawLabelMs = REDRAW_LABEL_MS;
         sRefineLabels = FALSE;
+        sRedrawLabelWorked = FALSE;
         Render(&sShown);
         sRedrawLabelMs = 0.0f;
         /* A label left flat: drawn again next frame, built a bit further. */
