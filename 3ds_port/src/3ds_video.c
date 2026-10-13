@@ -290,7 +290,10 @@ static int sSurfaceH = 256;
  * picture ends; below that, behind the box's margins, the scene's last line
  * is carried down (ScenePlaceFrom).
  */
-#define BATTLE_SCENE_BOTTOM (112 + (int)ceilf((CTR_BATTLE_BOX_TOP - (CTR_GAME_HEIGHT - 48)) / CTR_BATTLE_ZOOM))
+#define BATTLE_SCENE_BOX_BOTTOM (112 + (int)ceilf((CTR_BATTLE_BOX_TOP - (CTR_GAME_HEIGHT - 48)) / CTR_BATTLE_ZOOM))
+/* Or the whole picture, with no text box to go behind (BattleSceneBottom). */
+static int BattleSceneBottom(void);
+#define BATTLE_SCENE_BOTTOM BattleSceneBottom()
 static C3D_Tex sSceneTex;
 static C3D_RenderTarget *sScene;
 static bool sSceneFailed;
@@ -6621,6 +6624,12 @@ static void SceneRows(C3D_Tex *tex, float u0, float u1, float row, float rows, f
 
 static void ScenePlaceFrom(C3D_RenderTarget *target, float shift, C3D_Tex *tex, int column, bool sky)
 {
+    /* No scenery to carry on above or below: the VS screen's boxes, composed
+     * down to the picture's end (BattleSceneBottom); the lines above them are
+     * composed apart (BattleSkyCompose). Repeated, their top edges came out
+     * again as stripes. */
+    if (BattleSceneBottom() != BATTLE_SCENE_BOX_BOTTOM)
+        sky = false;
     float ox = sScenePut.ox + shift, oy = sScenePut.oy, scale = sScenePut.scale;
     int width = sScenePut.width, height = sScenePut.height;
     float u0 = column / (float)tex->width, u1 = (column + width) / (float)tex->width;
@@ -6761,6 +6770,27 @@ static void BattleSkyCompose(bool sprites)
     sScissored = scissored;
     RestoreScissor();
     BlendForget();
+}
+
+/*
+ * Where the battle scene is composed down to. With the text box hidden - a
+ * link battle's VS screen, its windows showing only the players' boxes - the
+ * whole picture: carried down from the box's top, the boxes' sides ran on to
+ * the screen's bottom edge and their own bottom edge was never drawn.
+ */
+static int BattleSceneBottom(void)
+{
+    unsigned display = Reg(0), in = Reg(0x48), out = Reg(0x4a);
+    bool shown;
+
+    if (!(display & 0x100))
+        shown = false;
+    else if (!(display & 0xE000))
+        shown = true;
+    else
+        shown = ((display & 0x2000) && (in & 1)) || ((display & 0x4000) && (in & 0x100)) || (out & 1)
+             || ((display & 0x8000) && (out & 0x100));
+    return shown ? BATTLE_SCENE_BOX_BOTTOM : 160;
 }
 
 /*
