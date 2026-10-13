@@ -127,6 +127,7 @@ struct Adapter
     u8 slot;
     u8 connect;
     bool8 owesReply;     // got a frame from the host and hasn't answered yet
+    bool8 partialAck;    // as host: the last "data ready" left a child out
     bool8 linkLost;      // tell the game (0x29) when it next waits
     u8 linkLostReason;
     bool8 hostLeaving;   // host gone: lose the link once its last frames are read
@@ -301,6 +302,7 @@ static void ResetAdapter(bool8 tell)
     sA.linkLost = FALSE;
     sA.idleWaitPending = FALSE;
     sA.lostChildren = 0;
+    sA.partialAck = FALSE;
     ClearBlockChannel();
     UpdateAdvert();
 }
@@ -778,6 +780,10 @@ static void SendDataReady(void)
         if (sA.children[i].active && (sA.children[i].frames.count
          || (!sA.children[i].leaving && (s32)(sA.children[i].sent - sA.children[i].answered) <= MAX_IN_FLIGHT)))
             ack |= 1 << i;
+    sA.partialAck = FALSE;
+    for (i = 0; i < RFU_CHILD_MAX; i++)
+        if (sA.children[i].active && !(ack & (1 << i)))
+            sA.partialAck = TRUE;
     DeliverToGame(ID_DATA_READY_AND_CHANGE_REQ, 1, ack);
 }
 
@@ -889,6 +895,16 @@ static u8 ReceiveData(u32 *out)
     u8 i;
 
     out[0] = 0;
+    /*
+     * A cycle a child was left out of: the game reads none of the frames
+     * received in it (link_rfu_2.c RfuMain2_Parent reads them only when
+     * every child acknowledged) and doesn't clear their "new data" flags, so
+     * the next cycle's frames overwrote them and librfu called it an error
+     * (ERR_RECV_DATA_OVERWRITED: the 4-player link failed as its players
+     * came into the Colosseum one by one). They wait for the next cycle.
+     */
+    if (sA.state == AD_HOST && sA.partialAck)
+        return 0;
     if (sA.state == AD_HOST)
     {
         for (i = 0; i < RFU_CHILD_MAX; i++)
