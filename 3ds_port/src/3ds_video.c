@@ -3195,6 +3195,10 @@ static const CentredFill sCentredFills[CTR_CENTRED_SCREENS] =
     [CTR_CENTRED_POKEDEX] = {.backmost = true},
     [CTR_CENTRED_PARTY] = {.section = true},
     [CTR_CENTRED_PARTY_WHOLE] = {.section = true},
+    /* The trade menu's two layers of stripes, which repeat across. */
+    [CTR_CENTRED_TRADE_MENU] = {.layers = (1u << 2) | (1u << 3), .wrap = true},
+    /* The trade itself on its black. */
+    [CTR_CENTRED_TRADE] = {0},
 };
 
 int CtrPokenavList_Bg(void);
@@ -6639,7 +6643,8 @@ bool CtrVideo_BottomInUse(void) { return sBottomInUse; }
 static bool BottomWhole(unsigned screen)
 {
     return screen == CTR_CENTRED_STORAGE || screen == CTR_CENTRED_SUMMARY || screen == CTR_CENTRED_BAG_WHOLE
-        || screen == CTR_CENTRED_PARTY_WHOLE || screen == CTR_CENTRED_SHOP;
+        || screen == CTR_CENTRED_PARTY_WHOLE || screen == CTR_CENTRED_SHOP || screen == CTR_CENTRED_TRADE_MENU
+        || screen == CTR_CENTRED_TRADE;
 }
 
 /* The screens drawn on the bottom screen at all. */

@@ -297,6 +297,15 @@ void CtrCentredShop_SetVBlankCallback(IntrCallback callback)
     SetCentredCallback(callback, CTR_CENTRED_SHOP);
 }
 
+/* trade.c: the trade menu's VBlank callback; the trade's is the other. */
+IntrCallback CtrTrade_MenuVBlankCallback(void);
+
+void CtrCentredTrade_SetVBlankCallback(IntrCallback callback)
+{
+    SetCentredCallback(callback, callback == CtrTrade_MenuVBlankCallback() ? CTR_CENTRED_TRADE_MENU
+                                                                           : CTR_CENTRED_TRADE);
+}
+
 /* The bag from the field goes left of the column, from anywhere else over the
  * whole bottom screen. */
 void CtrCentredBag_SetVBlankCallback(IntrCallback callback)

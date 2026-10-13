@@ -163,10 +163,12 @@ $(CTR_GBA_STAGE_OBJS): compat/ctr_gba_stage.h $(ROOT)/include/gba/defines.h
 # GBA screens shown centred, margins only from layers that wrap on the GBA
 # (compat/ctr_gba_centred.h).
 CTR_GBA_CENTRED_SRCS := region_map field_region_map main_menu naming_screen wallclock \
-	pokemon_summary_screen starter_choose shop
+	pokemon_summary_screen starter_choose shop link
 CTR_GBA_CENTRED_OBJS := $(patsubst %,build/root/src/%.o,$(CTR_GBA_CENTRED_SRCS))
 $(CTR_GBA_CENTRED_OBJS): FULLCFLAGS += -DCTR_GBA_STAGE -include $(abspath compat/ctr_gba_centred.h)
 $(CTR_GBA_CENTRED_OBJS): compat/ctr_gba_centred.h $(ROOT)/include/gba/defines.h
+# link.c: the communication error screen, whose text windows are as wide as
+# the screen (wider than its layer at 400 pixels: they wrapped and overlapped).
 # Which centred screen each of those is, for how its margins are filled.
 build/root/src/main_menu.o: FULLCFLAGS += -DCTR_CENTRED_MAIN_MENU
 build/root/src/naming_screen.o: FULLCFLAGS += -DCTR_CENTRED_NAMING
@@ -192,6 +194,11 @@ build/root/src/pokemon_storage_system.o: compat/ctr_gba_centred.h $(ROOT)/includ
 build/root/src/item_menu.o: FULLCFLAGS += -DCTR_GBA_STAGE -DCTR_CENTRED_BAG \
 	-include $(abspath compat/ctr_gba_centred.h)
 build/root/src/item_menu.o: compat/ctr_gba_centred.h $(ROOT)/include/gba/defines.h
+# A trade, its menu and the trade itself, laid out for the GBA screen and
+# shown over the whole bottom screen.
+build/root/src/trade.o: FULLCFLAGS += -DCTR_GBA_STAGE -DCTR_CENTRED_TRADE \
+	-include $(abspath compat/ctr_gba_centred.h)
+build/root/src/trade.o: compat/ctr_gba_centred.h $(ROOT)/include/gba/defines.h
 # The party menu as the game draws it, on the bottom screen: left of the
 # column from the field, over the whole screen from a battle, a contest or a
 # facility.

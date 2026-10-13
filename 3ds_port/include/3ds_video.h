@@ -193,6 +193,13 @@ enum
      * and of the people in it (shop.c): the top screen keeps the world.
      */
     CTR_CENTRED_SHOP,
+    /*
+     * A trade, over the whole bottom screen while the top keeps the room it
+     * started from (the Trade Center, the Union Room, the person met):
+     * the menu of both parties on its blue stripes, then the trade itself.
+     */
+    CTR_CENTRED_TRADE_MENU,
+    CTR_CENTRED_TRADE,
     CTR_CENTRED_SCREENS
 };
 void CtrVideo_SetCentred(unsigned screen);

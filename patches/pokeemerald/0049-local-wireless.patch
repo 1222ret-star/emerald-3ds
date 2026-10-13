@@ -191,6 +191,36 @@ index 0000000..f06273c
 +#define LOCAL_KIND_BATTLE_TOWER   6 // Battle Tower link multi battles
 +
 +#endif // GUARD_CONSTANTS_LOCAL_LINK_H
+diff --git a/include/gba/macro.h b/include/gba/macro.h
+index 33150f8..570c400 100644
+--- a/include/gba/macro.h
++++ b/include/gba/macro.h
+@@ -164,6 +164,17 @@ extern void DmaSet(int dmaNum, const void * src, void * dest, u32 control);
+ #define DmaCopy32(dmaNum, src, dest, size) DMA_COPY(dmaNum, src, dest, size, 32)
+ #endif
+ 
++#ifdef PORTABLE
++// One copy of the whole: a port finds an asset's data by its address, and the
++// blocks after the first start inside it, past what is there to be found
++// (the trade scene's platform was drawn from other bytes: noise).
++#define DmaCopyLarge(dmaNum, src, dest, size, block, bit) \
++{                                                         \
++    const void *_src = src;                               \
++    void *_dest = dest;                                   \
++    CpuCopy##bit(_src, _dest, size);                      \
++}
++#else
+ #define DmaCopyLarge(dmaNum, src, dest, size, block, bit) \
+ {                                                         \
+     const void *_src = src;                               \
+@@ -182,6 +193,7 @@ extern void DmaSet(int dmaNum, const void * src, void * dest, u32 control);
+         }                                                 \
+     }                                                     \
+ }
++#endif
+ 
+ #define DmaCopyLarge16(dmaNum, src, dest, size, block) DmaCopyLarge(dmaNum, src, dest, size, block, 16)
+ 
 diff --git a/include/librfu.h b/include/librfu.h
 index 8125d64..eaa00d7 100644
 --- a/include/librfu.h
@@ -572,6 +602,43 @@ index 602a289..fe04605 100644
  #undef tInitialDelayTimer
  #undef tState
  #undef tCurrentBlock_WrapFrom
+diff --git a/src/cable_club.c b/src/cable_club.c
+index 5305326..571f097 100644
+--- a/src/cable_club.c
++++ b/src/cable_club.c
+@@ -1091,6 +1091,12 @@ void CreateTask_EnterCableClubSeat(TaskFunc followupFunc)
+     ScriptContext_Stop();
+ }
+ 
++#ifdef PLATFORM_3DS
++// 3ds_bottom_ui.c: the top screen keeps the world from now until the field
++// is back, while the trade menu and the trade are on the bottom screen.
++void CtrBottom_KeepWorld(void);
++#endif
++
+ static void Task_StartWiredTrade(u8 taskId)
+ {
+     struct Task *task = &gTasks[taskId];
+@@ -1099,6 +1105,9 @@ static void Task_StartWiredTrade(u8 taskId)
+     {
+     case 0:
+         LockPlayerFieldControls();
++#ifdef PLATFORM_3DS
++        CtrBottom_KeepWorld();
++#endif
+         FadeScreen(FADE_TO_BLACK, 0);
+         ClearLinkCallback_2();
+         task->tState++;
+@@ -1132,6 +1141,9 @@ static void Task_StartWirelessTrade(u8 taskId)
+     {
+     case 0:
+         LockPlayerFieldControls();
++#ifdef PLATFORM_3DS
++        CtrBottom_KeepWorld();
++#endif
+         FadeScreen(FADE_TO_BLACK, 0);
+         ClearLinkRfuCallback();
+         tState++;
 diff --git a/src/librfu_intr.c b/src/librfu_intr.c
 index 9e727a6..beab310 100644
 --- a/src/librfu_intr.c
@@ -1059,11 +1126,216 @@ index f464d2f..d4d8321 100644
  /*STUB_FUNC(void rfu_STC_clearAPIVariables())
  STUB_FUNC(void rfu_REQ_PARENT_resumeRetransmitAndChange())
  STUB_FUNC(void rfu_UNI_PARENT_getDRAC_ACK())
+diff --git a/src/trade.c b/src/trade.c
+index 4e57397..c6a758a 100644
+--- a/src/trade.c
++++ b/src/trade.c
+@@ -1448,6 +1448,93 @@ static void SetReadyToTrade(void)
+     }
+ }
+ 
++#ifdef PLATFORM_3DS
++// The trade menu on the 3DS bottom screen (3ds_bottom_ui.c): a tap, in pixels
++// of the GBA screen, goes to whatever waits for input in it (menu.c).
++bool8 CtrMenu_TakeTap(s16 *x, s16 *y);
++bool8 CtrMenu_TakeAck(void);
++s8 CtrMenu_EntryAt(s16 x, s16 y);
++s8 CtrMenu_Choose(s8 entry, bool8 sound);
++
++bool8 CtrTrade_IsOpen(void)
++{
++    return gMain.callback2 == CB2_TradeMenu;
++}
++
++// 3ds_game_full.c: the menu's VBlank callback, to tell it from the trade's.
++IntrCallback CtrTrade_MenuVBlankCallback(void)
++{
++    return VBlankCB_TradeMenu;
++}
++
++// A Pokémon tapped takes the cursor and is chosen, as A chooses it: the
++// player's opens its menu, the partner's its summary. CANCEL too.
++static bool8 CtrTrade_TapOption(void)
++{
++    s16 x, y, left, top;
++    u8 i;
++
++    if (!CtrMenu_TakeTap(&x, &y))
++        return FALSE;
++    for (i = 0; i <= PARTY_SIZE * 2; i++)
++    {
++        if (!sTradeMenu->optionsActive[i])
++            continue;
++        if (i == PARTY_SIZE * 2)
++        {
++            if (x < DISPLAY_WIDTH - 56 || y < DISPLAY_HEIGHT - 24 || y >= DISPLAY_HEIGHT)
++                continue;
++            StartSpriteAnim(&gSprites[sTradeMenu->cursorSpriteId], CURSOR_ANIM_ON_CANCEL);
++            gSprites[sTradeMenu->cursorSpriteId].x = DISPLAY_WIDTH - 16;
++            gSprites[sTradeMenu->cursorSpriteId].y = DISPLAY_HEIGHT;
++        }
++        else
++        {
++            // The cursor's frame: the icon above the name, the name.
++            left = sTradeMonSpriteCoords[i][0] * 8;
++            top = sTradeMonSpriteCoords[i][1] * 8 - 24;
++            if (x < left || x >= left + 56 || y < top || y >= top + 40)
++                continue;
++            StartSpriteAnim(&gSprites[sTradeMenu->cursorSpriteId], CURSOR_ANIM_NORMAL);
++            gSprites[sTradeMenu->cursorSpriteId].x = left + 32;
++            gSprites[sTradeMenu->cursorSpriteId].y = top + 24;
++        }
++        sTradeMenu->cursorPosition = i;
++        return TRUE;
++    }
++    return FALSE;
++}
++
++// A menu or yes/no box of the trade menu: an entry tapped is chosen, a tap
++// away from it is B.
++static s8 CtrTrade_MenuInput(bool8 clearOnChoose)
++{
++    s16 x, y;
++    s8 entry;
++
++    if (!CtrMenu_TakeTap(&x, &y))
++        return clearOnChoose ? Menu_ProcessInputNoWrapClearOnChoose() : Menu_ProcessInputNoWrap();
++    entry = CtrMenu_EntryAt(x, y);
++    if (entry >= 0)
++        CtrMenu_Choose(entry, TRUE);
++    else
++        entry = MENU_B_PRESSED;
++    if (clearOnChoose)
++        EraseYesNoWindow();
++    return entry;
++}
++
++#define CTR_TRADE_A_PRESSED (JOY_NEW(A_BUTTON) || CtrTrade_TapOption())
++#define CTR_TRADE_ACK(keys) (JOY_NEW(keys) || CtrMenu_TakeAck())
++#define CTR_TRADE_MENU_INPUT() CtrTrade_MenuInput(FALSE)
++#define CTR_TRADE_YES_NO_INPUT() CtrTrade_MenuInput(TRUE)
++#else
++#define CTR_TRADE_A_PRESSED JOY_NEW(A_BUTTON)
++#define CTR_TRADE_ACK(keys) JOY_NEW(keys)
++#define CTR_TRADE_MENU_INPUT() Menu_ProcessInputNoWrap()
++#define CTR_TRADE_YES_NO_INPUT() Menu_ProcessInputNoWrapClearOnChoose()
++#endif
++
+ static void CB_ProcessMenuInput(void)
+ {
+     if (JOY_REPEAT(DPAD_UP))
+@@ -1459,7 +1546,7 @@ static void CB_ProcessMenuInput(void)
+     else if (JOY_REPEAT(DPAD_RIGHT))
+         TradeMenuMoveCursor(&sTradeMenu->cursorPosition, 3);
+ 
+-    if (JOY_NEW(A_BUTTON))
++    if (CTR_TRADE_A_PRESSED)
+     {
+         PlaySE(SE_SELECT);
+ 
+@@ -1500,7 +1587,7 @@ static void RedrawChooseAPokemonWindow(void)
+ 
+ static void CB_ProcessSelectedMonInput(void)
+ {
+-    switch (Menu_ProcessInputNoWrap())
++    switch (CTR_TRADE_MENU_INPUT())
+     {
+     case MENU_B_PRESSED:
+         PlaySE(SE_SELECT);
+@@ -1540,7 +1627,7 @@ static void CB_ProcessSelectedMonInput(void)
+ 
+ static void CB_ChooseMonAfterButtonPress(void)
+ {
+-    if (JOY_NEW(A_BUTTON) || JOY_NEW(B_BUTTON))
++    if (CTR_TRADE_ACK(A_BUTTON) || JOY_NEW(B_BUTTON))
+     {
+         PlaySE(SE_SELECT);
+         RedrawChooseAPokemonWindow();
+@@ -1625,7 +1712,7 @@ static bool32 CheckMonsBeforeTrade(void)
+ 
+ static void CB_ProcessConfirmTradeInput(void)
+ {
+-    switch (Menu_ProcessInputNoWrapClearOnChoose())
++    switch (CTR_TRADE_YES_NO_INPUT())
+     {
+     case 0: // YES, Confirm selection
+         if (!CheckMonsBeforeTrade())
+@@ -1660,7 +1747,7 @@ static void RestoreNicknamesCoveredByYesNo(void)
+ 
+ static void CB_ProcessCancelTradeInput(void)
+ {
+-    switch (Menu_ProcessInputNoWrapClearOnChoose())
++    switch (CTR_TRADE_YES_NO_INPUT())
+     {
+     case 0: // YES, Cancel
+         PrintTradeMessage(MSG_WAITING_FOR_FRIEND);
+@@ -1713,7 +1800,7 @@ static void CB_HandleTradeCanceled(void)
+ {
+     int i;
+ 
+-    if (JOY_NEW(A_BUTTON))
++    if (CTR_TRADE_ACK(A_BUTTON))
+     {
+         PlaySE(SE_SELECT);
+         rbox_fill_rectangle(0);
+@@ -1781,7 +1868,7 @@ static void CB_WaitToStartRfuTrade(void)
+ 
+ static void CB_PartnersMonWasInvalid(void)
+ {
+-    if (JOY_NEW(A_BUTTON))
++    if (CTR_TRADE_ACK(A_BUTTON))
+     {
+         SetLinkData(LINKCMD_READY_CANCEL_TRADE, 0);
+         sTradeMenu->callbackId = CB_IDLE;
+@@ -4842,9 +4929,18 @@ static void CB2_FreeTradeAnim(void)
+     UpdatePaletteFade();
+ }
+ 
++#ifdef PLATFORM_3DS
++// 3ds_bottom_ui.c: the top screen keeps the world from now until the field
++// is back, while the trade is on the bottom screen.
++void CtrBottom_KeepWorld(void);
++#endif
++
+ void DoInGameTradeScene(void)
+ {
+     LockPlayerFieldControls();
++#ifdef PLATFORM_3DS
++    CtrBottom_KeepWorld();
++#endif
+     CreateTask(Task_InGameTrade, 10);
+     BeginNormalPaletteFade(PALETTES_ALL, 0, 0, 16, RGB_BLACK);
+ }
 diff --git a/src/union_room.c b/src/union_room.c
-index 0ced727..7c38565 100644
+index 0ced727..0875b35 100644
 --- a/src/union_room.c
 +++ b/src/union_room.c
-@@ -3312,7 +3312,6 @@ void InitUnionRoom(void)
+@@ -1468,6 +1468,12 @@ static u8 GetNewLeaderCandidate(void)
+     return ret;
+ }
+ 
++#ifdef PLATFORM_3DS
++// 3ds_bottom_ui.c: the top screen keeps the world from now until the field
++// is back, while the trade menu and the trade are on the bottom screen.
++void CtrBottom_KeepWorld(void);
++#endif
++
+ static void Task_CreateTradeMenu(u8 taskId)
+ {
+     CB2_StartCreateTradeMenu();
+@@ -1792,6 +1798,11 @@ static void Task_RunScriptAndFadeToActivity(u8 taskId)
+     case 1:
+         if (!ScriptContext_IsEnabled())
+         {
++#ifdef PLATFORM_3DS
++            // The trade menu is on the bottom screen, the top keeps the room.
++            if (gPlayerCurrActivity == ACTIVITY_29)
++                CtrBottom_KeepWorld();
++#endif
+             FadeScreen(FADE_TO_BLACK, 0);
+             data[0] = 2;
+         }
+@@ -3312,7 +3323,6 @@ void InitUnionRoom(void)
      sUnionRoomPlayerName[0] = EOS;
  }
  
@@ -1071,7 +1343,7 @@ index 0ced727..7c38565 100644
  static void Task_InitUnionRoom(u8 taskId)
  {
      s32 i;
-@@ -3381,7 +3380,6 @@ static void Task_InitUnionRoom(u8 taskId)
+@@ -3381,7 +3391,6 @@ static void Task_InitUnionRoom(u8 taskId)
          break;
      }
  }

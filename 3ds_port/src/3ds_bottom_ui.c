@@ -139,6 +139,9 @@ bool8 CtrStorage_IsOpen(void);
 int CtrTitleScreen_RayquazaBg(void);
 void CtrStorage_Tap(s16 x, s16 y);
 void CtrSummary_Tap(s16 x, s16 y);
+/* trade.c: the trade menu is up (on the whole screen); it takes taps as the
+ * party menu does (CtrMenu_PostTap). */
+bool8 CtrTrade_IsOpen(void);
 /* item_menu.c: the bag's touches, in pixels of its picture. */
 enum { BAG_TOUCH_DOWN, BAG_TOUCH_MOVE, BAG_TOUCH_UP, BAG_TOUCH_CANCEL };
 void CtrBag_Touch(u8 phase, s16 x, s16 y);
@@ -7429,9 +7432,12 @@ static u8 ProcessTouch(u8 mode)
         {
             int x = sTouch.lastX - (W - 240) / 2, y = sTouch.lastY - (H - 160) / 2;
 
-            /* Or a summary opened from them, the same way. */
+            /* Or a summary opened from them, the same way. So does the
+             * trade menu. */
             if (!sTouch.dragged && CtrStorage_IsOpen())
                 CtrStorage_Tap(x, y);
+            else if (!sTouch.dragged && CtrTrade_IsOpen())
+                CtrMenu_PostTap(x, y);
             else if (!sTouch.dragged)
                 CtrSummary_Tap(x, y);
             return HIT_NONE;
