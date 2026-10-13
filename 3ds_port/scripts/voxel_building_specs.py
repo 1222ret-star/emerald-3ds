@@ -383,36 +383,32 @@ def kit_house_keep(width):
 
 
 def dewford_house(width):
-    """Dewford's blue-tiled house, 4 and 5 cells wide (64 high). The kit
-    house's rows, but its ridge is drawn 8 and 8:
+    """Dewford's blue tiled houses and Hall, with their own facade art.
 
-        rows  0- 7  the ridge's top, period 8 across
-        rows  8-15  its front: a pale beam over two dark courses
-        rows 16-34  tiles: four 4-row courses and the eave's three rows
-        rows 35-37  fascia
-        rows 38-63  facade: white siding and a wooden post at either end
-
-    Real depth: three collision rows, Z 16-64, as the kit house.
+    Three collision rows give Z 16..64. The ridge cap occupies rows 0..8,
+    its front 9..15, the roof courses 16..34, fascia 35..37 and facade
+    38..63. Clean ridge columns exclude the trees painted into the Hall's
+    northern edge; the map's trees remain separate objects.
     """
-    front_z, back_z = 64, 16
-    overhang = 2
+    front, back, wall = 64, 16, 28
     columns = (8, width - 8)
     roof = HipRoof(
-        "roof", 0, width, zf=front_z + overhang, zb=back_z - overhang, y0=28,
+        "roof", 0, width, zf=front + 2, zb=back - 2, y0=wall,
         fascia=Strip((35, 38), wrap=columns),
         slope=Strip((32, 35), repeat=(16, 32), wrap=columns),
-        teeth=(8, 16), cap=(0, 8), pitch=22.0, run=6,
-        ridge_u=(0, width), end_tile=Tile(12, 8, 20, 16))
-    wall_top = 28
-    post = Tile(8, 38, 16, 64, top=26)
-    siding = Tile(3, 38, 8, 64, top=26)
-    base = Prism(
+        teeth=(9, 16), cap=(0, 9), pitch=PITCH, run=6,
+        ridge_u=(0, width), end_tile=Tile(16, 9, 25, 16),
+        ridge_wrap=(16, width - 8))
+    plaster = Tile(9, 38, 15, 64, top=26)
+    post = Tile(2, 38, 8, 64, top=26)
+    body = Prism(
         "ground_floor", 2, width - 2,
-        [(front_z, 0), (front_z, wall_top), (back_z, wall_top), (back_z, 0)],
-        edges={0: Proj(38, 64), 2: siding}, skip=(1, 3),
-        caps=[Band(0, 26, siding, front_z, front=post, back=post, z1=back_z),
-              Band(26, wall_top + 1, Tile(3, 38, 8, 39, top=wall_top), front_z)])
-    return [base, roof]
+        [(front, 0), (front, wall), (back, wall), (back, 0)],
+        edges={0: Proj(38, 64), 2: plaster}, skip=(1, 3),
+        caps=[Band(0, 26, plaster, front, front=post, back=post, z1=back),
+              Band(26, wall + 1, Tile(9, 38, 15, 39, top=wall), front)])
+    return [body, roof]
+
 
 def gym():
     """The gym of Petalburg, Mauville, Mossdeep and Lavaridge (96 x 80).
@@ -3384,6 +3380,31 @@ SPECS = [
         "exact": OLDALE_HOUSE_EXACT,
     },
     {
+        "name": "dewford_house",
+        "layout": "LAYOUT_DEWFORD_TOWN",
+        "rect": (16, 11, 4, 4),
+        "match_rows": (1, 4),
+        "ground": [0x124],
+        "parts": lambda: dewford_house(64),
+        "exact": kit_house_exact(64),
+    },
+    {
+        "name": "dewford_hall",
+        "layout": "LAYOUT_DEWFORD_TOWN",
+        "rect": (1, 0, 5, 4),
+        "ground": [0x124],
+        "parts": lambda: dewford_house(80),
+        "exact": kit_house_exact(80),
+    },
+    {
+        "name": "dewford_gym_exterior",
+        "layout": "LAYOUT_DEWFORD_TOWN",
+        "rect": (5, 13, 6, 5),
+        "ground": [0x124],
+        "parts": gym,
+        "exact": GYM_EXACT,
+    },
+    {
         "name": "briney_house",
         "layout": "LAYOUT_ROUTE104",
         "rect": (15, 47, 5, 4),
@@ -4414,23 +4435,6 @@ SPECS = [
         "patch_cells": [(3, 0), (3, 1), (3, 2)],
         "parts": lambda: [stall(56, 41.5, ((24, 3, 39, 8), (9, 12, 12, 20), (44, 12, 53, 20)))],
         "exact": [(8, 11, 56, 29)],
-    },
-    {
-        # the other copy has a tree's crown over its ridge
-        "name": "dewford_house_4",
-        "layout": "LAYOUT_DEWFORD_TOWN",
-        "rect": (16, 11, 4, 4),
-        "ground": [0x124],
-        "parts": lambda: dewford_house(64),
-        "exact": kit_house_exact(64),
-    },
-    {
-        "name": "dewford_house_5",
-        "layout": "LAYOUT_DEWFORD_TOWN",
-        "rect": (1, 0, 5, 4),
-        "ground": [0x124],
-        "parts": lambda: dewford_house(80),
-        "exact": kit_house_exact(80),
     },
     {
         "name": "gym",

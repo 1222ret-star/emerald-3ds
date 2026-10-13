@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import fnmatch
+import re
 import shutil
 import struct
 import sys
@@ -34,6 +35,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "builder"))
 from emerald3ds_builder import pak  # noqa: E402
+from emerald3ds_builder.rom import ROM_PROFILES  # noqa: E402
 
 ENGINE_PATTERNS = [
     "boot.txt",
@@ -109,7 +111,18 @@ def cmd_engine(args) -> None:
 
 def cmd_pak(args) -> None:
     abi, _ = compute_abi(args.romfs)
-    sha1 = pak.sha1_of(args.rom) if args.rom else SUPPORTED_ROM_SHA1
+    profile = None
+    if args.game_config is not None:
+        configuration = args.game_config.read_text(encoding="utf-8")
+        language = re.search(r"^\s*#\s*define\s+GAME_LANGUAGE\s+\(?\s*(LANGUAGE_(?:ENGLISH|SPANISH))\s*\)?\s*$",
+                             configuration, re.MULTILINE)
+        if language is None:
+            raise ValueError("Cannot determine the compiled game's supported ROM from its configuration")
+        code = "BPES" if language.group(1) == "LANGUAGE_SPANISH" else "BPEE"
+        profile = bytes.fromhex(ROM_PROFILES[code])
+    sha1 = pak.sha1_of(args.rom) if args.rom else profile or SUPPORTED_ROM_SHA1
+    if profile is not None and sha1 != profile:
+        raise ValueError("The supplied ROM does not match the compiled game's language")
     files = ((rel, path.read_bytes()) for rel, path in data_files(args.romfs))
     info = pak.write_pak(args.out, files, abi, sha1)
     with pak.PakReader(args.out) as reader:
@@ -147,8 +160,10 @@ def main(argv=None) -> None:
         if name in ("engine", "pak", "devdata"):
             p.add_argument("--out", type=Path, required=True)
         if name == "pak":
+            p.add_argument("--game-config", type=Path, default=None,
+                           help="compiled game's global.h; selects and validates its ROM fingerprint")
             p.add_argument("--rom", type=Path, default=None,
-                           help="record this ROM's SHA-1 (default: the supported ROM)")
+                           help="record this ROM's SHA-1 (default: configured game's ROM, otherwise English)")
     args = ap.parse_args(argv)
     {"abi": cmd_abi, "engine": cmd_engine, "pak": cmd_pak,
      "devdata": cmd_devdata, "list": cmd_list}[args.cmd](args)

@@ -40,6 +40,8 @@ bool VoxelBuildings_PageSize(unsigned page, unsigned *width, unsigned *height,
 /* Reads `count` of a page's RGBA5551 texels (PICA order) from texel `first`
  * into `dest`. */
 bool VoxelBuildings_ReadPage(unsigned page, unsigned first, unsigned count, uint16_t *dest);
+bool VoxelBuildings_PageHasGlow(unsigned page);
+bool VoxelBuildings_ReadGlow(unsigned page, unsigned first, unsigned count, uint8_t *dest);
 
 /*
  * Page texels drawn from tiles the game animates (Rustboro's fountain: its

@@ -38,6 +38,8 @@ import glob
 import json
 import math
 import os
+import shlex
+import shutil
 import struct
 import subprocess
 import sys
@@ -55,9 +57,10 @@ DUMP = os.path.join(PORT, "build", "voxel_scene_dump" + (".exe" if os.name == "n
 SOURCES = ["tests/voxel_scene_dump.c"] + ["src/voxel/%s.c" % n for n in (
     "voxel_mesh_builder", "voxel_tree", "voxel_sign", "voxel_building", "voxel_relief",
     "voxel_grade", "voxel_lighting", "voxel_regions")] + ["src/3ds_video_decode.c"]
-# msys2 mingw64 on Windows; elsewhere the host's own (or VOXEL_HOST_CC)
-GCC = os.environ.get("VOXEL_HOST_CC") or (r"C:\msys64\mingw64\bin\gcc.exe" if os.name == "nt"
-                                         else "gcc")
+# msys2 mingw64 on Windows; elsewhere the host's own (or VOXEL_HOST_CC, or
+# the build's HOSTCC)
+GCC = (os.environ.get("VOXEL_HOST_CC") or os.environ.get("HOSTCC")
+       or (r"C:\msys64\mingw64\bin\gcc.exe" if os.name == "nt" else "gcc"))
 SCRATCH = 8192 + 64 * 18          # ctr_voxel.c VOXEL_CHUNK_SCRATCH
 # A map's static models (ctr_voxel.c StaticBuildSlice), in the console's linear
 # memory: what one map may hold at once, with room left for the rest of the
@@ -74,23 +77,28 @@ TREE_DIM = 128
 
 def build_dump():
     srcs = [os.path.join(PORT, s) for s in SOURCES]
-    deps = srcs + glob.glob(os.path.join(PORT, "src", "voxel", "*.h"))
+    deps = srcs + [os.path.abspath(__file__)] + glob.glob(os.path.join(PORT, "src", "voxel", "*.h")) \
+        + glob.glob(os.path.join(PORT, "include", "*.h"))
     if os.path.exists(DUMP) and os.path.getmtime(DUMP) >= max(os.path.getmtime(d) for d in deps):
         return
     hostinc = os.path.join(PORT, "build", "hostinc")
     os.makedirs(hostinc, exist_ok=True)
     with open(os.path.join(hostinc, "port_log.h"), "w") as f:
         f.write("/* host build of the scene dump */\n#ifndef PORT_LOG\n#define PORT_LOG(...) ((void)0)\n#endif\n")
-    cmd = [GCC, "-std=c99", "-O2", "-I" + hostinc, "-Iinclude", "-Isrc/voxel",
+    compiler = shlex.split(GCC, posix=os.name != "nt")
+    compiler = [part.strip('"') for part in compiler]
+    if not compiler or shutil.which(compiler[0]) is None:
+        raise SystemExit("host compiler not found; set HOSTCC to a native C compiler")
+    cmd = compiler + ["-std=c99", "-O2", "-I" + hostinc, "-Iinclude", "-Isrc/voxel",
            "-DPORT_LOG(...)=((void)0)", "-DCTR_VOXEL_LIGHTING=1", "-DVOXEL_HOST_FILES",
            '-DVOXEL_BUILDINGS_PATH="romfs/voxel/buildings.bin"',
            '-DVOXEL_RELIEF_PATH="romfs/voxel/relief.bin"',
            '-DVOXEL_REGIONS_PATH="romfs/voxel/regions.bin"',
            '-DSIGN_MASK_PATH="romfs/voxel/signposts.bin"'] + SOURCES + ["-lm", "-o", DUMP]
     if os.name != "nt":
-        cmd.insert(1, "-D_POSIX_C_SOURCE=200809L")     # clock_gettime under -std=c99
+        cmd.insert(len(compiler), "-D_POSIX_C_SOURCE=200809L")
     env = dict(os.environ)
-    env["PATH"] = os.path.dirname(GCC) + os.pathsep + env.get("PATH", "")
+    env["PATH"] = os.path.dirname(shutil.which(compiler[0])) + os.pathsep + env.get("PATH", "")
     r = subprocess.run(cmd, cwd=PORT, capture_output=True, text=True, env=env)
     if r.returncode:
         raise SystemExit("building the scene dump failed:\n" + r.stderr)
@@ -101,13 +109,19 @@ def build_dump():
 class Buildings:
     """romfs/voxel/buildings.bin as the console reads it."""
 
-    def __init__(self):
-        b = self.blob = open(os.path.join(PORT, "romfs", "voxel", "buildings.bin"), "rb").read()
-        assert b[:4] == b"VXB8"
+    def __init__(self, path=None):
+        with open(path or os.path.join(PORT, "romfs", "voxel", "buildings.bin"), "rb") as source:
+            b = self.blob = source.read()
+        if b[:4] != b"VXB8":
+            raise ValueError("unsupported buildings format: %r" % b[:4])
         (npages, nmodels, npm, nplaces, hbytes, nmasks) = struct.unpack_from("<6H", b, 4)
         nverts, nvar, ndecks = struct.unpack_from("<IHH", b, 16)
         o = 24
-        self.pages = [struct.unpack_from("<HHI", b, o + 8 * i) for i in range(npages)]
+        raw_pages = [struct.unpack_from("<HHI", b, o + 8 * i) for i in range(npages)]
+        self.page_glow = [b[:4] == b"VXB8" and bool(height & 0x8000)
+                          for width, height, offset in raw_pages]
+        self.pages = [(width, height & 0x7FFF if b[:4] == b"VXB8" else height, offset)
+                      for width, height, offset in raw_pages]
         o += npages * 8
         self.models = []
         for i in range(nmodels):
@@ -580,11 +594,11 @@ def page_pairs(bld):
     VOXEL_PAGE_VRAM_BUDGET): two that cannot share it leave one map without
     its buildings, retried for seconds, at the border. [(map, other, KiB)]
     over the arena."""
-    layouts = json.load(open(os.path.join(PORT, "..", "data", "layouts", "layouts.json")))["layouts"]
+    layouts = json.load(open(os.path.join(vb.ROOT, "data", "layouts", "layouts.json")))["layouts"]
     lid_of = {e["id"]: k + 1 for k, e in enumerate(layouts) if e and "id" in e}
     sizes = layout_pages(bld)
     maps = {}
-    for path in glob.glob(os.path.join(PORT, "..", "data", "maps", "*", "map.json")):
+    for path in glob.glob(os.path.join(vb.ROOT, "data", "maps", "*", "map.json")):
         m = json.load(open(path))
         maps[m["id"]] = m
     bad = set()

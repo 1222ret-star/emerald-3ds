@@ -35,6 +35,7 @@ import voxel_cells as vc  # noqa: E402
 import voxel_bridge  # noqa: E402
 import voxel_props  # noqa: E402
 import voxel_relief_fixes  # noqa: E402
+import voxel_night
 
 PORT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 # A placement whose cells keep their own metatile under the model: the
@@ -3355,11 +3356,16 @@ def export(models, path):
     patches), and a page-model record tells where on that page a model's
     drawing went. The console loads the pages of the maps on screen only.
 
+    Drawings with authored glass masks (voxel_night) retain their original
+    pixels and UV: band compaction preserves colour reads, not the mask's
+    source coordinates.
+
       "VXB8", u16 pages, models, pageModels, placements, heightBytes, masks,
       u32 vertices, u16 variants, u16 decks
       pages       x 8:  u16 w, h; u32 file offset of its RGBA5551 texels (h the
                         rows it holds, a multiple of 8; its texture is h
-                        rounded up to a power of two - texture_rows)
+                        rounded up to a power of two - texture_rows; h's bit
+                        15: the page has a glass mask)
       models      x 16: u8 w, h; u16 ground; u32 firstVertex, vertexCount, heights
                         (vertexCount's top bit: a static model)
       pageModels  x 8:  u16 model, page; i16 ox, oy (pixels)
@@ -3375,8 +3381,10 @@ def export(models, path):
       decks x 8 (u16 layout; u8 x, y, top, bottom, elevation, 0: a bridge's
       deck over that cell, where walkers stand - see voxel_bridge.decks),
       padding to 4,
-      vertices x 24 (x, y, z, u, v, shade), then the pages' texels, then
-      the texels that follow the game's tile animations (anim_table).
+      vertices x 24 (x, y, z, u, v, shade), then the pages' texels, each
+      flagged page's followed by its w*h L8 glass-mask bytes in the same
+      PICA order, then the texels that follow the game's tile animations
+      (anim_table).
     """
     layouts_json = json.load(open(os.path.join(vb.ROOT, "data", "layouts", "layouts.json"),
                                   encoding="utf-8"))["layouts"]
@@ -3406,6 +3414,8 @@ def export(models, path):
     # grown bands (Mound.with_ring, own_bands) are mostly never read, and
     # the ring band of a thing without one is empty
     for m in models:
+        if any(voxel_night.building_mask(m.art, m.name)):
+            continue
         before = (m.art.convert("RGBA"), list(m.mesh.tris))
         compact_rows(m)
         compact_islands(m)
@@ -3455,6 +3465,7 @@ def export(models, path):
     for rec in found:
         by_layout.setdefault(rec[0], []).append(rec)
     pages, page_models, placements, texels, anims = [], [], [], [], []
+    glows = []
     for lid in sorted(by_layout):
         recs = by_layout[lid]
         used = sorted({r[1] for r in recs})
@@ -3484,15 +3495,24 @@ def export(models, path):
                              % (recs[0][6], tw, rows, MAX_TEXTURE[0], MAX_TEXTURE[1]))
         page = len(pages)
         tex = bytearray(tw * rows * 2)
+        glow = bytearray(tw * rows)
         for key, img in images:
             ox, oy = spots[key]
             apx = img.load()
+            window_pixels = None
+            if key[0] == "m":
+                model = models[key[1]]
+                full_mask = voxel_night.building_mask(model.art, model.name)
+                window_pixels = Image.frombytes("L", model.art.size, bytes(full_mask)).crop(crops[model.name])
             for y in range(img.size[1]):
                 for x in range(img.size[0]):
                     r_, g_, b_, a_ = apx[x, y]
                     value = (r_ >> 3) << 11 | (g_ >> 3) << 6 | (b_ >> 3) << 1 | int(a_ >= 128)
                     struct.pack_into("<H", tex, 2 * texel_offset(ox + x, oy + y, tw), value)
+                    if window_pixels is not None:
+                        glow[texel_offset(ox + x, oy + y, tw)] = window_pixels.getpixel((x, y))
         pages.append((tw, rows))
+        glows.append(glow if any(glow) else b"")
         texels.append(tex)
         pm_of = {}
         live = []
@@ -3554,10 +3574,11 @@ def export(models, path):
     body += struct.pack("<%df" % len(verts), *verts)
     offset = len(head) + table_size + len(body)
     table = bytearray()
-    for (tw, rows), tex in zip(pages, texels):
-        table += struct.pack("<HHI", tw, rows, offset)
+    for (tw, rows), tex, glow in zip(pages, texels, glows):
+        table += struct.pack("<HHI", tw, rows | (0x8000 if glow else 0), offset)
+        offset += len(glow)
         offset += len(tex)
-    blob = head + table + body + b"".join(texels)
+    blob = head + table + body + b"".join(tex + glow for tex, glow in zip(texels, glows))
     blob += anim_table(anims, len(blob))
     os.makedirs(os.path.dirname(path), exist_ok=True)
     open(path, "wb").write(blob)

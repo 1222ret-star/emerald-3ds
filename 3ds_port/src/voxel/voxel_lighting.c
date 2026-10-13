@@ -50,6 +50,10 @@ static LightSample sSamples[SAMPLE_CACHE_SIZE];
 #define SAMPLE_SETS (SAMPLE_CACHE_SIZE / SAMPLE_WAYS)
 static uint8_t sSampleNext[SAMPLE_SETS];
 static uint32_t sGeneration;
+static uint32_t sSampleGeneration;
+VoxelSun gVoxelSun = {0.85f, 0.55f, 1.0f, 0};
+static float sAmbient = VOXEL_AMBIENT;
+static float sStepInverseX = 4.0f / 0.85f, sStepInverseZ = 4.0f / 0.55f;
 static unsigned sRays;
 
 /*
@@ -163,29 +167,56 @@ static void MapCeilings(void)
     }
 }
 
+static void ResetSamples(void)
+{
+    if (++sSampleGeneration == 0)
+    {
+        memset(sSamples, 0, sizeof(sSamples));
+        sSampleGeneration = 1;
+    }
+}
+
+bool VoxelLighting_SetSun(float dx, float dz, float strength, uint32_t key)
+{
+    if (!isfinite(dx) || !isfinite(dz) || !isfinite(strength)
+     || fabsf(dx) > 1.5f || fabsf(dz) > 1.5f || strength < 0.0f || strength > 1.0f)
+        return false;
+    if (gVoxelSun.dx == dx && gVoxelSun.dz == dz
+     && gVoxelSun.strength == strength && gVoxelSun.key == key)
+        return false;
+    gVoxelSun = (VoxelSun){dx, dz, strength, key};
+    sAmbient = 1.0f - (1.0f - VOXEL_AMBIENT) * strength;
+    sStepInverseX = fabsf(dx) > 0.0001f ? 4.0f / dx : 0.0f;
+    sStepInverseZ = fabsf(dz) > 0.0001f ? 4.0f / dz : 0.0f;
+    ResetSamples();
+    return true;
+}
+
 void VoxelLighting_Reset(void)
 {
     if (++sGeneration == 0)
     {
         memset(sCells, 0, sizeof(sCells));
-        memset(sSamples, 0, sizeof(sSamples));
         memset(sBlocks, 0, sizeof(sBlocks));
         memset(sReach, 0, sizeof(sReach));
         sGeneration = 1;
     }
+    ResetSamples();
     sCeiling = CasterCeiling();
     MapCeilings();
 }
 
 /*
  * The height past which nothing a ray from (x, z) can meet stands: over the
- * maps its reach overlaps (it runs northwest, towards the sun, and a cell's
+ * maps its reach overlaps (it runs towards the sun, and a cell's
  * point may lie a little off the ray's own), never above the global bound.
  */
 static float RayCeiling(float x, float z)
 {
-    float x0 = x - VOXEL_SUN_DX * VOXEL_LIGHT_REACH - 1.0f, x1 = x + 1.0f;
-    float z0 = z - VOXEL_SUN_DZ * VOXEL_LIGHT_REACH - 1.0f, z1 = z + 1.0f;
+    float endX = x - VOXEL_SUN_DX * VOXEL_LIGHT_REACH;
+    float endZ = z - VOXEL_SUN_DZ * VOXEL_LIGHT_REACH;
+    float x0 = fminf(x, endX) - 1.0f, x1 = fmaxf(x, endX) + 1.0f;
+    float z0 = fminf(z, endZ) - 1.0f, z1 = fmaxf(z, endZ) + 1.0f;
     float ceiling = -1000.0f;
     unsigned count = VoxelWorld_InstanceCount();
 
@@ -283,7 +314,7 @@ static float BlockCeiling(int bx, int bz)
                  & (BLOCK_CACHE_SIZE - 1);
     LightBlock *block = &sBlocks[key];
     float ceiling = -1000.0f;
-    int x0 = bx << BLOCK_SHIFT, z0 = bz << BLOCK_SHIFT;
+    int x0 = bx * (1 << BLOCK_SHIFT), z0 = bz * (1 << BLOCK_SHIFT);
     int x1 = x0 + (1 << BLOCK_SHIFT), z1 = z0 + (1 << BLOCK_SHIFT);
     bool onMap = false;
 
@@ -334,6 +365,20 @@ static float BlocksCeiling(int bx0, int bz0, int bx1, int bz1)
 /* The same over (bx0, bz0) to (bx1, bz1), from sReach when it covers them. */
 static float ReachCeiling(int bx0, int bz0, int bx1, int bz1)
 {
+    if (bx0 > bx1)
+    {
+        int first = bx1;
+
+        bx1 = bx0;
+        bx0 = first;
+    }
+    if (bz0 > bz1)
+    {
+        int first = bz1;
+
+        bz1 = bz0;
+        bz0 = first;
+    }
     unsigned key = ((uint32_t)bx1 * 73856093u ^ (uint32_t)bz1 * 19349663u)
                  & (BLOCK_CACHE_SIZE - 1);
     LightBlock *reach = &sReach[key];
@@ -442,6 +487,8 @@ static bool Lit(float x, float y, float z)
      * maps put on screen since the last reset, the map bound alone. */
     bool blocks;
 
+    if (gVoxelSun.strength == 0.0f)
+        return true;
     if (sGeneration == 0)
         VoxelLighting_Reset();
     ceiling = RayCeiling(x, z);
@@ -487,26 +534,27 @@ static bool Lit(float x, float y, float z)
         if ((cell->crownPart >= 0 || cell->surface || cell->sign || cell->mask != NULL)
          && cell->top + cell->base > ry)
             continue;  /* not a box: point by point while it is above the ray */
-        /* Leave the cell. rx and rz only fall, so it is left when either
-         * drops below the cell's corner. The estimate starts a step short
+        /* Leave the cell along the current sun direction. The estimate starts a step short
          * of the crossing and the exact points settle it. */
         {
             /* Reciprocals, not divisions: the guess is a step short of the
              * crossing anyway, far more than their rounding. */
-            float ex = (x - (float)tx) * (1.0f / (VOXEL_SUN_DX * 0.25f));
-            float ez = (z - (float)tz) * (1.0f / (VOXEL_SUN_DZ * 0.25f));
-            int guess = (int)(ex < ez ? ex : ez) - 1;
+            float exitX = (float)tx + (VOXEL_SUN_DX < 0.0f ? 1.0f : 0.0f);
+            float exitZ = (float)tz + (VOXEL_SUN_DZ < 0.0f ? 1.0f : 0.0f);
+            float ex = sStepInverseX != 0.0f ? (x - exitX) * sStepInverseX : 33.0f;
+            float ez = sStepInverseZ != 0.0f ? (z - exitZ) * sStepInverseZ : 33.0f;
+            int guess = (int)fminf(33.0f, fminf(ex, ez)) - 1;
             const float left = (float)tx, top = (float)tz;
 
             if (guess > step)
                 step = guess;
-            /* rx and rz only fall and the first point was inside the cell,
-             * so it is left exactly when either drops under its corner:
+            /* The first point was inside the cell, so either boundary detects
              * Tile(r) != t, without computing Tile. */
             for (; step <= VOXEL_LIGHT_REACH * 4; ++step)
             {
                 RayPoint(x, y, z, step, &rx, &ry, &rz);
-                if (rx < left || rz < top || ry >= ceiling)
+                if (rx < left || rx >= left + 1.0f
+                 || rz < top || rz >= top + 1.0f || ry >= ceiling)
                     break;
             }
         }
@@ -554,7 +602,7 @@ static LightSample *FindSample(float x, float y, float z)
         VoxelLighting_Reset();
     for (unsigned i = 0; i < SAMPLE_WAYS; ++i)
     {
-        if (ways[i].generation == sGeneration)
+        if (ways[i].generation == sSampleGeneration)
         {
             if (ways[i].x == x && ways[i].y == y && ways[i].z == z)
                 return &ways[i];
@@ -572,7 +620,7 @@ static LightSample *FindSample(float x, float y, float z)
     sample->x = x;
     sample->y = y;
     sample->z = z;
-    sample->generation = sGeneration;
+    sample->generation = sSampleGeneration;
     return sample;
 }
 
@@ -582,7 +630,8 @@ static const LightSample *CachedSample(float x, float y, float z)
 
     if (!sample->rayCast)
     {
-        ++sRays;
+        if (gVoxelSun.strength > 0.0f)
+            ++sRays;
         sample->lit = Lit(x, y, z);
         sample->rayCast = true;
     }
@@ -622,18 +671,23 @@ float VoxelLighting_Sample(float x, float y, float z)
 {
     const LightSample *sample = CachedSample(x, y, z);
 
-    return (sample->lit ? 1.0f : VOXEL_AMBIENT) * sample->contact;
+    return (sample->lit ? 1.0f : sAmbient) * sample->contact;
 }
 
 uint32_t VoxelLighting_Hash(int x0, int z0, int x1, int z1)
 {
-    /* Rays now reach northwest. Also include the chunk's own north margin
-     * and neighbours on the opposite boundary for AO and face visibility. */
-    int northReach = VOXEL_LIGHT_REACH > VOXEL_CHUNK_MARGIN_NORTH
-                   ? VOXEL_LIGHT_REACH : VOXEL_CHUNK_MARGIN_NORTH;
-    int hx0 = x0 - VOXEL_LIGHT_REACH - 1, hz0 = z0 - northReach - 1;
-    int hx1 = x1 + 1, hz1 = z1 + 2;
+    /* Include the moving ray's reach and neighbours for AO/face visibility. */
+    int reachX = (int)ceilf(fabsf(VOXEL_SUN_DX) * VOXEL_LIGHT_REACH);
+    int reachZ = (int)ceilf(fabsf(VOXEL_SUN_DZ) * VOXEL_LIGHT_REACH);
+    int northReach = VOXEL_SUN_DZ > 0.0f ? reachZ : 0;
+    int hx0 = x0 - (VOXEL_SUN_DX > 0.0f ? reachX : 0) - 1;
+    int hz0 = z0 - (northReach > VOXEL_CHUNK_MARGIN_NORTH
+                  ? northReach : VOXEL_CHUNK_MARGIN_NORTH) - 1;
+    int hx1 = x1 + (VOXEL_SUN_DX < 0.0f ? reachX : 0) + 1;
+    int hz1 = z1 + (VOXEL_SUN_DZ < 0.0f ? reachZ : 0) + 2;
     uint32_t hash = VoxelWorld_BlockHash(hx0, hz0, hx1, hz1);
+
+    hash = (hash ^ gVoxelSun.key) * 16777619u;
 
     /* Equal tile IDs in a different tileset/layout do not mean equal casters.
      * Relative origins preserve the hash when the entire world is rebased. */
@@ -685,10 +739,10 @@ float VoxelLighting_Face(float nx, float ny, float nz)
         return 1.0f;
     facing = (ny - VOXEL_SUN_DX * nx - VOXEL_SUN_DZ * nz) / length;
     if (facing <= 0.0f)
-        return VOXEL_AMBIENT;
+        return sAmbient;
     if (facing >= 1.0f)
         return 1.0f;
-    return VOXEL_AMBIENT + (1.0f - VOXEL_AMBIENT) * facing;
+    return sAmbient + (1.0f - sAmbient) * facing;
 }
 
 /* Where the builder puts a point it is given: the world, base and lift in. */
@@ -719,7 +773,7 @@ static void LightPolygon(VoxelBuilder *builder, const VoxelVertex *const *v, uns
 {
     VoxelVertex out[4];
     float face = VoxelLighting_Face(nx, ny, nz);
-    bool sunward = face > VOXEL_AMBIENT;
+    bool sunward = face > sAmbient;
     float px, py, pz;
 
     for (unsigned i = 0; i < count; ++i)
@@ -732,11 +786,11 @@ static void LightPolygon(VoxelBuilder *builder, const VoxelVertex *const *v, uns
         WorldPoint(builder, v[i], &px, &py, &pz);
         if (!sunward)
         {
-            out[i].shade *= VOXEL_AMBIENT * CachedContact(px, py, pz);
+            out[i].shade *= sAmbient * CachedContact(px, py, pz);
             continue;
         }
         sample = CachedSample(px, py, pz);
-        out[i].shade *= (sample->lit ? face : VOXEL_AMBIENT) * sample->contact;
+        out[i].shade *= (sample->lit ? face : sAmbient) * sample->contact;
     }
     EmitPolygon(builder, out, count);
 }
@@ -755,15 +809,15 @@ static void LightVertexFaces(VoxelBuilder *builder, const VoxelVertex *const *v)
 
         out[i] = *v[i];
         WorldPoint(builder, v[i], &px, &py, &pz);
-        if (face <= VOXEL_AMBIENT + 0.001f)
+        if (face <= sAmbient + 0.001f)
         {
-            out[i].shade = VOXEL_AMBIENT * CachedContact(px, py, pz);
+            out[i].shade = sAmbient * CachedContact(px, py, pz);
             continue;
         }
         {
             const LightSample *sample = CachedSample(px, py, pz);
 
-            out[i].shade = (sample->lit ? face : VOXEL_AMBIENT) * sample->contact;
+            out[i].shade = (sample->lit ? face : sAmbient) * sample->contact;
         }
     }
     EmitPolygon(builder, out, 4);
@@ -813,7 +867,7 @@ void VoxelLighting_Quad(VoxelBuilder *builder, const VoxelVertex *a,
      * there is no sun left to face. */
     if (builder->lightingConstant >= 0.0f)
     {
-        float light = builder->lightingConstant > VOXEL_AMBIENT + 0.01f
+        float light = builder->lightingConstant > sAmbient + 0.01f
                     ? builder->lightingConstant * face : builder->lightingConstant;
 
         for (unsigned i = 0; i < 4; ++i)
@@ -832,7 +886,7 @@ void VoxelLighting_Quad(VoxelBuilder *builder, const VoxelVertex *a,
 
             WorldPoint(builder, points[i], &px, &py, &pz);
             sample = CachedSample(px, py, pz);
-            corners[i].shade *= (sample->lit ? face : VOXEL_AMBIENT) * sample->contact;
+            corners[i].shade *= (sample->lit ? face : sAmbient) * sample->contact;
         }
         RawQuad(builder, &corners[0], &corners[1], &corners[2], &corners[3]);
         return;

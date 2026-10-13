@@ -6,7 +6,9 @@
  *   "VXB8", u16 pages, models, pageModels, placements, heightBytes, masks,
  *   u32 vertices, u16 variants, u16 decks
  *   pages       x 8:  u16 w, h; u32 file offset of its RGBA5551 texels (h
- *                     the rows it holds, whole tiles of 8: see TakePage)
+ *                     the rows it holds, whole tiles of 8: see TakePage;
+ *                     h's bit 15: w*h L8 window-glass mask bytes follow
+ *                     the texels, in the same PICA order)
  *   models      x 16: u8 w, h; u16 ground; u32 firstVertex, vertexCount, heights
  *                     (vertexCount's top bit: a static model, drawn from its
  *                     own mesh, never copied into a chunk)
@@ -66,6 +68,7 @@ typedef struct
     uint16_t w, h;          /* h: the rows the file holds */
     uint16_t texHeight;     /* the texture's: h rounded up to a power of two */
     uint32_t offset;
+    bool glow;
 } BuildingPage;
 
 typedef struct
@@ -233,13 +236,14 @@ static void FreeCellGrids(void);
  */
 static bool TakePage(unsigned i, const uint8_t *r)
 {
-    unsigned w = U16(r), h = U16(r + 2), th = 8;
+    unsigned w = U16(r), h = U16(r + 2) & 0x7FFFu, th = 8;
 
     while (th < h)
         th <<= 1;
     sPages[i].w = (uint16_t)w;
     sPages[i].h = (uint16_t)h;
     sPages[i].texHeight = (uint16_t)th;
+    sPages[i].glow = (U16(r + 2) & 0x8000u) != 0;
     sPages[i].offset = U32(r + 4);
     return w >= 8 && w <= 1024 && (w & (w - 1)) == 0 && h > 0 && h % 8 == 0 && th <= 1024;
 }
@@ -527,7 +531,8 @@ bool VoxelBuildings_PageSize(unsigned page, unsigned *width, unsigned *height,
 
 bool VoxelBuildings_ReadPage(unsigned page, unsigned first, unsigned count, uint16_t *dest)
 {
-    if (page >= sPageCount || first + count > (unsigned)sPages[page].w * sPages[page].h)
+    if (page >= sPageCount || first > (unsigned)sPages[page].w * sPages[page].h
+     || count > (unsigned)sPages[page].w * sPages[page].h - first)
         return false;
     if (sPageFile == NULL)
     {
@@ -601,6 +606,24 @@ void VoxelBuildings_ComposeAnimRun(unsigned run, const uint8_t *liveTiles, uint1
     }
     /* graded as the page's own texels were when they were read */
     VoxelGrade_Texels(dest, count);
+}
+
+bool VoxelBuildings_PageHasGlow(unsigned page)
+{
+    return page < sPageCount && sPages[page].glow;
+}
+
+bool VoxelBuildings_ReadGlow(unsigned page, unsigned first, unsigned count, uint8_t *dest)
+{
+    unsigned pixels;
+
+    if (!VoxelBuildings_PageHasGlow(page) || sPageFile == NULL)
+        return false;
+    pixels = (unsigned)sPages[page].w * sPages[page].h;
+    if (first > pixels || count > pixels - first)
+        return false;
+    return fseek(sPageFile, (long)(sPages[page].offset + pixels * 2u + first), SEEK_SET) == 0
+        && fread(dest, 1, count, sPageFile) == count;
 }
 
 /* The placements of one layout, which the generator sorted by layout. */

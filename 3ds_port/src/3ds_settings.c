@@ -11,6 +11,7 @@
 #include <string.h>
 #include <3ds.h>
 #include "3ds_platform.h"
+#include "3ds_daynight.h"
 
 #define SETTINGS_FILE "settings.txt"
 
@@ -276,6 +277,8 @@ void CtrSettings_SetInt(const char *key, int value)
 
     if (index < 0 || sExtra[index].value == value)
         return;
+    if (strcmp(key, "clock_speed") == 0)
+        CtrDayNight_Update();
     sExtra[index].value = value;
     Save();
     CtrLog_Write(CTR_LOG_FS, "settings: %s=%d", key, value);

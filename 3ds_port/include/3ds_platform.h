@@ -8,6 +8,8 @@
 #include "3ds_log.h"
 #include "3ds_input.h"
 
+int64_t CtrPlatform_WallSeconds(void);
+
 /* SDK-free boundary: game translation units never include libctru headers. */
 typedef struct {
     float frameMs, workMs, peakWorkMs;
@@ -157,6 +159,8 @@ uint32_t CtrGame_APresses(void);
 uint32_t CtrGame_Checks(void);
 /* The field is on screen (CB2_Overworld), whichever way it is drawn. */
 bool CtrGame_IsOverworld(void);
+bool CtrGame_IsOutdoor(void);
+bool CtrGame_LocalTimeSeconds(unsigned *seconds);
 /* A field effect is storing into VRAM directly (not through a copy). */
 bool CtrGame_FieldRawVram(void);
 bool CtrGame_FieldPoison(void);

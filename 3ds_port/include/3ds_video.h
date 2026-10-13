@@ -201,6 +201,7 @@ enum
      * and of the people in it (shop.c): the top screen keeps the world.
      */
     CTR_CENTRED_SHOP,
+    CTR_CENTRED_POKEDEX_CAUGHT,
     CTR_CENTRED_SCREENS
 };
 void CtrVideo_SetCentred(unsigned screen);

@@ -73,6 +73,7 @@ BACKEND_SRCS += src/3ds_battle_hud.c
 build/bridge/3ds_bottom_ui.o: FULLCFLAGS += -DCTR_APP_VERSION='"$(APP_VERSION)"'
 # The ENHANCEMENTS and CHEATS pages of OPTIONS (include/3ds_extras.h).
 BACKEND_SRCS += src/3ds_extras.c
+BACKEND_SRCS += src/3ds_encounter_tables.c
 # The frame profiler times the engine's own routines through linker wrappers.
 BACKEND_SRCS += src/3ds_prof_wrap.c
 PROF_WRAPPED := RunTasks AnimateSprites BuildOamBuffer ProcessDma3Requests \
@@ -428,7 +429,7 @@ romfs/voxel/trees.rgba5551: scripts/gen_voxel_trees.py \
 # (--verify: the release builder only exports, checked by the CRC of this
 # file). verify-voxel-buildings runs the proofs alone, even when the file is
 # up to date: the release build asks for it.
-romfs/voxel/buildings.bin: scripts/gen_voxel_buildings.py scripts/voxel_building.py \
+romfs/voxel/buildings.bin: scripts/gen_voxel_buildings.py scripts/voxel_building.py scripts/voxel_night.py \
 		scripts/voxel_building_specs.py scripts/voxel_bridge.py scripts/dump_region_art.py scripts/voxel_props.py \
 		scripts/voxel_relief_fixes.py assets/voxel/relief_fixes.json \
 		$(ROOT)/data/layouts/layouts.json
@@ -497,6 +498,7 @@ verify-voxel-trees: build/voxel_tree_test.exe
 	./build/voxel_tree_test.exe
 
 build/voxel_tree_test.exe: tests/voxel_tree_test.c src/voxel/voxel_tree.c \
+		tests/voxel_tileset_fixture.h \
 		src/voxel/voxel_mesh_builder.c src/voxel/voxel_sign.c \
 		src/voxel/voxel_tree.h src/voxel/voxel_mesh_builder.h \
 		src/voxel/voxel_world.h src/voxel/voxel_atlas.h src/voxel/voxel_regions.h \
@@ -517,6 +519,7 @@ verify-voxel-lighting: build/voxel_lighting_on_test.exe build/voxel_lighting_off
 LIGHTING_TEST_SRCS := tests/voxel_lighting_test.c src/voxel/voxel_lighting.c src/voxel/voxel_sign.c \
 	src/voxel/voxel_mesh_builder.c src/voxel/voxel_tree.c src/voxel/voxel_relief.c
 LIGHTING_TEST_HEADERS := src/voxel/voxel_lighting.h src/voxel/voxel_mesh_builder.h \
+	tests/voxel_tileset_fixture.h \
 	src/voxel/voxel_world.h src/voxel/voxel_regions.h src/voxel/voxel_atlas.h src/voxel/voxel_tree.h \
 	src/voxel/voxel_building.h
 build/voxel_lighting_on_test.exe: $(LIGHTING_TEST_SRCS) $(LIGHTING_TEST_HEADERS)
@@ -549,7 +552,7 @@ build/voxel_sign_test.exe: tests/voxel_sign_test.c src/voxel/voxel_sign.c src/vo
 	@mkdir -p $(@D)
 	$(HOSTCC) -std=c99 -O2 -Wall -Wextra -Werror -Iinclude -Isrc/voxel \
 		-DVOXEL_HOST_FILES -DSIGN_MASK_PATH='"romfs/voxel/signposts.bin"' \
-		tests/voxel_sign_test.c src/voxel/voxel_sign.c -o $@
+		tests/voxel_sign_test.c src/voxel/voxel_sign.c -lm -o $@
 
 # The mountains' geometry against what the projection allows, every drawn
 # group (scripts/voxel_relief_check.py), compared with the run before.
@@ -620,6 +623,14 @@ verify: verify-voxel-interior-lint
 verify-voxel-interior-lint:
 	"$(PYTHON)" -B tests/voxel_interior_lint_test.py
 	"$(PYTHON)" -B tests/voxel_interior_parts_test.py
+
+.PHONY: verify-pokedex-capture verify-voxel-dewford
+verify: verify-pokedex-capture verify-voxel-dewford
+verify-pokedex-capture:
+	"$(PYTHON)" -B tests/pokedex_capture_test.py --tree "$(ROOT)" --cc "$(HOSTCC)" --sanitize
+
+verify-voxel-dewford:
+	"$(PYTHON)" -B tests/voxel_dewford_test.py --tree "$(ROOT)"
 
 # What the console builds of every map, checked by the engine's own code over
 # the shipped data (scripts/voxel_engine_view.py check, tests/voxel_scene_dump.c):

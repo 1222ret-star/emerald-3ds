@@ -63,16 +63,17 @@ static BuildRequest sRequests[VOXEL_REQUESTS_MAX];
 static uint8_t sWaitHead[128], sWaitNext[VOXEL_REQUESTS_MAX];
 #define VOXEL_DRAFT_STARVE_FRAMES 90u
 static unsigned sRequestCount, sFrame, starts;
-enum { JOB_GROUND, JOB_TREES, JOB_MODELS, JOB_BORDER, JOB_BORDER_TREES, JOB_SORT, JOB_PACK, JOB_DONE };
+enum { JOB_GROUND, JOB_TREES, JOB_MODELS, JOB_BORDER, JOB_BORDER_TREES, JOB_SORT, JOB_PACK, JOB_STATICS, JOB_DONE };
 #define VOXEL_GROUND_SLICE_CELLS 1
 #define VOXEL_MODEL_SLICE_TRIANGLES 64
+#define VOXEL_STATIC_SLICE_TRIANGLES 64u
 #define VOXEL_SLICE_CAP_MS 5.0f
 static float sPhaseMs[JOB_DONE + 1];
 static uint32_t sPhaseFrame[JOB_DONE + 1];
 static bool sHolesOnly = true, validJob = true;
 static struct { bool active, forView, hole, overdue; unsigned waitIndex; ChunkSite site;
     int phase, row, col, models; unsigned buildingFirst;
-    unsigned sortPage, sortScan, sortWrite, terrainCount, terrainFirst[5]; } sJob;
+    unsigned sortPage, sortScan, sortWrite, terrainCount, terrainFirst[5], staticIndex; } sJob;
 typedef struct { float u, marker; } VoxelVertex;
 static VoxelVertex sScratch[6000];
 static bool JobValid(void) { return validJob; }
@@ -92,7 +93,23 @@ static unsigned sUploadCommands, sRenderReserve;
     for signature in ['static C3D_Tex *AtlasTex(', 'static void FreeAtlasTextures(', 'static unsigned CountAllocatedAtlases(', 'static bool AtlasInView(const VoxelAtlasSlot *slot)\n{', 'static bool AllocateAtlasPage(']:
         source += function(voxel, signature)
     source += r'''
-static struct { unsigned count; } sBuilder;
+static struct { unsigned count, staticCount; } sBuilder;
+typedef struct { unsigned pageModel; bool lit; } VoxelStaticDraw;
+static VoxelStaticDraw sJobStatics[3];
+static bool staticCached[3], staticReady;
+static unsigned staticPrepareCalls;
+static const void *StaticMeshFind(unsigned pageModel, bool lit) {
+    assert(pageModel < 3 && lit == sJobStatics[pageModel].lit);
+    return staticCached[pageModel] ? &sJobStatics[pageModel] : NULL;
+}
+static bool StaticMeshPrepare(unsigned pageModel, bool lit, unsigned triangles) {
+    assert(pageModel < 3 && lit == sJobStatics[pageModel].lit);
+    assert(triangles == VOXEL_STATIC_SLICE_TRIANGLES);
+    ++staticPrepareCalls;
+    if (!staticReady) return false;
+    staticCached[pageModel] = true;
+    return true;
+}
 static bool sHaveBuildings;
 static unsigned cells[2][64];
 static void EmitCells(bool trees, int x0, int y0, int x1, int y1) {
@@ -288,6 +305,32 @@ int main(void) {
     assert(sAtlases[0].generation == 0 && sAtlases[1].generation == 0);
     /* Production phase transitions must cover each cell once and capture
      * terrainCount once, before the first cell of the tree pass. */
+    memset(&sJob, 0, sizeof(sJob));
+    sJob.phase = JOB_PACK;
+    sBuilder.staticCount = 0;
+    JobStep();
+    assert(sJob.phase == JOB_DONE);
+    sJob.phase = JOB_PACK;
+    sBuilder.staticCount = 3;
+    for (unsigned index = 0; index < 3; ++index)
+        sJobStatics[index] = (VoxelStaticDraw){index, index != 1};
+    JobStep();
+    assert(sJob.phase == JOB_STATICS && sJob.staticIndex == 0);
+    JobStep();
+    assert(sJob.phase == JOB_STATICS && sJob.staticIndex == 0 && staticPrepareCalls == 1);
+    staticReady = true;
+    JobStep();
+    assert(sJob.phase == JOB_STATICS && sJob.staticIndex == 1 && staticPrepareCalls == 2);
+    staticCached[1] = true;
+    JobStep();
+    assert(sJob.phase == JOB_STATICS && sJob.staticIndex == 3 && staticPrepareCalls == 4);
+    JobStep();
+    assert(sJob.phase == JOB_DONE && staticPrepareCalls == 4);
+    sJob.phase = JOB_STATICS;
+    sJob.staticIndex = 0;
+    JobStep();
+    assert(sJob.phase == JOB_DONE && sJob.staticIndex == 3 && staticPrepareCalls == 7);
+    sBuilder.staticCount = 0;
     for (unsigned border = 0; border < 2; ++border) {
         memset(&sJob, 0, sizeof(sJob)); memset(cells, 0, sizeof(cells));
         sBuilder.count = 0;

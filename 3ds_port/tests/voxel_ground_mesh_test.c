@@ -7,7 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "global.h"
+#include "voxel_tileset_fixture.h"
 #include "voxel_mesh_builder.h"
 #include "voxel_regions.h"
 #include "voxel_atlas.h"

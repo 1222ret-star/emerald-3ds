@@ -28,6 +28,8 @@
 #include "field_effect.h"
 #include "constants/field_effects.h"
 #include "battle_pyramid.h"
+#include "rtc.h"
+#include "constants/map_types.h"
 #include "sprite.h"
 #include "pokemon.h"
 #include "random.h"
@@ -326,9 +328,8 @@ void CtrCentredParty_SetVBlankCallback(IntrCallback callback)
                                      ? CTR_CENTRED_PARTY : CTR_CENTRED_PARTY_WHOLE);
 }
 
-/* The Pokédex's own callback. The page it shows for a mon just caught puts
- * back the battle's, which stays the battle's. */
 IntrCallback CtrPokedex_VBlankCallback(void);
+bool8 CtrPokedex_IsCaughtMonPage(void);
 
 void CtrCentredPokedex_SetVBlankCallback(IntrCallback callback)
 {
@@ -371,6 +372,7 @@ static void UpdateSet(StageSet *set, IntrCallback callback)
 static void UpdateStage(void)
 {
     IntrCallback callback = gMain.vblankCallback;
+    bool caughtMonPage = CtrPokedex_IsCaughtMonPage();
 
     if (callback)
     {
@@ -393,11 +395,12 @@ static void UpdateStage(void)
                          field ? "on" : "off", (unsigned long)sFrames);
         sFieldTransition = field;
     }
-    CtrVideo_SetStage(sStage.on);
-    CtrVideo_SetStageFaded(sStage.on && sStage.screen == 1);
-    CtrVideo_SetCentred(sCentred.on ? sCentred.screen : CTR_CENTRED_NONE);
-    CtrVideo_SetBattle(sBattle.on);
-    CtrVideo_SetTransition(TransitionOn());
+    CtrVideo_SetStage(!caughtMonPage && sStage.on);
+    CtrVideo_SetStageFaded(!caughtMonPage && sStage.on && sStage.screen == 1);
+    CtrVideo_SetCentred(caughtMonPage ? CTR_CENTRED_POKEDEX_CAUGHT
+                                    : sCentred.on ? sCentred.screen : CTR_CENTRED_NONE);
+    CtrVideo_SetBattle(!caughtMonPage && sBattle.on);
+    CtrVideo_SetTransition(!caughtMonPage && TransitionOn());
 }
 
 /*
@@ -578,6 +581,40 @@ bool CtrGame_IsOverworld(void)
     if (gMapHeader.mapLayout == NULL || gSaveBlock1Ptr == NULL)
         return false;
     return gMain.callback2 == CB2_Overworld || gMain.callback2 == CB2_OverworldBasic;
+}
+
+bool CtrGame_IsOutdoor(void)
+{
+    if (gMapHeader.mapLayout == NULL)
+        return false;
+    switch (gMapHeader.mapType)
+    {
+    case MAP_TYPE_TOWN:
+    case MAP_TYPE_CITY:
+    case MAP_TYPE_ROUTE:
+    case MAP_TYPE_OCEAN_ROUTE:
+        return true;
+    default:
+        return false;
+    }
+}
+
+bool CtrGame_LocalTimeSeconds(unsigned *seconds)
+{
+    struct SiiRtcInfo rtc;
+    struct Time local;
+
+    if (gSaveBlock2Ptr == NULL || gMapHeader.mapLayout == NULL)
+        return false;
+    if (RtcGetErrorStatus() & RTC_ERR_FLAG_MASK)
+        return false;
+    RtcGetInfo(&rtc);
+    RtcCalcTimeDifference(&rtc, &local, &gSaveBlock2Ptr->localTimeOffset);
+    if (local.hours < 0 || local.hours >= 24 || local.minutes < 0 || local.minutes >= 60
+     || local.seconds < 0 || local.seconds >= 60)
+        return false;
+    *seconds = local.hours * 3600u + local.minutes * 60u + local.seconds;
+    return true;
 }
 
 /* The poison step's effect is running (see DrawPoisonVeil in 3ds_video.c). */
