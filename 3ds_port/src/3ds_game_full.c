@@ -36,8 +36,8 @@
 #include "battle_setup.h"
 #include "script_pokemon_util.h"
 #include "constants/species.h"
-#include "librfu.h"
 #endif
+#include "librfu.h"
 #include "port_platform.h"
 #include "port_log.h"
 #include "port_prof.h"
