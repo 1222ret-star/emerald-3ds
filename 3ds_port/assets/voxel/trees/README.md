@@ -23,11 +23,19 @@ base sits at −0.10 cells: the transparent margin sinks into the ground and the
 visible leaves overlap the trunk. The renderer uses alpha test: transparent
 pixels write neither colour nor depth.
 
-They replace the regular metatiles `1D4–1D7`, `1DC–1DF` and `1E4–1E7` of the
-**General** tileset, also in its repeated border. The tops `1C6–1C7` and
+They replace the regular metatiles `1D4–1D7`, `1DC–1DF`, `1E4–1E7`, `1F2–1F3`
+(the lower row of a staggered wood, under the next tree's canopy) and
+`1FC–1FD` (the upper row in front of a fence) of the **General** tileset, also in its repeated border. The tops `1C6–1C7` and
 `1CE–1CF` get their background grass back. Special trees keep their art. Each
 cell emits its own part of the trunk and the crown, so a tree can cross a
 chunk or map boundary without being duplicated or cut when rebuilt.
+
+Where a hedge, a roof, a fence or a ledge of the secondary tileset draws over
+one row of a large tree (Petalburg, Oldale, Lilycove, Route 104's flower
+shop, Route 116, the Safari Zone), that cell is not a tree part: it keeps its
+own ground and model, and the tree's row in the next cell adds the missing
+row of the crown over it, so the crown is not cut in two. Inside the map
+only; across its edge the neighbour's own cells answer.
 
 The small tree works the same way: the trunk cell (`016–017`, forest edge;
 `0C6–0C7`, interior, where the next crown overlaps the trunk; `1F4–1F5`)

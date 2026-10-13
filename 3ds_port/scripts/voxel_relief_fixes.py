@@ -22,6 +22,12 @@ generators and every build, the builder's included, gets the same terrain.
       "layouts": {
         "LAYOUT_ROUTE106": {
           "base": 32,                       the whole map's level, px (optional)
+          "drawn": true,                    the relief is all of the map's terrain:
+                                            it casts as a drawn mountain does
+          "belt": 48,                       px, a multiple of 16: the border stands
+                                            this high, laid as the drawing lays it
+                                            (VoxelRelief_Belt) - a cave carved out of
+                                            the rock, its edges this high all round
           "pieces": ["face_s_07c",          enabled on this map: every cell of
                      {"id": "x", "rect": [x0, y0, x1, y1]}],   that metatile
           "cells": {
@@ -65,6 +71,9 @@ MAGIC = b"VXL4"
 SIDE = 5
 DRAWN = 0x8000
 UNIT2 = 0x4000
+BELT_SHIFT = 10         # bits 10-13 of the height: the belt's courses
+BELT_MAX = 15
+HEIGHT_MASK = 0x03FF
 NO_VARIANT = 0xFFFF
 NONE16 = 0xFFFF
 NO_FACE = 0xFFFE
@@ -73,7 +82,7 @@ NO_FACE = 0xFFFE
 # --- relief.bin, read and written without loss ---------------------------------
 
 def parse(blob):
-    """{"layouts": {index: {w, h, flags, base, cells{(x, y): [25 px]}}},
+    """{"layouts": {index: {w, h, flags, base, belt, cells{(x, y): [25 px]}}},
     "variants": [(layout, metatile, rows[16])],
     "cuts": {(layout, x, y): [variant, foot, ground, wall, sides, flags]}}"""
     if blob[:4] != MAGIC:
@@ -89,8 +98,8 @@ def parse(blob):
         for k in range(n):
             x, y = blob[off + 27 * k], blob[off + 27 * k + 1]
             cells[(x, y)] = [v * unit for v in struct.unpack_from("<25b", blob, off + 27 * k + 2)]
-        layouts[lid] = {"w": w, "h": hh & 0x3FFF, "flags": hh & (DRAWN | UNIT2),
-                        "base": base, "cells": cells}
+        layouts[lid] = {"w": w, "h": hh & HEIGHT_MASK, "flags": hh & (DRAWN | UNIT2),
+                        "base": base, "belt": (hh >> BELT_SHIFT) & BELT_MAX, "cells": cells}
     variants, cuts = [], {}
     if blob[-4:] == b"CUTS":
         at = struct.unpack_from("<I", blob, len(blob) - 8)[0]
@@ -111,7 +120,7 @@ def pack(relief):
     tables = []
     for lid in sorted(relief["layouts"]):
         t = relief["layouts"][lid]
-        if not t["cells"] and not t["base"]:
+        if not t["cells"] and not t["base"] and not t.get("belt"):
             continue
         flags = t["flags"]
         values = [v for g in t["cells"].values() for v in g]
@@ -124,7 +133,8 @@ def pack(relief):
     idx, body = bytearray(), bytearray()
     for lid, t, flags, unit in tables:
         cells = sorted(t["cells"].items(), key=lambda kv: (kv[0][1], kv[0][0]))
-        idx += struct.pack("<HHHHIh", lid, len(cells), t["w"], t["h"] | flags,
+        idx += struct.pack("<HHHHIh", lid, len(cells), t["w"],
+                           t["h"] | flags | (t.get("belt", 0) << BELT_SHIFT),
                            offset + len(body), int(t["base"]))
         for (x, y), g in cells:
             body += struct.pack("<BB", x, y)
@@ -213,6 +223,13 @@ def apply(relief, fixes, report=None):
                                             "flags": 0, "base": 0, "cells": {}}
         if "base" in spec:
             t["base"] = int(spec["base"])
+        if spec.get("drawn"):
+            t["flags"] |= DRAWN
+        if "belt" in spec:
+            courses = int(spec["belt"]) // 16
+            if courses * 16 != int(spec["belt"]) or not 0 <= courses <= BELT_MAX:
+                raise ValueError("%s: belt %r is not 0-%d levels of 16 px" % (name, spec["belt"], BELT_MAX))
+            t["belt"] = courses
         enabled = _enabled(spec, pieces)
         cells_fix = spec.get("cells", {})
         changed = 0
@@ -279,9 +296,10 @@ def apply(relief, fixes, report=None):
                         if (x, y) not in t["cells"]:
                             t["cells"][(x, y)] = [lvl] * 25
                 changed += 1
-        if report is not None and (changed or "base" in spec):
-            report.append("%s: %d cell(s)%s" % (name, changed,
-                                                ", base %+d px" % t["base"] if "base" in spec else ""))
+        if report is not None and (changed or "base" in spec or "belt" in spec):
+            report.append("%s: %d cell(s)%s%s" % (name, changed,
+                                                  ", base %+d px" % t["base"] if "base" in spec else "",
+                                                  ", belt %d px" % (16 * t["belt"]) if "belt" in spec else ""))
     return relief
 
 

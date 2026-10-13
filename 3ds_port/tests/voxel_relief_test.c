@@ -8,7 +8,12 @@
  *
  * argv[2] is Route 116's, a map read off its drawing: cell (60, 2) is on the
  * mountain's top terrace, level, more than three levels up, and as far south
- * as it is high, like every point of the drawing. */
+ * as it is high, like every point of the drawing.
+ *
+ * argv[3] is Rusturf Tunnel's, a cave carved out of the rock by hand
+ * (relief_fixes.json): its belt stands three courses, as high as the rock
+ * at its edges (cell (0, 0)); the corridor (5, 4) is a level up from the
+ * west room's floor (4, 8), which is the base and not lifted. */
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
@@ -29,7 +34,7 @@ int main(int argc, char **argv)
     VoxelMapInstance inst = {0};
     const int16_t *g;
 
-    assert(argc == 3);
+    assert(argc == 4);
     inst.layoutId = atoi(argv[1]);
     assert(VoxelRelief_Init());
     g = VoxelRelief_Cell(&inst, 3, 7);
@@ -56,7 +61,17 @@ int main(int argc, char **argv)
     assert(VoxelRelief_DrawnTop(&inst) >= g[0] / 16.0f);
     assert(fabsf(VoxelRelief_SurfaceAt(60.5f, 2.5f + g[0] / 16.0f) - g[0] / 16.0f) < 0.1f);
     sOnly = NULL;
+    assert(VoxelRelief_Belt(&inst) == 0);
+    /* the carved cave and its belt */
+    inst.layoutId = atoi(argv[3]);
+    assert(VoxelRelief_IsDrawn(&inst));
+    assert(VoxelRelief_Belt(&inst) == 3);
+    g = VoxelRelief_Cell(&inst, 0, 0);
+    assert(g != NULL && !VoxelRelief_IsSlope(g) && g[0] == 16 * 3);
+    g = VoxelRelief_Cell(&inst, 5, 4);
+    assert(g != NULL && !VoxelRelief_IsSlope(g) && g[0] == 16);
+    assert(VoxelRelief_Cell(&inst, 4, 8) == NULL);
     VoxelRelief_Shutdown();
-    puts("PASS relief: ledge lip and a drawn terrace from the ROMFS file, searched in row order");
+    puts("PASS relief: ledge lip, a drawn terrace and a carved cave's belt from the ROMFS file, searched in row order");
     return 0;
 }

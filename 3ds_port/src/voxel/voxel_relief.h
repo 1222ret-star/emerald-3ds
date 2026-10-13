@@ -42,6 +42,15 @@ const int16_t *VoxelRelief_Cell(const VoxelMapInstance *inst, int x, int y);
  * of rock is a relief cell, and no structure stands on one. */
 bool VoxelRelief_IsDrawn(const VoxelMapInstance *inst);
 
+/*
+ * The courses the border round a map stands, laid as its drawing lays it
+ * (each block of it at (u, h, v + h), h the belt's height): a cave carved
+ * out of the rock, whose edges stand at that height all round, goes on into
+ * the rock past them without a seam. 0 for the border as every other map has
+ * it (VoxelMesh_EmitBorder).
+ */
+unsigned VoxelRelief_Belt(const VoxelMapInstance *inst);
+
 /* True when the cell's lattice is not level: rock or stairs, drawn by the
  * relief itself and not by any structure. */
 bool VoxelRelief_IsSlope(const int16_t *grid);

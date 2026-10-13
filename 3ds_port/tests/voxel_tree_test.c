@@ -211,6 +211,25 @@ int main(void)
     assert(parts.vertices[6].z < parts.vertices[8].z && parts.vertices[6].y > parts.vertices[8].y);
     assert(parts.vertices[6].z < 1 && fabsf(parts.vertices[6].y - 1.432089f) < 0.0001f);
 
-    puts("PASS voxel trees: ground/crown, chunk seams, map origins, border, tileset scope, grass fringes, small trees");
+    /* A staggered wood's lower row is a whole tree: trunks and both rows. */
+    assert(VoxelTree_Part(NULL, 0x1F3) == 2 && VoxelTree_Part(NULL, 0x1F2) == 3);
+    assert(VoxelTree_Part(NULL, 0x1FC) == 0 && VoxelTree_Part(NULL, 0x1FD) == 1);
+    sTiles[0] = 0x1D4; sTiles[1] = 0x1D5;
+    sTiles[2] = 0x1F3; sTiles[3] = 0x1F2;
+    Init(&parts, sParts);
+    VoxelTree_EmitInstance(&parts, &sMap, -3, -5, -1, -3);
+    assert(parts.count == 4 * 2 * 6 && parts.dropped == 0);
+
+    /* A roof over the lower row: the crown keeps that row, its ground does
+     * not become a trunk. */
+    sTiles[2] = 0x008; sTiles[3] = 0x009;
+    Init(&parts, sParts);
+    VoxelTree_EmitInstance(&parts, &sMap, -3, -5, -1, -3);
+    assert(parts.count == (2 * 2 + 2) * 6 && parts.dropped == 0);
+    for (unsigned i = 0; i < parts.count; ++i)
+        if (parts.vertices[i].y == 0 && parts.vertices[i].u >= 32.0f / VOXEL_TREE_TEXTURE_DIM)
+            assert(parts.vertices[i].z <= 8); /* trunk ground only in the tree's row */
+
+    puts("PASS voxel trees: ground/crown, chunk seams, map origins, border, tileset scope, grass fringes, small trees, staggered and covered rows");
     return 0;
 }

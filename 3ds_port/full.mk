@@ -558,7 +558,7 @@ check-voxel-relief:
 .PHONY: verify-voxel-relief
 verify: verify-voxel-relief
 verify-voxel-relief: build/voxel_relief_test.exe romfs/voxel/relief.bin
-	./build/voxel_relief_test.exe $$("$(PYTHON)" -c "import json; l = json.load(open('$(ROOT)/data/layouts/layouts.json'))['layouts']; ids = [e['id'] for e in l]; print(ids.index('LAYOUT_ROUTE101') + 1, ids.index('LAYOUT_ROUTE116') + 1)")
+	./build/voxel_relief_test.exe $$("$(PYTHON)" -c "import json; l = json.load(open('$(ROOT)/data/layouts/layouts.json'))['layouts']; ids = [e['id'] for e in l]; print(ids.index('LAYOUT_ROUTE101') + 1, ids.index('LAYOUT_ROUTE116') + 1, ids.index('LAYOUT_RUSTURF_TUNNEL') + 1)")
 
 build/voxel_relief_test.exe: tests/voxel_relief_test.c src/voxel/voxel_relief.c src/voxel/voxel_relief.h
 	@mkdir -p $(@D)

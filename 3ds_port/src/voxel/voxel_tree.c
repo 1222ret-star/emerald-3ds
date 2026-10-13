@@ -33,6 +33,13 @@ int VoxelTree_Part(const void *secondaryTileset, int metatileId)
     /* A large tree's lower row under a small tree's canopy top. */
     case 0x1EC: return 2;
     case 0x1ED: return 3;
+    /* A lower row under the canopy top of a tree one column to the side, as
+     * in staggered woods: 1F3 is the left half, 1F2 the right. */
+    case 0x1F3: return 2;
+    case 0x1F2: return 3;
+    /* An upper row in front of a fence or rock (the Safari Zone's). */
+    case 0x1FC: return 0;
+    case 0x1FD: return 1;
     /* Small trees: the edge of a wood, and inside it where the next crown
      * overlaps the trunk. 1F4-1F5 also carry a neighbour's leaves. */
     case 0x016: case 0x017: case 0x0C6: case 0x0C7:
@@ -92,14 +99,16 @@ static void EmitSmallCell(VoxelBuilder *builder, int x, int y, bool dewford)
     builder->rounded = false;
 }
 
-static void EmitCell(VoxelBuilder *builder, int x, int y, int part, int metatileId)
+/* One row of a large crown: the card that stands over the cell (x, y) as
+ * the half of row `row`, column `col`, of a tree whose trunk row is
+ * y - row + 1. */
+static void EmitCrownCard(VoxelBuilder *builder, int x, int y, int col, int row)
 {
-    int col = part & 1, row = part >> 1;
     float wx = (float)x, wz = (float)y;
-    float u0 = (32.0f + col * 16.0f) / VOXEL_TREE_TEXTURE_DIM;
+    float u0 = col * 16.0f / VOXEL_TREE_TEXTURE_DIM;
     float u1 = u0 + 16.0f / VOXEL_TREE_TEXTURE_DIM;
-    float v0 = 1.0f - row * 16.0f / VOXEL_TREE_TEXTURE_DIM;
-    float v1 = v0 - 16.0f / VOXEL_TREE_TEXTURE_DIM;
+    float v0 = 1.0f - row * 18.0f / VOXEL_TREE_TEXTURE_DIM;
+    float v1 = v0 - 18.0f / VOXEL_TREE_TEXTURE_DIM;
     /* The crown keeps its 32:36 aspect ratio: width 2, length 2.25 tiles.
      * sin/cos(50 degrees), fixed in the world rather than camera billboarding.
      * Lower the transparent bottom margin into the ground so the visible
@@ -109,17 +118,6 @@ static void EmitCell(VoxelBuilder *builder, int x, int y, int part, int metatile
     float baseZ = wz - row + 1.35f;
     float top = 1.0f - row * 0.5f, bottom = top - 0.5f;
 
-    if (part == VOXEL_TREE_SMALL)
-    {
-        EmitSmallCell(builder, x, y, metatileId >= SECONDARY_ID);
-        return;
-    }
-    VoxelMesh_Top(builder, wx, wz, 0.0f, 0.0f, u0, v0, u1, v1, 1.0f);
-
-    u0 = col * 16.0f / VOXEL_TREE_TEXTURE_DIM;
-    u1 = u0 + 16.0f / VOXEL_TREE_TEXTURE_DIM;
-    v0 = 1.0f - row * 18.0f / VOXEL_TREE_TEXTURE_DIM;
-    v1 = v0 - 18.0f / VOXEL_TREE_TEXTURE_DIM;
     /* A crown card: lit as the rounded crown it stands for. */
     builder->rounded = true;
     VoxelBuilder_Quad(builder,
@@ -128,6 +126,46 @@ static void EmitCell(VoxelBuilder *builder, int x, int y, int part, int metatile
         &(VoxelVertex){wx + 1.0f, baseHeight + bottom * rise, baseZ - bottom * run, u1, v1, 1.0f},
         &(VoxelVertex){wx,        baseHeight + bottom * rise, baseZ - bottom * run, u0, v1, 1.0f});
     builder->rounded = false;
+}
+
+static void EmitCell(VoxelBuilder *builder, int x, int y, int part, int metatileId)
+{
+    int col = part & 1, row = part >> 1;
+    float u0 = (32.0f + col * 16.0f) / VOXEL_TREE_TEXTURE_DIM;
+    float u1 = u0 + 16.0f / VOXEL_TREE_TEXTURE_DIM;
+    float v0 = 1.0f - row * 16.0f / VOXEL_TREE_TEXTURE_DIM;
+    float v1 = v0 - 16.0f / VOXEL_TREE_TEXTURE_DIM;
+
+    if (part == VOXEL_TREE_SMALL)
+    {
+        EmitSmallCell(builder, x, y, metatileId >= SECONDARY_ID);
+        return;
+    }
+    VoxelMesh_Top(builder, (float)x, (float)y, 0.0f, 0.0f, u0, v0, u1, v1, 1.0f);
+    EmitCrownCard(builder, x, y, col, row);
+}
+
+/*
+ * The other row of a large tree whose half is drawn over by something else:
+ * a hedge, a roof, a fence or a ledge of the secondary tileset, whose
+ * metatile is not a tree part. The GBA draws the rest of the leaves in that
+ * metatile's art; here its row of the crown is added over it, so the crown
+ * is not cut in two. Its ground is left as it is. Only inside the map: across
+ * its edge the neighbour's own cells answer.
+ */
+static void EmitMissingRow(VoxelBuilder *builder, const VoxelMapInstance *inst,
+                           int x, int y, int part)
+{
+    int row = part >> 1;
+    int other = row == 0 ? y + 1 : y - 1;
+
+    if (part == VOXEL_TREE_SMALL)
+        return;
+    if (other < inst->originY || other >= inst->originY + inst->height)
+        return;
+    if (VoxelTree_Part(inst->secondaryTileset, VoxelWorld_GetMetatileId(x, other)) == (part ^ 2))
+        return;
+    EmitCrownCard(builder, x, other, part & 1, row ^ 1);
 }
 
 void VoxelTree_EmitInstance(VoxelBuilder *builder, const VoxelMapInstance *inst,
@@ -149,6 +187,8 @@ void VoxelTree_EmitInstance(VoxelBuilder *builder, const VoxelMapInstance *inst,
                 builder->lift = VoxelRelief_CellLift(inst, x, y);
                 builder->shift = VoxelRelief_CellShift(inst, x, y);
                 EmitCell(builder, x, y, part, metatileId);
+                /* At the tree's own lift, so both rows meet. */
+                EmitMissingRow(builder, inst, x, y, part);
                 builder->lift = 0.0f;
                 builder->shift = 0.0f;
             }
