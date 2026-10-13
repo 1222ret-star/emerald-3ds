@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Day/night, city lights and the berry clock, by @jesus0m (pull request
+  #57), all off by default. The windows' glow and the lamps take memory
+  only while they light: the masks share the voxel page arena and the lamps'
+  buffers are freed shortly after the last one goes out, so with day/night
+  off nothing is reserved. Known limit: at 120X the sun moves every 7.5
+  seconds and each step relights the voxel world, which an Old 3DS shows as
+  frame drops; at 1X it runs smoothly.
+
 - Dewford exterior models and the bounded window-mask pool
   have user-reported physical-3DS acceptance. Follow-up fixes give the caught-mon
   Pokédex its own clipped, scroll-isolated bottom-screen layout and recover the
@@ -29,8 +37,9 @@
 - Experimental follow-up: berry growth shares clock acceleration, with
   fractional bonus-minute carry, continuous speed changes and save-bound clock
   persistence. Sleep/offline time stays at 1X; daily RTC events remain original.
-- Correct Spanish clock accents, add display-only EVENING / TARDE, separate
-  enemy/wild battle prefixes from names and translate modern party EXP text.
+- Correct Spanish clock accents, add display-only EVENING / TARDE and
+  translate modern party EXP text; the wild and foe prefixes stay as the
+  Spanish ROM writes them.
 - Experimental follow-up: clock-driven voxel sun and cast shadows, with
   15-game-minute direction updates through the existing chunk budget,
   retained caster caches, and no additional shadow rendering pass.
