@@ -175,6 +175,7 @@ static struct
 
     /* Asked for by the game, done by the thread. */
     bool startAsked, leaveAsked;
+    volatile bool woke; /* the system woke from sleep: the service starts again */
     uint8_t askedKind;
 
     uint8_t state; /* LOCAL_SESSION_* */
@@ -542,18 +543,49 @@ static void UpdateNodes(void)
 
 static bool StartUds(void)
 {
-    Result ret;
+    Result ret = 0;
 
     if (sL.udsReady)
         return true;
-    ret = udsInit(SHAREDMEM_SIZE, NULL);
-    if (R_FAILED(ret))
+    /* Right after the system wakes the radio takes a moment to come back:
+     * a few tries before the wireless counts as switched off. */
+    for (int tries = 0; tries < 8; tries++)
     {
-        CtrLog_Write(CTR_LOG_ERROR, "local: udsInit failed (%08lx)", ret);
-        return false;
+        if (tries)
+            svcSleepThread(250000000LL);
+        ret = udsInit(SHAREDMEM_SIZE, NULL);
+        if (R_SUCCEEDED(ret))
+        {
+            if (tries)
+                CtrLog_Write(CTR_LOG_GAME, "local: udsInit worked on try %d", tries + 1);
+            sL.udsReady = true;
+            return true;
+        }
     }
-    sL.udsReady = true;
-    return true;
+    CtrLog_Write(CTR_LOG_ERROR, "local: udsInit failed (%08lx)", ret);
+    return false;
+}
+
+/*
+ * After sleep: the system switched the radio off and the service's state is
+ * gone with it, though its handle is still open. Kept, it failed every scan
+ * and host from then on and the counters said the wireless was off. Closed
+ * here, it is started afresh by the next session.
+ */
+static void AfterWake(void)
+{
+    bool was = sL.inNetwork;
+
+    if (sL.inNetwork)
+        LeaveNetwork(true);
+    if (sL.udsReady)
+        udsExit();
+    sL.udsReady = false;
+    sL.inNetwork = false;
+    sL.hosting = false;
+    if (was || sL.state == LOCAL_SESSION_IN || sL.state == LOCAL_SESSION_SEARCHING)
+        EndSession(LOCAL_SESSION_NONE);
+    CtrLog_Write(CTR_LOG_GAME, "local: woke from sleep: wireless service closed%s", was ? ", session ended" : "");
 }
 
 /* The wireless service started again: what it was in is gone. On hardware it
@@ -931,6 +963,11 @@ static void LocalThread(void *unused)
         bool start, leave;
         uint8_t kind;
 
+        if (sL.woke)
+        {
+            sL.woke = false;
+            AfterWake();
+        }
         LightLock_Lock(&sL.lock);
         start = sL.startAsked;
         leave = sL.leaveAsked;
@@ -1205,6 +1242,24 @@ void LocalLink_LeaveSession(void)
     }
     LightLock_Unlock(&sL.lock);
     Wake();
+}
+
+void LocalLink_AfterWake(void)
+{
+    if (!sL.ready)
+        return;
+    sL.woke = true;
+    Wake();
+}
+
+void LocalLink_LeaveBeforeSleep(void)
+{
+    if (!LocalLink_InSession())
+        return;
+    CtrLog_Write(CTR_LOG_GAME, "local: going to sleep: leaving the session");
+    LocalLink_LeaveSession();
+    for (int i = 0; i < 50 && LocalLink_InSession(); i++)
+        svcSleepThread(10000000LL);
 }
 
 uint8_t LocalLink_GetSession(void)

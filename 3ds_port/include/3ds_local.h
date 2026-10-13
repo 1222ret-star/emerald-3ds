@@ -66,6 +66,12 @@ void LocalLink_LeaveSession(void);
 uint8_t LocalLink_GetSession(void);
 uint8_t LocalLink_GetSessionKind(void);
 uint8_t LocalLink_InSession(void); /* in a session, or looking for one */
+/* The system is going to sleep (the lid closed): the session is left now,
+ * waiting a moment for it to be, so the others see the link end at once
+ * rather than a partner gone silent. */
+void LocalLink_LeaveBeforeSleep(void);
+/* And it woke: the wireless service is started again for the next session. */
+void LocalLink_AfterWake(void);
 /* Players in our session, us included (0 if not in one). */
 uint8_t LocalLink_SessionSize(void);
 

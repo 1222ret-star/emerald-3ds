@@ -23,10 +23,19 @@ static CtrTiming sTiming;
 static void Lifecycle(APT_HookType type, void *parameter)
 {
     (void)parameter;
-    if (type == APTHOOK_ONSUSPEND || type == APTHOOK_ONSLEEP)
+    if (type == APTHOOK_ONSLEEP)
+    {
+        CtrLog_Write(CTR_LOG_BOOT, "suspend/sleep");
+        /* The lid closed in a link: it ends for everyone. The game finds the
+         * link lost when it wakes, as the others already have. */
+        LocalLink_LeaveBeforeSleep();
+    }
+    else if (type == APTHOOK_ONSUSPEND)
         CtrLog_Write(CTR_LOG_BOOT, "suspend/sleep");
     else if (type == APTHOOK_ONRESTORE || type == APTHOOK_ONWAKEUP)
     {
+        if (type == APTHOOK_ONWAKEUP)
+            LocalLink_AfterWake();
         CtrInput_Clear();
         sLastFrame = CtrPlatform_Milliseconds();
         sLastTick = sExitStart = 0;
@@ -294,11 +303,30 @@ bool CtrPlatform_SoundTick(void)
     return sSoundTick;
 }
 
+/*
+ * No HOME Menu in a local wireless session, as the GBA link games' own 3DS
+ * releases have it: the link would go on without this system. A press is
+ * refused, and a sign shows that it was (CtrVideo_ShowNoHome).
+ */
+static void UpdateHomeAllowed(void)
+{
+    bool allowed = !LocalLink_InSession();
+
+    if (allowed != aptIsHomeAllowed())
+    {
+        aptSetHomeAllowed(allowed);
+        CtrLog_Write(CTR_LOG_BOOT, "HOME button %s", allowed ? "allowed" : "blocked (local wireless)");
+    }
+    if (!allowed && aptCheckHomePressRejected())
+        CtrVideo_ShowNoHome();
+}
+
 void CtrPlatform_EndFrame(void)
 {
     if (sWaiting)
         return;
     sWaiting = true;
+    UpdateHomeAllowed();
     uint64_t endStart = svcGetSystemTick();
     /* This frame's game work, for FrameShown (set again below). */
     sTiming.gameMs = (endStart - sWorkStart) * 1000.0f / SYSCLOCK_ARM11;

@@ -9699,6 +9699,39 @@ static unsigned PoisonVeil(void)
     return size > 10 ? 150 : size * 15;
 }
 
+/*
+ * The HOME button refused in a local wireless session (3ds_platform.c): the
+ * system draws nothing, so the game shows it was pressed - a house crossed
+ * out, in the top screen's top right corner, for a second and a half.
+ */
+static uint32_t sNoHomeUntil;
+
+void CtrVideo_ShowNoHome(void)
+{
+    sNoHomeUntil = sStats.frames + 90;
+}
+
+static void DrawNoHome(C3D_RenderTarget *target)
+{
+    const float x = CTR_GAME_WIDTH - 34, y = 6, w = 28;
+    const u32 white = C2D_Color32(255, 255, 255, 255), red = C2D_Color32(230, 40, 40, 255);
+
+    C2D_Prepare();
+    C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+    BlendForget();
+    C2D_SceneBegin(target);
+    C2D_ViewReset();
+    Blend(5, false, false);
+    C2D_DrawCircleSolid(x + w / 2, y + w / 2, 0, w / 2, C2D_Color32(0, 0, 0, 170));
+    /* The house: its roof and its walls, a door cut out of them. */
+    C2D_DrawTriangle(x + 6, y + 14, white, x + 14, y + 6, white, x + 22, y + 14, white, 0);
+    C2D_DrawRectSolid(x + 8, y + 14, 0, 12, 8, white);
+    C2D_DrawRectSolid(x + 12, y + 17, 0, 4, 5, C2D_Color32(0, 0, 0, 255));
+    /* Crossed out. */
+    C2D_DrawLine(x + 6, y + 6, red, x + 22, y + 22, red, 3, 0);
+    C2D_Flush();
+}
+
 static void DrawPoisonVeil(C3D_RenderTarget *target, unsigned alpha)
 {
     C2D_Prepare();
@@ -10300,6 +10333,11 @@ void CtrVideo_Present(void)
         sPlanes = 0;
         RenderEye(sTop, clear, sStats.stereo);
         RenderEye(sTopRight, clear, -(float)sStats.stereo);
+    }
+    if (sStats.frames < sNoHomeUntil && !bottom)
+    {
+        DrawNoHome(sTop);
+        if (stereo) DrawNoHome(sTopRight);
     }
     if (field && !bottom && !blank && CtrGame_FieldPoison() && PoisonVeil() != 0)
     {

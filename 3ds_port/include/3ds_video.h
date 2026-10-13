@@ -213,6 +213,8 @@ enum
     CTR_CENTRED_SCREENS
 };
 void CtrVideo_SetCentred(unsigned screen);
+/* The HOME button was pressed while it is not allowed: a sign for a moment. */
+void CtrVideo_ShowNoHome(void);
 /*
  * The window edges an HBlank DMA writes line by line (the PokéNav's glow
  * behind its chosen option, its condition graph): values holds WIN0H for each
