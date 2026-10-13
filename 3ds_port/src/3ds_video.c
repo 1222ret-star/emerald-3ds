@@ -13,6 +13,7 @@
 #include "3ds_bottom.h"
 #include "ctr_battle_layout.h"
 #include "3ds_battle_hud.h"
+#include "3ds_local.h"
 #include "../compat/port_prof.h"
 
 /* A battle is on, transition and all (CtrVideo_InBattle, at the end). */
@@ -794,6 +795,17 @@ static unsigned sObjWinPass;
 /* The battle's BG0 drew something above its text box (DrawBattleText). */
 static bool sTextAbove;
 static uint32_t sObjMask[4];
+/*
+ * The Wireless Adapter's status indicator: link_rfu puts it in OAM entry 125
+ * itself, at the GBA screen's top right. In the 2D battle (RenderEye) it is
+ * left out of the scene and drawn over the finished picture
+ * (BattleIndicatorCompose): the lines above the scene's surface are filled
+ * from its top rows, repeated, and its top rows came out again there as a
+ * stray line. The 3D battle's surface has no sprites in it.
+ */
+#define WIRELESS_INDICATOR_OAM 125
+static bool sObjIndicatorPass, sIndicatorApartHere;
+static bool WirelessIndicatorApart(void);
 /* Fixed horizontal placement of every layer, on top of the depth parallax.
  * Zero for the 2D compositor, which reproduces the GBA frame as it is. */
 static float sLayerOrigin;
@@ -5008,6 +5020,7 @@ static void DrawObjects(unsigned priority, bool effects)
         if (sObjFilter != OBJ_ALL && TransitionOam((unsigned)i) != (sObjFilter == OBJ_TRANSITION))
             continue;
         if (sObjMaskOn && !(sObjMask[i >> 5] & (1u << (i & 31)))) continue;
+        if (i == WIRELESS_INDICATOR_OAM && !sObjIndicatorPass && WirelessIndicatorApart()) continue;
         const uint16_t *obj = sMemory.oam + i * 4;
         unsigned attr0 = obj[0], attr1 = obj[1], attr2 = obj[2];
         bool affine = (attr0 & 0x100) != 0, color256 = (attr0 & 0x2000) != 0;
@@ -6640,6 +6653,52 @@ static void BattleScenePlace(C3D_RenderTarget *target, float shift)
  */
 static void Compose(void);
 
+/* Whether this frame's battle draws the wireless indicator apart: in a
+ * session, while the adapter's sprite is on screen. */
+static bool WirelessIndicatorApart(void)
+{
+    static uint32_t frame = ~0u;
+    static bool apart;
+
+    if (frame != sStats.frames)
+    {
+        unsigned attr0 = sMemory.oam[WIRELESS_INDICATOR_OAM * 4];
+
+        frame = sStats.frames;
+        apart = sBattle && (attr0 & 0x300) != 0x200 && LocalLink_InSession();
+    }
+    return apart && sIndicatorApartHere;
+}
+
+/* The wireless indicator over the battle, at the frame's own view. */
+static void BattleIndicatorCompose(void)
+{
+    int clipX0 = sClipX0, clipY0 = sClipY0, clipX1 = sClipX1, clipY1 = sClipY1;
+    uint32_t mask[4];
+    bool maskOn = sObjMaskOn;
+
+    if (!WirelessIndicatorApart() || (Reg(0) & 128) || !(Reg(0) & 0x1000)) return;
+    memcpy(mask, sObjMask, sizeof(mask));
+    memset(sObjMask, 0, sizeof(sObjMask));
+    sObjMask[WIRELESS_INDICATOR_OAM >> 5] = 1u << (WIRELESS_INDICATOR_OAM & 31);
+    sObjMaskOn = true;
+    sObjIndicatorPass = true;
+    ClipToView();
+    C2D_Flush();
+    BlendForget();
+    for (int priority = 3; priority >= 0; --priority)
+        DrawObjects((unsigned)priority, false);
+    C2D_Flush();
+    BlendForget();
+    sObjIndicatorPass = false;
+    sObjMaskOn = maskOn;
+    memcpy(sObjMask, mask, sizeof(mask));
+    sClipX0 = clipX0;
+    sClipY0 = clipY0;
+    sClipX1 = clipX1;
+    sClipY1 = clipY1;
+}
+
 static void BattleSkyCompose(bool sprites)
 {
     int clipX0 = sClipX0, clipY0 = sClipY0, clipX1 = sClipX1, clipY1 = sClipY1;
@@ -7002,11 +7061,14 @@ static void RenderEye(C3D_RenderTarget *target, uint32_t clear, float parallax)
     sLayerShift = 0;
     BlendForget();
     ColourClear(sLogical, clear);
+    sIndicatorApartHere = scene;
     if (scene) RenderBattleScene(clear);
     C2D_SceneBegin(sLogical);
     Blend(5, false, false);
     StageUnderlay();
     if (scene) BattleSkyCompose(true);
+    if (scene) BattleIndicatorCompose();
+    sIndicatorApartHere = false;
     if (scene) HudDrawCrisp(HUD_SPRITE_DEPTH);
     /* After a scene composed on its own, only the text box is left. */
     if (scene) sLayerExclude = 63 & ~(1u | 32u | BattleBoxLayers());
