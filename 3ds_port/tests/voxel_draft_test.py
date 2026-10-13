@@ -79,6 +79,7 @@ typedef struct {
     uint32_t stamp, viewStamp;
     int gx0, gz0, gx1, gz1; float gy0, gy1, buildMs;
     bool uncovered; uint32_t atlasExtension; bool draft;
+    unsigned staticCount;
 } VoxelChunk;
 typedef struct {
     VoxelVertex *vertices; unsigned capacity, count, dropped;
@@ -296,10 +297,11 @@ static void TestDraft(void)
     }
     assert(chunk->gx0 == 0 && chunk->gz0 == 0 && chunk->gx1 == 8 && chunk->gz1 == 8);
     assert(chunk->gy0 == 0.0f && chunk->gy1 > 0.0f && chunk->gy1 <= 0.75f + 1e-6f);
-    /* the same square again reuses its slot and its block */
-    uploadAllowed = 8;
+    /* the same square again reuses its slot and its block, and draws none of
+     * the static models a build placed in it */
+    uploadAllowed = 8; chunk->staticCount = 2;
     again = DraftChunk(&site, &atlas, chunk);
-    assert(again == chunk && FindChunk(false, 1, 2, 1, 2) == chunk);
+    assert(again == chunk && FindChunk(false, 1, 2, 1, 2) == chunk && again->staticCount == 0);
     {
         unsigned used = 0; for (unsigned i = 0; i < VOXEL_CHUNK_SLOTS; ++i) used += sChunks[i].used;
         assert(used == 1);

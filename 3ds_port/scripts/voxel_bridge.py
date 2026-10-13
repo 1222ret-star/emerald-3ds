@@ -63,8 +63,18 @@ cut along the same diagonal (`_strips`: at an inner corner the road drawn
 against the strip's head is laid on it, at an outer one its head runs to the
 end of the drawing and its foot is cut by the front's chamfer), and the
 strip's rows meet their neighbours' edges halfway, through no pixel's
-middle. The piers drawn beside a span are boxes standing in the water
-(`_pier`).
+middle; a row of the strip takes all of its own pixels (where the road
+widens at an inner corner one row took its columns from a shorter run, a
+notch in the rail's side). The corners on the deck's north side, its inner
+ones on its south side and a ramp's corners are built square instead
+(`_north_corner`, `_inner_north_corner`, `_south_corner`, `_corner`):
+there the drawing rounds the rail, and built as drawn a column of the rail
+stood up past it like a post, the strip's head rose in a staircase and a
+crack stood between them; turning into a strip the front's girder, its
+stripes drawn across the turn, was a wall of teeth. The flank going on
+straight there is laid at the map's own phase, its posts where the drawn
+rail's stand. Only the outer corners on the south side keep their chamfer.
+The piers drawn beside a span are boxes standing in the water (`_pier`).
 
 What it stands among
 --------------------
@@ -114,6 +124,8 @@ BRIDGES = {"LAYOUT_ROUTE110": {"deck": 4, "both": 15,
 
 DECK = 40           # px: the deck's road over the ground
 RAIL = 13           # px: the rails' height over the deck (the drawing's)
+NORTH_RAIL = 14     # px: the north rail's, drawn without the front's top
+                    # highlight and over two rows of its kerb
 GIRDER = 18         # px: kerb and girder under the deck's south edge (drawn)
 SIDE_GIRDER = 8     # px: the girder down its other sides, which the drawing
                     # never shows: a walker (32 px) passes under a span
@@ -442,22 +454,21 @@ class Bridge:
                 straight[(1, r)].append(v)
         self.strip_px, self.chamfer_cols, self.head_rows = set(), {}, {}
         self.feet = []          # (side, the road's edge, last row, {column: rows under it})
+        self.inner_heads = []   # (side, (s0, s1), first straight row, {column: head row})
         self.strip_cols = {}    # (side, the road's edge, row): the strip's columns
         for (step, edge), vs in straight.items():
             for (v0, v1) in _runs(sorted(vs)):
                 if v1 - v0 < 7 or any(r[0] - RAMP_SIDE <= edge < r[1] + RAMP_SIDE
                                       and r[2] - 16 <= v1 and v0 < r[3] for r in self.ramps):
                     continue
-                cols = []
-                for k in range(1, SIDE + 1):
-                    c = edge + step * k
-                    drawn = [self.pixels.get((c, v)) for v in range(v0, v1 + 1)]
-                    top = collections.Counter(drawn).most_common(1)[0]
-                    if top[0] is None or top[1] < 0.6 * len(drawn):
-                        break
-                    cols.append(c)
-                    if k >= 6 and top[0] == LINE:
-                        break       # its outer outline (a pier's beside it)
+                cols = self._strip_columns(edge, step, v0, v1)
+                if len(cols) < 6 and v1 - v0 >= 16:
+                    # a pier's head drawn over the strip's foot, where it
+                    # meets a wider deck's north rail, hides its columns
+                    # there: read from its first cell's worth of rows
+                    first = self._strip_columns(edge, step, v0, v0 + 15)
+                    if len(first) >= 6:
+                        cols = first
                 side = "e" if step > 0 else "w"
                 head, outer = {}, {}
                 for v in range(v0, v1 + 1):
@@ -490,11 +501,28 @@ class Bridge:
                     self.feet.append((side, edge, v1, foot))
                 if cols and len(head) == len(cols) and min(head.values()) < v0:
                     self._chamfer_head(step, cols, head, v0)
+                    if len(cols) >= 6:
+                        self.inner_heads.append((side, (min(cols), max(cols) + 1), v0, head))
                 elif len(cols) >= 6 and len(outer) == len(cols) and min(outer.values()) < v0:
                     for c, w in outer.items():
                         self.strip_px.update((c, v) for v in range(w, v0))
                     for v in range(min(outer.values()), v0):
                         self.head_rows.setdefault((side, v), []).append([c for c in cols if outer[c] <= v])
+
+    def _strip_columns(self, edge, step, v0, v1):
+        """The columns out from a road's edge drawn one colour down rows
+        [v0, v1] (most of them), to the strip's outer outline."""
+        cols = []
+        for k in range(1, SIDE + 1):
+            c = edge + step * k
+            drawn = [self.pixels.get((c, v)) for v in range(v0, v1 + 1)]
+            top = collections.Counter(drawn).most_common(1)[0]
+            if top[0] is None or top[1] < 0.6 * len(drawn):
+                break
+            cols.append(c)
+            if k >= 6 and top[0] == LINE:
+                break       # its outer outline (a pier's beside it)
+        return cols
 
     def _chamfer_head(self, step, cols, head, v0):
         """An inner corner: the strip's head cut square to the chamfer
@@ -558,8 +586,9 @@ class Bridge:
 
     def stretched(self):
         """The pixels the model does not draw as the GBA does: a ramp's drawn
-        rows (stretched by their 45 degree fit no more, but judged with the
-        rest of its corner) and its corners (`_corner`)."""
+        rows and its corners (`_corner`), the deck's corners on its north
+        side (`_north_corner`, `_inner_north_corner`) and its inner ones on
+        its south side (`_south_corner`)."""
         out = set()
         for ramp in self.ramps:
             u0, u1, top, foot = ramp
@@ -570,6 +599,10 @@ class Bridge:
             for v in range(r0, r1):
                 for u in list(range(u0 - RAMP_SIDE, u0)) + list(range(u1, u1 + RAMP_SIDE)):
                     out.add((u, v))
+        if not hasattr(self, "corner_regions"):
+            self.quads()
+        for (xa, xb, r0, r1) in self.corner_regions:
+            out.update((u, v) for v in range(r0, r1) for u in range(xa, xb))
         return out
 
     # -- geometry -------------------------------------------------------------
@@ -781,8 +814,8 @@ class Bridge:
         # deck's south edge to the strip's outer side, the strip's last rows
         # cut along it - every column of it showing its own drawn rows from
         # the rail's top on the chamfer down
-        cuts = []
-        for (side, edge, last, foot) in self.feet:
+        cuts = {}       # by foot: what _south_outer_corner leaves chamfered
+        for i, (side, edge, last, foot) in enumerate(self.feet):
             fronts = south.get(edge, ())
             if not fronts:
                 continue
@@ -803,9 +836,9 @@ class Bridge:
             # the plane it stands on (z = x + C west, z = -x + C east), and
             # under the drawing's end nothing of the sides behind it
             if side == "w":
-                cuts.append((-1.0, z_edge - edge, bottom, min(foot) - SIDE, edge, z_edge))
+                cuts[i] = (-1.0, z_edge - edge, bottom, min(foot) - SIDE, edge, z_edge)
             else:
-                cuts.append((1.0, z_edge + edge + 1, bottom, edge + 1, max(foot) + 1 + SIDE, z_edge))
+                cuts[i] = (1.0, z_edge + edge + 1, bottom, edge + 1, max(foot) + 1 + SIDE, z_edge)
         # the strips row by row, gathered first - (s0, s1, inner side's x,
         # outer side's x, art pixel) by (side, row) - and laid once every
         # row's are known, their sides met with the next rows' (smooth)
@@ -842,6 +875,16 @@ class Bridge:
                     cols = self.strip_cols.get((side, edge, v),
                                                [edge + step * k for k in range(1, SIDE + 1)])
                     strip = [c for c in cols if (c, v) in pix and (c, v) not in claimed]
+                    # and on out over the strip's own pixels: a row where the
+                    # road widens at an inner corner takes its columns from a
+                    # shorter run, and stopped short of its neighbours (a
+                    # notch in the rail's side, a crack in the game's view)
+                    while strip:
+                        c = (min(strip) if side == "w" else max(strip)) + step
+                        if abs(c - edge) > SIDE or (c, v) not in self.strip_px \
+                                or (c, v) not in pix or (c, v) in claimed:
+                            break
+                        strip.append(c)
                     if not strip:
                         # no rail drawn here (a chamfer's, standing on the
                         # front or the north edge): the deck's side
@@ -969,10 +1012,22 @@ class Bridge:
                     # anything else (a truss's foot): upright on the ground
                     # at the foot of its column
                     upright(u, b + 1, a, b + 1, "deck.post")
+        self.corner_regions, self._unmerged = [], []
+        generic = {id(f): f for f in out}       # (held: an id is not reused)
         for ramp in self.ramps:
             self._corner(ramp, out, put, south)
+        for head in self._heads():
+            self._north_corner(head, out, put, strips, north, flank)
+        for foot in self._feet_north():
+            self._inner_north_corner(foot, out, put, north, flank)
+        for head in self.inner_heads:
+            self._south_corner(head, out, put, south, flank, generic)
+        for i, foot in enumerate(self.feet):
+            if self._south_outer_corner(foot, out, put, south, flank, generic):
+                cuts.pop(i, None)
         faces, self.slanted = _merge(out)
-        return _cut_corners(_tile_flanks(faces), cuts)
+        faces += self._unmerged
+        return _cut_corners(_tile_flanks(faces), list(cuts.values()))
 
     def _corner(self, ramp, out, put, south):
         """A ramp's corners with the deck and its slot through it, square:
@@ -990,6 +1045,8 @@ class Bridge:
         sides = ((u0 - RAMP_SIDE, u0, u0 - RAMP_SIDE - 1, "e"), (u1, u1 + RAMP_SIDE, u1 + RAMP_SIDE, "w"))
         cols = {u for xa, xb, _, _ in sides for u in range(xa, xb)}
         out[:] = [f for f in out if not (int(f[3][0]) in cols and r0 <= int(f[3][1]) < r1)]
+        # (a corner built beside it stops short of its side columns)
+        self.corner_regions += [(xa, xb, r0, r1) for xa, xb, _, _ in sides]
         head = self.ramp_head(ramp)
         for xa, xb, nb, inner in sides:
             # the depth of the deck's front beside the corner
@@ -999,8 +1056,7 @@ class Bridge:
             xo = xa if inner == "e" else xb
             at = (xa, r0)
             # the deck's road over the corner, and its slab
-            pts = [(xa, DECK, r0 + DECK), (xb, DECK, r0 + DECK), (xb, DECK, zf - BEHIND), (xa, DECK, zf - BEHIND)]
-            put(pts, [(x, z - y) for (x, y, z) in pts], "deck.top_under_rail~depth~road", at)
+            self._road(put, xa, xb, r0 + DECK, zf - BEHIND)
             low = DECK - SLAB
             put([(xa, low, zf - BEHIND), (xb, low, zf - BEHIND), (xb, low, r0 + DECK), (xa, low, r0 + DECK)],
                 [at] * 4, "deck.under~depth~clamp", at)
@@ -1039,6 +1095,367 @@ class Bridge:
                 put([(xi, 0.0, z0), (xi, 0.0, z1), (xi, h1, z1), (xi, h0, z0)],
                     [(xa, p)] * 4, "deck.flank_girder_%s~depth" % ("w" if inner == "e" else "e"),
                     (xa, p))
+
+    @staticmethod
+    def _straight(north, start, step, near):
+        """The north rail walked from column `start` by `step`: the depth it
+        settles at (the commonest over 48 columns, each column's depth the
+        one nearest `near`, within a rail and a strip of it) and how many
+        columns in it first stays there
+        four columns running - the drawn curve of a corner's rail goes on
+        past RAMP_SIDE at some. (None, 0) when there is no rail."""
+        ds = []
+        for k in range(48):
+            vals = [z for z in north.get(start + step * k, ()) if abs(z - near) <= RAIL + SIDE]
+            ds.append(min(vals, key=lambda z: abs(z - near)) if vals else None)
+        common = collections.Counter(d for d in ds if d is not None).most_common(1)
+        if not common:
+            return None, 0
+        zn = common[0][0]
+        k0 = next((k for k in range(len(ds) - 3) if all(d == zn for d in ds[k:k + 4])), RAMP_SIDE)
+        return zn, max(k0, RAMP_SIDE)
+
+    @staticmethod
+    def _road(put, xa, xb, z0, z1):
+        """The deck's road laid over x [xa, xb), z [z0, z1) in pieces a cell
+        each (the plain road the model reads it from is a cell of it)."""
+        v0, v1 = z0 - DECK, z1 - DECK
+        for (a, b) in _split(int(math.floor(xa)), int(math.ceil(xb))):
+            a, b = max(a, xa), min(b, xb)
+            for (p, q) in _split(int(math.floor(v0)), int(math.ceil(v1))):
+                p, q = max(p, v0), min(q, v1)
+                if b - a < 1e-6 or q - p < 1e-6:
+                    continue
+                pts = [(a, DECK, p + DECK), (b, DECK, p + DECK), (b, DECK, q + DECK), (a, DECK, q + DECK)]
+                put(pts, [(x, z - y) for (x, y, z) in pts], "deck.top_under_rail~depth~road",
+                    (int(a), int(p)))
+
+    def _clear_of(self, xa, xb, r0, r1, s0, s1):
+        """A corner's columns [xa, xb) for rows [r0, r1), its strip at
+        [s0, s1), cut short of the corners already built beside it (two
+        corners a strip's width apart share the rail between them)."""
+        for (a, b, q0, q1) in self.corner_regions:
+            if q0 < r1 and r0 < q1 and a < xb and xa < b:
+                if b <= s0:
+                    xa = max(xa, b)
+                elif a >= s1:
+                    xb = min(xb, a)
+        return xa, xb
+
+    def _heads(self):
+        """The deck's outer corners on its north side, where a side rail's
+        strip comes up to the north rail (_strips' head_rows): (side, the
+        strip's first row, the first row it is drawn full width)."""
+        out = []
+        for side in ("w", "e"):
+            for (a, b) in _runs(sorted(v for (sd, v) in self.head_rows if sd == side)):
+                out.append((side, a, b + 1))
+        return out
+
+    def _north_corner(self, head, out, put, strips, north, flank):
+        """An outer corner on the deck's north side, square. The drawing
+        rounds it: the north rail's last columns drawn turning down, the side
+        strip's head narrowing up to them row by row - built as drawn, a
+        column of the rail stood up past it like a post, the strip's head
+        rose in a staircase of rail and a crack stood between the two. What
+        the generic build laid over the corner (from the strip in to where
+        the north rail runs straight, `_straight`; from over the rail's top
+        to the end of the cell row under the strip's head) is
+        taken out; the north rail runs straight on at its depth to the
+        strip's outer side, the strip (its top, its rail's faces, its girder)
+        runs on north from its full-width rows to the rail, and the deck's
+        road fills the corner."""
+        side, v0, v_full = head
+        e = next((e for e in strips.get((side, v_full), ())
+                  if any(e[0] <= c < e[1] for cs in self.head_rows[(side, v_full - 1)] for c in cs)), None)
+        if e is None:
+            return
+        s0, s1, xi, xo = e[0], e[1], e[2], e[3]
+        if side == "e":
+            zn, k = self._straight(north, s0 - 1, -1, v_full + DECK)
+            xa, xb = s0 - k, s1
+        else:
+            zn, k = self._straight(north, s1, 1, v_full + DECK)
+            xa, xb = s0, s1 + k
+        if zn is None:
+            return
+        # (to the end of a cell row: the generic faces are cut cell by cell)
+        r0, r1 = int(zn) - DECK - RAIL - SIDE, ((v_full + 15) // 16 + 1) * 16
+        xa, xb = self._clear_of(xa, xb, r0, r1, s0, s1)
+        road = (xa, s0) if side == "e" else (s1, xb)
+        self.corner_regions.append((xa, xb, r0, r1))
+        # the strip's own columns from its full-width row on are the generic
+        # build's, as along the rest of it
+        out[:] = [f for f in out if not (xa <= int(f[3][0]) < xb and r0 <= int(f[3][1])
+                                         < (v_full if s0 <= int(f[3][0]) < s1 else r1))]
+        top, low, zr = DECK + RAIL, DECK - SLAB, r1 + DECK
+        at = (road[0], r1 - 1)
+        # the road over the corner, its slab under it
+        self._road(put, road[0], road[1], zn + BEHIND, zr)
+        put([(road[0], low, zr), (road[1], low, zr), (road[1], low, zn), (road[0], low, zn)],
+            [at] * 4, "deck.under~depth~clamp", at)
+        # the north rail straight on to the strip's outer side, its girder under it
+        put([(xa, DECK, zn), (xb, DECK, zn), (xb, DECK + NORTH_RAIL, zn), (xa, DECK + NORTH_RAIL, zn)],
+            [at] * 4, "deck.flank_railn_s~depth", at)
+        put([(xb, DECK - SIDE_GIRDER, zn), (xa, DECK - SIDE_GIRDER, zn), (xa, DECK, zn), (xb, DECK, zn)],
+            [at] * 4, "deck.girder_n~depth~clamp", at)
+        # the strip on north to the rail: its top, column by column in the
+        # colours of its first full-width row, and its faces
+        # (kept out of _merge, which would lay the whole strip in its first
+        # column's colour: the outline's)
+        zt = v_full + top
+        n = len(out)
+        for c in range(s0, s1):
+            put([(c, top, zn), (c + 1, top, zn), (c + 1, top, zt), (c, top, zt)],
+                [(c, v_full)] * 4, "deck.rail_side~depth~clamp", (c, v_full))
+        self._unmerged += out[n:]
+        del out[n:]
+        out_dir, in_dir = (side, "e" if side == "w" else "w")
+        flank("rail", out_dir, xo, DECK, top, zn, zt, at)
+        flank("girder", out_dir, xo, DECK - SIDE_GIRDER, DECK, zn, zt, at)
+        flank("rail", in_dir, xi, DECK, top, zn, zt, at)
+        flank("under", in_dir, xi, DECK - SIDE_GIRDER, low, zn, zt, at)
+
+    def _feet_north(self):
+        """The deck's inner corners on its north side, where a road coming
+        from the north meets a wider deck: a side rail's strip that runs on
+        down (16 rows or more) to rows where the road reaches past its outer
+        side. (side, the strip's columns (s0, s1), its last row, the road's
+        first row past it)."""
+        runs = collections.defaultdict(list)
+        for (side, edge, v) in self.strip_cols:
+            runs[(side, edge)].append(v)
+        out = []
+        for (side, edge), vs in sorted(runs.items()):
+            for (a, b) in _runs(sorted(vs)):
+                cols = self.strip_cols[(side, edge, (a + b) // 2)]
+                if b - a < 15 or not cols:
+                    continue
+                outer = min(cols) if side == "w" else max(cols)
+                hit = next((v for v in range(b + 1, b + RAIL + SIDE + 8) if (outer, v) in self.road), None)
+                if hit is not None:
+                    out.append((side, (min(cols), max(cols) + 1), b, hit))
+        return out
+
+    def _inner_north_corner(self, foot, out, put, north, flank):
+        """An inner corner on the deck's north side, square: the wider
+        deck's north rail runs straight on at its depth across the foot of
+        the side rail's strip coming down to it, the strip runs on to the
+        rail at its full width, and the road fills the corner. The drawing
+        turns the rail into the strip in a curve: built as drawn, the rail's
+        columns there stood up past it with the strip's pixels on them, a
+        thin post (`_north_corner` takes the same region out)."""
+        side, (s0, s1), last, hit = foot
+        if side == "w":
+            zn, k = self._straight(north, s0 - 1, -1, hit + DECK)
+            xa, xb = s0 - k, s1
+        else:
+            zn, k = self._straight(north, s1, 1, hit + DECK)
+            xa, xb = s0, s1 + k
+        if zn is None:
+            return
+        # (from a cell over the rail's top: the drawn curve starts the
+        # rail's columns that much higher)
+        r0, r1 = min(int(zn) - DECK, hit) - RAIL - SIDE - 16, ((hit + 15) // 16 + 1) * 16
+        xa, xb = self._clear_of(xa, xb, r0, r1, s0, s1)
+        self.corner_regions.append((xa, xb, r0, r1))
+        out[:] = [f for f in out if not (xa <= int(f[3][0]) < xb and r0 <= int(f[3][1]) < r1)]
+        top, low, zr = DECK + RAIL, DECK - SLAB, r1 + DECK
+        at = (xa, r1 - 1)
+        # the road over the corner, its slab under it
+        self._road(put, xa, xb, zn + BEHIND, zr)
+        put([(xa, low, zr), (xb, low, zr), (xb, low, zn), (xa, low, zn)], [at] * 4,
+            "deck.under~depth~clamp", at)
+        # the north rail straight on across the strip's foot, its girder under it
+        put([(xa, DECK, zn), (xb, DECK, zn), (xb, DECK + NORTH_RAIL, zn), (xa, DECK + NORTH_RAIL, zn)],
+            [at] * 4, "deck.flank_railn_s~depth", at)
+        put([(xb, DECK - SIDE_GIRDER, zn), (xa, DECK - SIDE_GIRDER, zn), (xa, DECK, zn), (xb, DECK, zn)],
+            [at] * 4, "deck.girder_n~depth~clamp", at)
+        # the strip on down to the rail, in the colours of the last row the
+        # generic build lays (one texel a column, kept out of _merge)
+        z0 = r0 + top
+        if zn > z0:
+            n = len(out)
+            for c in range(s0, s1):
+                put([(c, top, z0), (c + 1, top, z0), (c + 1, top, zn), (c, top, zn)],
+                    [(c, r0 - 1)] * 4, "deck.rail_side~depth~clamp", (c, r0 - 1))
+            self._unmerged += out[n:]
+            del out[n:]
+            xo, xi = (s0, s1) if side == "w" else (s1, s0)
+            out_dir, in_dir = (side, "e" if side == "w" else "w")
+            sat = (s0, r0 - 1)
+            flank("rail", out_dir, xo, DECK, top, z0, zn, sat)
+            flank("girder", out_dir, xo, DECK - SIDE_GIRDER, DECK, z0, zn, sat)
+            flank("rail", in_dir, xi, DECK, top, z0, zn, sat)
+            flank("under", in_dir, xi, DECK - SIDE_GIRDER, low, z0, zn, sat)
+
+    def _south_corner(self, head, out, put, south, flank, generic):
+        """An inner corner on the deck's south side, square: where the road
+        widens over a side rail's strip (`inner_heads`), the drawing turns
+        the front into the strip at 45 degrees, its girder's stripes drawn
+        across the turn - built as drawn, a wall of teeth, every column's
+        rows a pixel or two off its neighbour's. What the generic build laid
+        there but the drawn road (from where the front runs straight,
+        `_straight`, to the strip's inner side; from the cell the chamfer
+        starts in to the end of the cell row it ends in) is taken out; the
+        front's rail and girder run straight on at its depth to the strip's
+        outer side and across its head, the strip runs on north from its
+        straight rows to the front, and the road under the rail fills the
+        corner."""
+        side, (s0, s1), v0, heads = head
+        near = (heads[s0] if side == "w" else heads[s1 - 1]) + RAIL + DECK
+        if side == "w":
+            zf, k = self._straight(south, s0 - 1, -1, near)
+            xa, xb = s0 - k, s1
+        else:
+            zf, k = self._straight(south, s1, 1, near)
+            xa, xb = s0, s1 + k
+        if zf is None:
+            return
+        # where each column's drawn road ends over the corner
+        start = int(zf) - DECK - RAIL - SIDE
+        ends = {}
+        for u in range(xa, xb):
+            v = start
+            if (u, v) not in self.road:
+                continue
+            while (u, v) in self.road:
+                v += 1
+            ends[u] = v
+        if not ends:
+            return
+        r0 = min(ends.values()) // 16 * 16
+        # down to the chamfer's last drawn row (not a pier's, under it), at
+        # least to the strip's straight rows; short of a corner built under
+        # it on the strip
+        drawn = [max(t[1] for t in f[1]) for f in out if id(f) in generic and f[2] == "deck.front"
+                 and xa <= int(f[3][0]) < xb and r0 <= int(f[3][1]) < int(zf) - DECK + GIRDER + 8]
+        r1 = (max(drawn + [v0 + 1]) + 15) // 16 * 16
+        for (a, b, q0, q1) in self.corner_regions:
+            if a < s1 and s0 < b and r0 < q0:
+                r1 = min(r1, q0)
+        xa, xb = self._clear_of(xa, xb, r0, r1, s0, s1)
+        self.corner_regions.append((xa, xb, r0, r1))
+        out[:] = [f for f in out if not (id(f) in generic and f[2] != "deck.top"
+                                         and xa <= int(f[3][0]) < xb and r0 <= int(f[3][1]) < r1)]
+        top, low = DECK + RAIL, DECK - SLAB
+        fa, fb = (xa, s0) if side == "w" else (s1, xb)      # the front's columns
+        at = (fa if side == "w" else fb - 1, r0)
+        # the road on from where it is drawn to under the front's rail, and
+        # the slab under it all
+        for u, b in sorted(ends.items()):
+            if xa <= u < xb and b + DECK < zf - BEHIND:
+                self._road(put, u, u + 1, b + DECK, zf - BEHIND)
+        for (a, b) in _split(xa, xb):
+            put([(a, low, zf - BEHIND), (b, low, zf - BEHIND), (b, low, r0 + DECK), (a, low, r0 + DECK)],
+                [(a, r0)] * 4, "deck.under~depth~clamp", (a, r0))
+        # the front straight on to the strip, and across the strip's head
+        put([(fa, DECK - GIRDER, zf), (fb, DECK - GIRDER, zf), (fb, top, zf), (fa, top, zf)],
+            [at] * 4, "deck.flank_rail_s~depth", at)
+        put([(s0, DECK - SIDE_GIRDER, zf), (s1, DECK - SIDE_GIRDER, zf), (s1, top, zf), (s0, top, zf)],
+            [at] * 4, "deck.flank_rail_s~depth", at)
+        # the strip on north to the front: its top, column by column in the
+        # colours of its first straight row (kept out of _merge), its faces
+        zt = r1 + top
+        sat = (s0, v0)
+        n = len(out)
+        for c in range(s0, s1):
+            put([(c, top, zf), (c + 1, top, zf), (c + 1, top, zt), (c, top, zt)],
+                [(c, v0)] * 4, "deck.rail_side~depth~clamp", (c, v0))
+        self._unmerged += out[n:]
+        del out[n:]
+        xo, xi = (s0, s1) if side == "w" else (s1, s0)
+        out_dir, in_dir = (side, "e" if side == "w" else "w")
+        flank("rail", out_dir, xo, DECK, top, zf, zt, sat)
+        flank("girder", out_dir, xo, DECK - SIDE_GIRDER, DECK, zf, zt, sat)
+        flank("rail", in_dir, xi, DECK, top, zf, zt, sat)
+        flank("under", in_dir, xi, DECK - SIDE_GIRDER, low, zf, zt, sat)
+        quad = [(xi, DECK - SIDE_GIRDER, zf), (xo, DECK - SIDE_GIRDER, zf),
+                (xo, DECK - SIDE_GIRDER, zt), (xi, DECK - SIDE_GIRDER, zt)]
+        put(quad[::-1] if side == "w" else quad, [sat] * 4, "deck.under~depth~clamp", sat)
+
+    def _south_outer_corner(self, foot, out, put, south, flank, generic):
+        """An outer corner on the deck's south side, square (`feet`): the
+        drawing turns the front into the side rail's strip at 45 degrees,
+        and built as drawn its girder was the same wall of teeth an inner
+        corner's was. What the generic build laid there but the drawn road
+        (from the strip's outer side to where the front runs straight; from
+        the cell the strip's last rows are in to the end of the cell row the
+        chamfer ends in) is taken out; the front's rail and girder run
+        straight on at its depth to the strip's outer side, the strip runs
+        on south to the front, and the road under the rail fills the
+        corner. False when there is no straight front beside it (its
+        chamfer stays)."""
+        side, edge, last, rows = foot
+        cols = sorted(rows)
+        near = last + 1 + RAIL + DECK
+        if side == "w":
+            s0, s1 = cols[0], edge
+            zf, k = self._straight(south, edge, 1, near)
+            xa, xb = s0, edge + k
+        else:
+            s0, s1 = edge + 1, cols[-1] + 1
+            zf, k = self._straight(south, edge, -1, near)
+            xa, xb = edge + 1 - k, s1
+        if zf is None:
+            return False
+        fa, fb = (s1, xb) if side == "w" else (xa, s0)      # the road's columns
+        # where each column's drawn road ends over the corner
+        start = min(last, int(zf) - DECK - RAIL - SIDE)
+        ends = {}
+        for u in range(fa, fb):
+            v = start
+            if (u, v) not in self.road:
+                continue
+            while (u, v) in self.road:
+                v += 1
+            ends[u] = v
+        if not ends:
+            return False
+        r0 = min(ends.values()) // 16 * 16
+        drawn = [max(t[1] for t in f[1]) for f in out if id(f) in generic and f[2] == "deck.front"
+                 and xa <= int(f[3][0]) < xb and r0 <= int(f[3][1]) < int(zf) - DECK + GIRDER + 8]
+        r1 = (max(drawn + [b for (_, b) in rows.values()]) + 15) // 16 * 16
+        xa, xb = self._clear_of(xa, xb, r0, r1, s0, s1)
+        fa, fb = max(fa, xa), min(fb, xb)
+        self.corner_regions.append((xa, xb, r0, r1))
+        out[:] = [f for f in out if not (id(f) in generic and f[2] != "deck.top"
+                                         and xa <= int(f[3][0]) < xb and r0 <= int(f[3][1]) < r1)]
+        top, low = DECK + RAIL, DECK - SLAB
+        at = (edge, r0)
+        # the road on from where it is drawn to under the front's rail, and
+        # the slab under it
+        for u, b in sorted(ends.items()):
+            if fa <= u < fb and b + DECK < zf - BEHIND:
+                self._road(put, u, u + 1, b + DECK, zf - BEHIND)
+        for (a, b) in _split(fa, fb):
+            put([(a, low, zf - BEHIND), (b, low, zf - BEHIND), (b, low, r0 + DECK), (a, low, r0 + DECK)],
+                [(a, r0)] * 4, "deck.under~depth~clamp", (a, r0))
+        # the front straight on to the strip's outer side
+        put([(xa, DECK - GIRDER, zf), (xb, DECK - GIRDER, zf), (xb, top, zf), (xa, top, zf)],
+            [at] * 4, "deck.flank_rail_s~depth", at)
+        # the strip on south to the front: its top, column by column in the
+        # colours of the last row the generic build lays (kept out of
+        # _merge), its faces
+        z0 = r0 + top
+        if zf > z0:
+            sat = (s0, r0 - 1)
+            n = len(out)
+            for c in range(s0, s1):
+                put([(c, top, z0), (c + 1, top, z0), (c + 1, top, zf), (c, top, zf)],
+                    [(c, r0 - 1)] * 4, "deck.rail_side~depth~clamp", (c, r0 - 1))
+            self._unmerged += out[n:]
+            del out[n:]
+            xo, xi = (s0, s1) if side == "w" else (s1, s0)
+            out_dir, in_dir = (side, "e" if side == "w" else "w")
+            flank("rail", out_dir, xo, DECK, top, z0, zf, sat)
+            flank("girder", out_dir, xo, DECK - SIDE_GIRDER, DECK, z0, zf, sat)
+            flank("rail", in_dir, xi, DECK, top, z0, zf, sat)
+            flank("under", in_dir, xi, DECK - SIDE_GIRDER, low, z0, zf, sat)
+            quad = [(xi, DECK - SIDE_GIRDER, z0), (xo, DECK - SIDE_GIRDER, z0),
+                    (xo, DECK - SIDE_GIRDER, zf), (xi, DECK - SIDE_GIRDER, zf)]
+            put(quad[::-1] if side == "w" else quad, [sat] * 4, "deck.under~depth~clamp", sat)
+        return True
 
     @staticmethod
     def _pier(comp, put, upright, texel):
@@ -1122,8 +1539,8 @@ class Bridge:
         row of its own repeat above and two below (a merged face's corner
         can lie half a pixel past its cell). What lays the deck under the
         south rail, the road going on as if the rail were not drawn on it."""
-        if hasattr(self, "_road"):
-            return self._road
+        if hasattr(self, "_road_cell"):
+            return self._road_cell
         seen = collections.Counter()
         for (x, y) in self.deck_cells:
             if all((x * 16 + i, y * 16 + j) in self.pixels and (x * 16 + i, y * 16 + j) in self.road
@@ -1132,10 +1549,10 @@ class Bridge:
         if not seen:
             raise SystemExit("%s: no cell of plain road" % self.id)
         cell = vb.Image.frombytes("RGBA", (16, 16), seen.most_common(1)[0][0])
-        self._road = vb.Image.new("RGBA", (16, ROAD_ROWS), (0, 0, 0, 0))
+        self._road_cell = vb.Image.new("RGBA", (16, ROAD_ROWS), (0, 0, 0, 0))
         for k in range(-1, ROAD_ROWS - 1, 16):
-            self._road.paste(cell, (0, 1 + k))
-        return self._road
+            self._road_cell.paste(cell, (0, 1 + k))
+        return self._road_cell
 
     # -- what the console needs besides the faces -------------------------------
 
@@ -1542,7 +1959,9 @@ def _tile_flanks(faces):
     pixel: a face is cut where the flank's 16 columns repeat along it and
     where its rows do down it. Their uvs are the flank's own pixels."""
     out = []
-    offset = {"rail": 0.0, "wall": 0.0, "girder": float(RAIL), "under": float(RAIL + SLAB)}
+    # (the north rail: the front's rail under its highlight, down to the
+    # kerb's two rows)
+    offset = {"rail": 0.0, "railn": 1.0, "wall": 0.0, "girder": float(RAIL), "under": float(RAIL + SLAB)}
     for f in faces:
         pts, uvs, tag, at = f
         if not tag.startswith("deck.flank_") or tag.endswith("~clamp"):
@@ -1557,6 +1976,9 @@ def _tile_flanks(faces):
             ends.append((here[0][0], here[0][2], min(p[1] for p in here), max(p[1] for p in here)))
         (xa, za, ba, ta), (xb, zb, bb, tb) = ends
         length = ((xb - xa) ** 2 + (zb - za) ** 2) ** 0.5
+        # one across z (a rail or front going on straight at a corner) at
+        # the map's own phase: its posts stand where the drawn rail's do
+        shift = xa - math.floor(xa / 16.0) * 16.0 if k == 0 else 0.0
         ra, rb = ta + offset[kind], tb + offset[kind]
         # the face in (s along it, d under the rail's top)
         poly = [(0.0, ra - ta), (length, rb - tb), (length, rb - bb), (0.0, ra - ba)]
@@ -1567,8 +1989,8 @@ def _tile_flanks(faces):
             bands.append((RAIL + k * GIRDER, RAIL + (k + 1) * GIRDER, float(k * GIRDER)))
             k += 1
         for (d0, d1, back) in bands:
-            for t in range(int(length // 16) + 1):
-                s0, s1 = 16.0 * t, min(length, 16.0 * t + 16)
+            for t in range(int((length + shift) // 16) + 1):
+                s0, s1 = max(0.0, 16.0 * t - shift), min(length, 16.0 * t + 16 - shift)
                 if s1 - s0 < 1e-6:
                     continue
                 piece = poly
@@ -1582,7 +2004,7 @@ def _tile_flanks(faces):
                     f_ = ss / length if length else 0.0
                     ref = ra + (rb - ra) * f_
                     world.append((xa + (xb - xa) * f_, ref - dd, za + (zb - za) * f_))
-                    flank_uv.append((ss - s0, dd - back))
+                    flank_uv.append((ss - (16.0 * t - shift), dd - back))
                 # along a ramp the rail and its girder follow the slope, as a
                 # stair's railing does: sheared, not stretched
                 out.append((world, flank_uv, tag + ("~proj" if abs(rb - ra) > 1e-6 else ""), at))

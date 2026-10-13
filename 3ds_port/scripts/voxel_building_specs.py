@@ -2413,7 +2413,9 @@ def piece(name, shape, height, base=0, fill=None, leave=(), side=None, solid=Non
     tap's wire, a bed's open head frame), not the room painted on it;
     `round`: "dome", a round lid as a smooth cap under its drawing, `height`
     its crown over `base` (gen_voxel_buildings.dome_fit); "ball", round all
-    over, its circle's size (gen_voxel_buildings.ball_fit); `plan`: modelled
+    over, its circle's size (gen_voxel_buildings.ball_fit); "lathe", turned
+    (a jar), `height` tall, its belly and neck fitted to its drawing
+    (gen_voxel_buildings.lathe_fit); `plan`: modelled
     whole, an upright prism on that polygon of (x, z) in the room's pixels
     (vb.PlanPrism), its corners cut as the drawing cuts them - a counter;
     or blocks [(part, polygon, y0, y1, (x0, x1, foot)), ...], each its own
@@ -2672,13 +2674,13 @@ MART_WALL_SIDE = (32, 0, 48, 32)
 
 MART = [
     # the till on the glass counter's arm; the counter, an L from the wall
-    piece("till", [(32, 22, 48, 42)], 12, base=15, leave=MART_WALL),
+    piece("till", [(32, 24, 48, 39)], 8, base=15, leave=MART_WALL),
     # a glass case, whose drawn top is two rows: its depth is laid with the
     # glass of the arm that runs back to the wall, which shows its top whole
     piece("counter", [(32, 24, 48, 80), (0, 58, 48, 80)], 15, fill=1, back=64,
           top=(34, 56, 46, 70)),
     # the shelves along the back wall, the plant, the three standing shelves
-    piece("shelves_back", [(96, 14, 160, 42)], 20, leave=MART_WALL, back=32),
+    piece("shelves_back", [(96, 14, 160, 42)], 20, leave=MART_WALL, back=32, side="plain"),
     piece("plant", [(160, 30, 172, 64)], 26, leave=MART_WALL, card=True),
     # the display stands: low, their front the band at their foot, their
     # three compartments of goods their top, as long as the three cells
@@ -2913,7 +2915,10 @@ def house1():
         piece("plant_2", potted_plant(144, 17), 31, leave=GENERIC_WALL + GENERIC_FLOOR, card=True),
         # the glass case and the chest of drawers against the back wall
         piece("case", [(0, 12, 32, 40)], 20, leave=GENERIC_WALL + GENERIC_FLOOR, back=32),
-        piece("drawers", [(33, 11, 57, 41)], 21, leave=GENERIC_WALL + GENERIC_FLOOR, back=32),
+        # on two feet a pixel in from its ends, the floor's shade between; the
+        # line under them is the planks', drawn in its outline's colour
+        piece("drawers", [(33, 11, 57, 39)], 21, leave=GENERIC_WALL + GENERIC_FLOOR, back=32,
+              side="plain"),
         piece("wall", [(0, 0, 160, 32)], 32, fill=16, foot=32, side=(64, 0, 80, 32)),
         piece("side_w", [], 32, side=(64, 0, 80, 32), walls=[((0, 144), (0, 32))]),
         piece("side_e", [], 32, side=(64, 0, 80, 32), walls=[((160, 32), (160, 144))]),
@@ -2928,11 +2933,14 @@ def house2():
             + house_chair("chair_sw", (66, 80, 70, 96), (70, 84, 79, 96), fl)
             + [piece("chair_ne_back", [(122, 64, 126, 80)], 9, leave=fl, solid=True),
                piece("chair_se_back", [(122, 80, 126, 96)], 9, leave=fl, solid=True)] + [
-        piece("table", [(82, 64, 110, 96)], 10, leave=fl, solid=True),
+        # on its legs: the line under them is the planks', darkened
+        piece("table", [(82, 64, 110, 95)], 9, leave=fl, solid=True),
         # the television on its glass-doored stand: Littleroot's set, whose
-        # tile this is, on a stand a row shorter
-        piece("tv", [(32, 13, 48, 39)], 19, leave=GENERIC_WALL + fl, back=32,
-              top=(36, 14, 46, 15), side=(32, 20, 34, 39)),
+        # tile this is, on a stand a row shorter. Its doors' teal is the
+        # baseboard's, and its own; its sides the set's casing over the
+        # stand's middle post
+        piece("tv", [(32, 13, 48, 39)], 19, leave=GENERIC_WALL[:3] + fl, back=32,
+              top=(36, 14, 46, 15), side=[(32, 20, 34, 31), (39, 31, 41, 39)]),
         # the kitchen: a cupboard, the sink and hob, the fridge
         piece("tap", [(133, 16, 142, 25)], 8, base=8, leave=GENERIC_WALL[:2]),
         piece("cupboard", [(112, 17, 128, 40)], 16, leave=GENERIC_WALL + fl, back=32),
@@ -2952,13 +2960,18 @@ def house_with_bed():
     # the chairs and the chest of drawers are the second house's, pixel for
     # pixel, and stand here as they are (gen_voxel_buildings.reuse_pieces)
     return [
-        piece("table", [(128, 64, 158, 96)], 10, leave=fl, solid=True),
-        # the bed, its head a board at the mattress's back
-        piece("bed_head", [(4, 48, 28, 56)], 7, base=7, leave=fl),
+        # on its legs; its cloth's stripes run front to back, so its sides
+        # are the cloth's edge, not its front's stripes again
+        piece("table", [(128, 64, 158, 95)], 9, leave=fl, solid=True, side="plain"),
+        # the bed: the pillow lying on the mattress, and behind it the head,
+        # an open iron frame the floor is seen through
+        piece("pillow", [(10, 53, 22, 58)], 3, base=7, leave=fl),
+        piece("bed_head", [(4, 48, 28, 56)], 7, base=7, leave=fl, through=True, side="plain"),
         piece("bed", [(4, 56, 28, 80)], 7, leave=fl, solid=True),
         # along the back wall: the green chest, the bookcase
         piece("chest", [(16, 15, 32, 40)], 17, leave=GENERIC_WALL + fl, back=32),
-        piece("bookcase", [(128, 10, 160, 40)], 22, leave=GENERIC_WALL + fl, back=32),
+        # its frame's teal is the baseboard's
+        piece("bookcase", [(128, 10, 160, 39)], 21, leave=GENERIC_WALL[:3] + fl, back=32),
         piece("wall", [(0, 0, 160, 32)], 32, fill=16, foot=32, side=(64, 0, 80, 32)),
         piece("side_w", [], 32, side=(64, 0, 80, 32), walls=[((0, 128), (0, 32))]),
         piece("side_e", [], 32, side=(64, 0, 80, 32), walls=[((160, 32), (160, 128))]),
@@ -3032,16 +3045,24 @@ BRINEY_WALL = ("d5b483", "ffffff", "d5c54a", "947329", "ac8b39", "629c8b")
 
 
 def briney_room():
+    # the furniture's outline is the tatami's dark border line, and its wood
+    # the wall's pillars' and baseboard's: each piece leaves only the colours
+    # of the room that are round it, the plaster and the tatami
     fl = BRINEY_FLOOR
+    mat = tuple(c for c in fl if c != "414a6a")
+    plaster = ("d5b483", "d5c54a")
     side = (48, 0, 64, 32)
     return [
-        piece("table", [(114, 67, 139, 94)], 10, leave=fl, solid=True),
-        piece("jar_s", [(1, 65, 14, 80)], 9, leave=fl, solid=True),
-        piece("jar_w", [(1, 49, 14, 64)], 9, leave=fl, solid=True),
-        piece("jar_e", [(17, 49, 30, 64)], 9, leave=fl, solid=True),
-        piece("drawers", [(17, 10, 45, 45)], 22, leave=BRINEY_WALL + fl, back=32),
-        piece("chest", [(128, 16, 144, 45)], 16, leave=BRINEY_WALL + fl, back=32),
-        piece("case", [(144, 12, 177, 45)], 20, leave=BRINEY_WALL + fl, back=32),
+        # low, on four short legs: its top's edge band and the dark under it
+        # its front
+        piece("table", [(114, 67, 142, 95)], 7, leave=mat, solid=True),
+        # turned, their mouths open on top: belly, shoulder and neck as drawn
+        piece("jar_s", [(1, 65, 15, 79)], 7, leave=mat, round="lathe"),
+        piece("jar_w", [(1, 49, 15, 63)], 7, leave=mat, round="lathe"),
+        piece("jar_e", [(17, 49, 31, 63)], 7, leave=mat, round="lathe"),
+        piece("drawers", [(17, 10, 40, 40)], 22, leave=plaster + ("947329",) + mat, back=32),
+        piece("chest", [(128, 16, 144, 45)], 16, leave=plaster + mat, back=32, side="plain"),
+        piece("case", [(144, 12, 176, 45)], 20, leave=plaster + mat, back=32),
         piece("wall", [(0, 0, 192, 32)], 32, fill=16, foot=32, side=side),
         piece("side_w", [], 32, side=side, walls=[((0, 144), (0, 32))]),
         piece("side_e", [], 32, side=side, walls=[((192, 32), (192, 144))]),
@@ -3124,8 +3145,9 @@ def school_room():
 # ── The Pretty Petal flower shop ──────────────────────────────────────────
 #
 # Route 104's shop: planters of flowers and racks of potted plants about the
-# floor, a table of pots and a shelf along the back wall. The counter, the
-# stools and the vases stay drawn on the floor.
+# floor, two tables of pots and a shelf along the back wall. The counter, the
+# stools and the vases stay drawn on the floor. A potted plant on a stand or
+# a table is a card lifted onto it, as the plants on the floor are cards.
 
 SHOP_FLOOR = ("eef6ff", "d5d5e6", "b4acb4")
 SHOP_WALL = ("bdbd94", "e6e68b", "ffffbd", "629c62", "9cd59c", "4a7b41")
@@ -3139,18 +3161,57 @@ def flower_shop_room():
         return piece(name, [(x, y0, x + 16, y1)], 10, leave=fl, solid=True)
 
     def rack(name, x):
-        # from under the top plant's leaf tips, which close round two pixels
-        # of floor each side, down to its feet
-        return piece(name, [(x, 87, x + 16, 128)], 20, leave=fl, solid=True)
+        # a low stand of green slats on four legs, the floor seen between
+        # them, three potted plants in a row along it, each pot's rim
+        # twelve rows before the one in front:
+        # each plant its crown, the leaf tips either side of the pot behind
+        # it, its rim and its pot. Where a crown is drawn over the pot behind
+        # it, that pot's; under each pot's foot, the stand's top
+        def plant(part, r, crown, foot):
+            return piece("%s_%s" % (name, part),
+                         crown + [(x + 2, r - 3, x + 14, r), (x + 3, r, x + 13, r + 3),
+                                  (x + 4, r + 3, x + 12, r + 8)] + foot,
+                         16, base=8, leave=fl, card=True)
+
+        def tips(r):
+            return [(x + 3, r - 7, x + 4, r - 3), (x + 12, r - 7, x + 13, r - 3)]
+        return [
+            plant("plant_s", 111, tips(111), [(x + 6, 119, x + 10, 120)]),
+            plant("plant_c", 99, tips(99), []),
+            plant("plant_n", 87, [(x + 2, 80, x + 14, 84)], []),
+            piece(name, [(x, 87, x + 16, 128)], 8, leave=fl, side="plain", through=True),
+        ]
+
+    def back_table(name, x):
+        # a low table on four legs against the wall, three cacti in pots
+        # along its back and two plants before them, each its own card on
+        # it: white flowers in a grey pot, red in a yellow one. What a plant
+        # is drawn over of a pot behind it is the plant's
+        def card(part, shape, leave=fl):
+            return piece("%s_%s" % (name, part), shape, 12, base=7, leave=leave, card=True)
+
+        white = [(x + 6, 27, x + 7, 28), (x + 11, 27, x + 12, 28), (x + 5, 28, x + 13, 29),
+                 (x + 3, 29, x + 15, 30), (x + 2, 30, x + 16, 33), (x + 3, 33, x + 15, 35),
+                 (x + 4, 35, x + 14, 37), (x + 5, 37, x + 13, 38), (x + 6, 38, x + 12, 39),
+                 (x + 7, 39, x + 11, 40)]
+        red = [(x + 20, 27, x + 21, 28), (x + 25, 27, x + 26, 28), (x + 19, 28, x + 27, 29),
+               (x + 17, 29, x + 29, 30), (x + 16, 30, x + 30, 33), (x + 17, 33, x + 29, 35),
+               (x + 18, 35, x + 28, 37), (x + 19, 37, x + 27, 38), (x + 20, 38, x + 26, 39),
+               (x + 21, 39, x + 25, 40)]
+        return [card("white", white), card("red", red)] + [
+            card("cactus_%d" % (k + 1), [(x + 3 + 9 * k, 19, x + 11 + 9 * k, 29)],
+                 fl + ("e6e68b",)) for k in range(3)] + [
+            piece(name, [(x, 25, x + 32, 48)], 7, leave=fl, back=32, side="plain"),
+        ]
 
     return [
         planter("planter_sw", 0, 112, 144),
         planter("planter_w", 80, 96, 128), planter("planter_c", 128, 96, 128),
         planter("planter_e1", 192, 80, 128), planter("planter_e2", 208, 80, 128),
-        rack("rack_1", 96), rack("rack_2", 112), rack("rack_e", 224),
+    ] + rack("rack_1", 96) + rack("rack_2", 112) + rack("rack_e", 224) + [
         planter("planter_n1", 176, 48, 64), planter("planter_n2", 192, 48, 64),
         piece("shelf", [(112, 24, 152, 56)], 18, leave=SHOP_WALL + fl, back=42),
-        piece("pots", [(162, 18, 209, 48)], 14, leave=SHOP_WALL + fl, back=32),
+    ] + back_table("table_w", 160) + back_table("table_e", 192) + [
         piece("wall", [(0, 0, 240, 32)], 32, fill=16, foot=32, side=side),
         piece("side_w", [], 32, side=side, walls=[((0, 144), (0, 32))]),
         piece("side_e", [], 32, side=side, walls=[((240, 32), (240, 144))]),

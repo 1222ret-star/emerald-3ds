@@ -22,8 +22,6 @@ typedef uint8_t u8; typedef uint16_t u16; typedef bool bool8;
 #define W 320
 #define H 240
 #define CW 240
-#define MAP_ORIGIN_X 8
-#define MAP_ORIGIN_Y 8
 #define MAPSEC_NONE 255
 #define SCR_MAP 0
 #define MODE_OFF 0
@@ -34,6 +32,9 @@ typedef uint8_t u8; typedef uint16_t u16; typedef bool bool8;
 #define HIT_MAP 0
 #define LABEL_FG(x) (x)
 #define LABEL_SH(x) (x)
+#define TXT_WHITE 1
+#define TXT_DARK 2
+#define TXT_LIGHT 3
 typedef struct { u8 screen,mode,inBattle,bagView,mapsec,cursorX,cursorY,gender,pickMapsec,pickX,pickY,pressed,enabled; } ViewState;
 static u16 sCanvas[W*H], cache[W*H], fb[W*H], expected[W*H], *sCache[1]={cache}, *sDst;
 static int sOX, sAnimCount, sNormal, sAnim[1], blits;
@@ -50,19 +51,29 @@ static void DrawSprite(const u8 *p,int w,int h,int x,int y,const u16 *c) {
     (void)c; Fill(x,y,w*8,h*8,*p);
 }
 static void GetMapName(u8 *name,u8 map,unsigned pad) {(void)pad;name[0]=map;}
-static void DrawBoxEx(int k,int x,int y,int w,int h,bool dark) {(void)k;Fill(x,y,w*8,h*8,dark?2:3);}
-static void DrawStrCentered(const int*f,const u8*t,int x,int y,int a,int b) {
-    (void)f;(void)a;(void)b;Fill(x-20,y,40,16,t[0]+10);
+typedef struct { u16 o; } PlateLook;
+static struct { PlateLook plate, chosen; u16 chosenShadow; } sLook = {{20}, {21}, 22};
+static void DrawPlate(int x,int y,int w,int h,const PlateLook *p,int socket,bool8 pressed) {
+    (void)socket;(void)pressed;Fill(x,y,w,h,p->o);
 }
+static void DrawStrIn(const int*f,const u8*t,int x0,int x1,int y0,int y1,u16 fg,u16 sh) {
+    (void)f;(void)x1;(void)y1;Fill(x0+10,y0,40,16,t[0]+fg+sh);
+}
+static void ClipToMapWindow(int saved[4]) {(void)saved;}
+static void RestoreClip(const int saved[4]) {(void)saved;}
 static void AddHit(int a,int b,int c,int d,int e) {(void)a;(void)b;(void)c;(void)d;(void)e;}
 static void CtrBottom_BlitRect(const u16 *p,int x0,int y0,int x1,int y1) {
     ++blits;
     for(int x=x0;x<x1;++x) for(int y=y0;y<y1;++y) fb[x*H+H-1-y]=p[x*H+H-1-y];
 }
 '''
-    for name in ('static void DrawRegionName(', 'static void DrawRegionMap(',
+    # The map window's and the name plate's geometry, as the screen has it.
+    begin = bottom.index('#define MAP_ORIGIN_X')
+    source += bottom[begin:bottom.index('\n', bottom.index('#define NAME_H', begin)) + 1]
+    for name in ('static void DrawRegionName(', 'static void DrawMapMarks(', 'static void DrawRegionMap(',
                  'static bool8 MapCursorOnlyMoved(', 'static void MarkRect(',
-                 'static bool8 RectsMeet(', 'static bool8 MoveMapCursor('):
+                 'static bool8 RectsMeet(int ax0, int ay0, int ax1, int ay1, int bx0, int by0, int bx1, int by1)\n{',
+                 'static bool8 MoveMapCursor('):
         source += function(bottom, name)
     source += r'''
 static void Check(ViewState from,ViewState to,int count) {

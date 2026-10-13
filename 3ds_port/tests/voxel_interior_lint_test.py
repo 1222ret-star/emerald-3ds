@@ -1,7 +1,10 @@
 """A room's pieces judged by what the 45-degree proof cannot see
 (voxel_defect_scan.scan_piece, gen_voxel_buildings.room_facts): every fault
 found in Littleroot's rooms, made on purpose on synthetic pieces, is reported
-by its own kind - and the same piece made right is reported by none."""
+by its own kind - and the same piece made right is reported by none. And the
+verdict that fails the build on them (lint_verdict, F5): a fault in any room
+but one the allowlist accepts with its reason, and an entry in it that finds
+no fault any more."""
 
 import os
 import pathlib
@@ -264,6 +267,41 @@ check("room: a cupboard as white as the wall is its own",
       [("backdrop", "")] if bad.of("cupboard")["backdrop"] else [], [])
 
 
+
+def stand_of_pots():
+    """room_facts for two potted plants (cards) in a row on a green stand,
+    the one behind with its foot drawn under the crown of the one before
+    it, as on the flower shop's tables."""
+    W, H = 16, 40
+    img = Image.new("RGBA", (W, H), FLOOR)
+    px = img.load()
+    pieces = [piece("pot_s", [(4, 24, 12, 36)], 12, base=8, card=True),
+              piece("pot_n", [(4, 12, 12, 24)], 12, base=8, card=True),
+              piece("stand", [(0, 10, 16, 40)], 8, solid=True)]
+    for y in range(10, H):
+        for x in range(W):
+            px[x, y] = Room.GREEN
+    for y0 in (12, 24):
+        for y in range(y0, y0 + 12):
+            for x in range(4, 12):
+                px[x, y] = Room.RED if y < y0 + 6 else Room.BROWN
+    owner = [[next((k for k, pc in enumerate(pieces) if g._inside(pc["shape"], x, y)
+                    and px[x, y] != FLOOR), None) for x in range(W)] for y in range(H)]
+    drawn = [({(x, y) for y in range(H) for x in range(W) if owner[y][x] == k}, {})
+             for k in range(len(pieces))]
+    floor = Image.new("RGBA", (16, 16), FLOOR)
+    layout = types.SimpleNamespace(cell_image=lambda m: floor)
+    spec = {"name": "room", "interior": {"ground": [0]}}
+    return g.room_facts(spec, layout, pieces, drawn, owner, set(), px)
+
+
+pots = stand_of_pots()
+check("room: a pot before another stands on the stand",
+      [] if pots[0].get("support") == "room_stand" else [("floating", "")], [])
+check("room: the pot behind it, its foot hidden, too",
+      [("floating", "")] if pots[1].get("floating") or pots[1].get("support") != "room_stand"
+      else [], [])
+
 def lone(draw, pc, wall_rows=0):
     """room_facts for one piece standing alone in a 32 x 24 room of floor
     (and `wall_rows` of wall along its top): `draw(x, y)` its colour, or
@@ -355,6 +393,37 @@ with tempfile.TemporaryDirectory() as tmp:
     except SystemExit:
         refused = [("refused", "")]
     check("allowlist: a fault accepted with no reason is refused", refused, ["refused"])
+
+
+# ── the verdict: the lint fails the build, in every room (F5) ───────────
+
+def verdict(faults, linted, allowed, finished=(), rooms=("LAYOUT_X",), complete=True):
+    """lint_verdict's failures, as (failure, text) for check()."""
+    lines, failures = g.lint_verdict(faults, set(linted), allowed, list(finished),
+                                     list(rooms), complete)
+    return [("fail", t) for t in failures], lines
+
+
+SINK = ("LAYOUT_X", "room_sink", "under", "the floor under it")
+# a room no one has approved yet: until F5 a fault there was a warning
+got, _ = verdict([SINK], ["room_sink"], {})
+check("verdict: a fault in a room not finished fails", got, ["fail"])
+got, lines = verdict([SINK], ["room_sink"], {"room_sink": {"under": "its doors"}})
+check("verdict: a fault accepted passes, with its reason",
+      got + ([] if any("(allowed: its doors)" in t for t in lines) else [("reason", "")]), [])
+got, _ = verdict([SINK], ["room_sink"], {"room_sink": {"under": "its doors", "bleed": "its tap"}})
+check("verdict: an allowance that finds no fault fails", got, ["fail"])
+got, _ = verdict([], ["room_sink"], {"room_sink": {"undr": "its doors"}})
+check("verdict: an allowance with its kind misspelt fails", got, ["fail"])
+gone = {"room_tap": {"bleed": "its tap"}}
+got, _ = verdict([], ["room_sink"], gone)
+check("verdict: an allowance for a piece no room has fails", got, ["fail"])
+got, _ = verdict([], ["room_sink"], gone, complete=False)
+check("verdict: ...but not in an --only build, which leaves it out", got, [])
+got, _ = verdict([], ["room_sink"], {}, finished=["LAYOUT_Y"])
+check("verdict: a finished room with no pieces fails", got, ["fail"])
+got, _ = verdict([], ["room_sink"], {}, finished=["LAYOUT_X"])
+check("verdict: a finished room at 0 passes", got, [])
 
 if FAILED:
     raise SystemExit("%d interior lint case(s) failed: %s" % (len(FAILED), ", ".join(FAILED)))
