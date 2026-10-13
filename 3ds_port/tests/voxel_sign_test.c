@@ -6,6 +6,7 @@
 #include "voxel_sign.h"
 #include "voxel_regions.h"
 #include "voxel_relief.h"
+#include "voxel_building.h"
 
 static bool sFloor;
 static unsigned sLayout;
@@ -39,6 +40,13 @@ const int16_t *VoxelRelief_Cell(const VoxelMapInstance *inst, int x, int y)
 {
     (void)inst; (void)x; (void)y;
     return NULL;
+}
+/* Nor on a bridge's deck. */
+bool VoxelBuildings_DeckAt(const VoxelMapInstance *inst, float worldX, float worldZ,
+                           unsigned elevation, float *lift)
+{
+    (void)inst; (void)worldX; (void)worldZ; (void)elevation; (void)lift;
+    return false;
 }
 unsigned VoxelRegions_RoleAt(unsigned id,int x,int y)
 {

@@ -403,17 +403,25 @@ def solve(layout):
 _ART = {}
 
 # Secondary tilesets whose mountains are the General tileset's rock drawn
-# again in their own colours (Jagged Pass, Mt Chimney: Lavaridge's red rock).
+# again in their own colours (Jagged Pass, Mt Chimney: Lavaridge's red rock;
+# Route 115: Fallarbor's beige rock).
 # The analysis reads them as the General rock - each of their tiles that is
 # a General rock tile recoloured stands for it, every other tile is seen in
 # the General colours - and the export writes their own ids back, so the
 # console draws their own drawing on the relief read off its twin.
-ALIAS_TILESETS = {"gTileset_Lavaridge"}
+ALIAS_TILESETS = {"gTileset_Lavaridge", "gTileset_Fallarbor"}
 # the maps read so, each checked by the line check (voxel_relief_lines.py);
 # Route 112's red mountain, trees on every terrace, is not yet
 ALIAS_LAYOUTS = {"LAYOUT_JAGGED_PASS", "LAYOUT_MT_CHIMNEY", "LAYOUT_LAVARIDGE_TOWN"}
+# Maps whose recoloured rock only the terraces read (voxel_terraces.py,
+# terrace_art): the world is placed as it was before (read by the world's
+# solve, Route 115's mountain moved Route 114 48 px, Fortree 64 px and left a
+# step at the seam with Rustboro), and the terraces stand on it. Route 114's
+# south is the same beige mountain as Route 115's (voxel_terraces.JOIN).
+ALIAS_TERRACES = {"LAYOUT_ROUTE115", "LAYOUT_ROUTE114"}
 ALIAS_REFERENCE = "LAYOUT_ROUTE116"     # a layout over the General tileset
 _ALIAS = {}
+_TERRACE_ART = {}
 
 
 def _drawing(img):
@@ -422,15 +430,18 @@ def _drawing(img):
     return tuple(lab.setdefault(p, len(lab)) for p in img.convert("RGB").getdata())
 
 
-def alias_of(lid):
+def alias_of(lid, layouts=ALIAS_LAYOUTS):
     """({own id: General id}, {General id: own id}, {own colour: General
-    colour}) of a layout drawn with an ALIAS_TILESETS tileset, else None."""
+    colour}) of a layout drawn with an ALIAS_TILESETS tileset, else None.
+    `layouts`: the maps read so (the world's solve: ALIAS_LAYOUTS)."""
+    if lid not in layouts:
+        return None
     if lid in _ALIAS:
         return _ALIAS[lid]
     _ALIAS[lid] = None
     e = next((e for e in json.load(open(os.path.join(vb.ROOT, "data", "layouts", "layouts.json"),
                                         encoding="utf-8"))["layouts"] if e.get("id") == lid), None)
-    if e is None or e.get("secondary_tileset") not in ALIAS_TILESETS or lid not in ALIAS_LAYOUTS:
+    if e is None or e.get("secondary_tileset") not in ALIAS_TILESETS:
         return None
     art, ref = vb.LayoutArt(lid), vb.LayoutArt(ALIAS_REFERENCE)
     roles = ROCK_TILES | SIDE_WEST | SIDE_EAST | SEA_CAPS | BOULDER
@@ -449,6 +460,17 @@ def alias_of(lid):
         alias[m] = g
         for a, b in zip(art.cell_image(m).convert("RGB").getdata(), ref.cell_image(g).convert("RGB").getdata()):
             votes[a][b] += n
+    # a boulder's head is drawn as a band's head turning the corner under a
+    # rim is (093 is 06b's drawing): it is the boulder only where the map
+    # draws it over the boulder's foot (Route 115's mounds); elsewhere it is
+    # left to the analysis, which reads it as the corner it is (23b/23d)
+    for m, g in list(alias.items()):
+        if g not in BOULDER_HEADS:
+            continue
+        over = sum(1 for y in range(art.h - 1) for x in range(art.w)
+                   if art.metatile(x, y) == m and alias.get(art.metatile(x, y + 1)) == BOULDER_HEADS[g])
+        if 2 * over < used[m]:
+            del alias[m]
     if not alias:
         return None
     colour = {a: c.most_common(1)[0][0] for a, c in votes.items()}
@@ -499,10 +521,36 @@ def layout_art(lid):
     return _ART[lid]
 
 
-def own_id(lid, m):
+def own_id(lid, m, layouts=ALIAS_LAYOUTS):
     """The metatile the console has for an id the analysis read (alias_of)."""
-    a = alias_of(lid)
+    a = alias_of(lid, layouts)
     return a[1].get(m, m) if a else m
+
+
+def terrace_art(lid):
+    """The layout's drawing as voxel_terraces reads it: layout_art, or the
+    alias reading of an ALIAS_TERRACES map (the world's solve keeps its own)."""
+    if lid not in ALIAS_TERRACES:
+        return layout_art(lid)
+    if lid not in _TERRACE_ART:
+        a = alias_of(lid, ALIAS_TERRACES)
+        _TERRACE_ART[lid] = AliasArt(lid, a) if a else vb.LayoutArt(lid)
+    return _TERRACE_ART[lid]
+
+
+_OWN_ART = {}
+
+
+def own_art(lid):
+    """The layout's own drawing, its own ids and colours (cached)."""
+    if lid not in _OWN_ART:
+        _OWN_ART[lid] = vb.LayoutArt(lid)
+    return _OWN_ART[lid]
+
+
+def terrace_own_id(lid, m):
+    """own_id for the terraces' reading (terrace_art)."""
+    return own_id(lid, m, ALIAS_LAYOUTS | ALIAS_TERRACES)
 
 
 # ── mountains read off the drawing ──────────────────────────────────────────
@@ -572,6 +620,7 @@ GOES_ON = 2
 DIRT = {0x113, 0x114, 0x115, 0x14b, 0x14c, 0x14d}
 # A boulder drawn two cells tall sits on its terrace: all of it is top.
 BOULDER = {0x93, 0x94, 0x9b, 0x9c}
+BOULDER_HEADS = {0x93: 0x9b, 0x94: 0x9c}    # its upper half: the lower half under it
 # West and east faces are drawn as bands down the side of the higher terrace,
 # one band a level: the face on the left of the cell and the top on its right
 # faces west, and the other way round east. Nothing in a 45-degree drawing
@@ -810,6 +859,18 @@ STEP_SEAMS = {
         "the wood and the beach they share",
 }
 STEP_SEAM_WEIGHT = 1
+# Groups the world places by voxel_terraces.py's count of their levels
+# (region_ties) instead of this file's solve, and why. Only these: every
+# group read anew moves the world (all of them at once put steps at
+# Rustboro's seams with Routes 115 and 116).
+COUNTED_GROUPS = {
+    "route111": "the harmonic solve put three levels between the hollow at "
+                "Mauville and the plateau its two flights of stairs climb to: "
+                "pinned at Fallarbor and Lavaridge, the world left the terraces "
+                "a level off Mauville's seam (the step goes to Fallarbor / Route "
+                "114's, given up already)",
+    "route111_no_mirage_tower": "the same, the layout without the Mirage Tower",
+}
 HARD_WEIGHT = 1e6    # ground walked from one to the other
 LOOSE_WEIGHT = 0.01  # a block nothing places: kept near its group's ground
 WORLD_ROOT = "LAYOUT_LITTLEROOT_TOWN"
@@ -945,14 +1006,18 @@ def _give_up_seams(n, samples, fixed):
         del pairs[worst]
 
 
-def _blocks(prep):
+def _blocks(prep, counted=None):
     """A group's terraces solved against each other: (levels relative to
     their block's first terrace, block of each terrace). A terrace nothing
-    joins to another is a block of its own."""
+    joins to another is a block of its own. `counted`: {(a, b): d} drops
+    between regions that hold whatever the drawing's runs say (the count of
+    voxel_terraces.py, for the groups built that way)."""
     sizes, runs = prep["sizes"], prep["runs"]
+    if counted:
+        runs = {k: v for k, v in runs.items() if k not in counted and k[::-1] not in counted}
     n = len(sizes)
     adj = [set() for _ in range(n)]
-    for (a, b) in runs:
+    for (a, b) in list(runs) + list(counted or ()):
         adj[a].add(b)
         adj[b].add(a)
     block, anchors = [-1] * n, {}
@@ -968,8 +1033,9 @@ def _blocks(prep):
                 if block[o] < 0:
                     block[o] = k
                     stack.append(o)
-    level, _ = _robust(n, {k: [(d, 1) for d in v] for k, v in runs.items()}, anchors,
-                       prep.get("ties", ()))
+    samples = {k: [(d, 1) for d in v] for k, v in runs.items()}
+    samples.update({k: [(d, HARD_WEIGHT)] for k, d in (counted or {}).items()})
+    level, _ = _robust(n, samples, anchors, prep.get("ties", ()))
     return level, block
 
 
@@ -985,9 +1051,14 @@ def world_levels():
                                     encoding="utf-8"))["layouts"] if e.get("id")}
     links = map_links()
     candidates = [g for g in DRAWN if g not in DRAWN_EXCLUDED]
+    # the groups placed by voxel_terraces.py's count of their levels
+    import voxel_terraces
+    terraced = {g for g in candidates if g in COUNTED_GROUPS
+                and set(DRAWN[g]) & set(voxel_terraces.chosen_layouts())}
     local = {}
     for g in candidates:
-        local[g] = _blocks(drawn_prepare(g))
+        prep = drawn_prepare(g)
+        local[g] = _blocks(prep, voxel_terraces.region_ties(g, prep) if g in terraced else None)
 
     def solve(groups):
         owner = {}
@@ -2995,9 +3066,6 @@ def cut_cells(lid, roles_layout, h):
     return out
 
 
-_PLAIN = {}
-
-
 _SIDE_PIXELS = {      # the part of a tile that faces the rock: its south rows, east or west columns
     None: lambda i, j: True,
     "S": lambda i, j: j >= 10,
@@ -3006,21 +3074,28 @@ _SIDE_PIXELS = {      # the part of a tile that faces the rock: its south rows, 
 }
 
 
-def plain_ground(art, layout, content, x, y, side=None, kind=None):
+def plain_ground(art, layout, content, x, y, side=None, kind=None, half=False):
     """The plainest drawing of the ground at (x, y), as a metatile: what
     runs on under a rock or a rim is the ground itself, not its shore or
     its edge, which tiled again would show seams. Of the ground round it
     whose commonest colour is this one's, the tile most of that colour (the
-    plain sand of a shore, never the sea beyond it)."""
+    plain sand of a shore, never the sea beyond it).
+    `half`: only a tile that colour at least half over (voxel_terraces, a
+    map read in its own colours: Route 114's dirt edged half in orange has
+    fewer far colours than its plain dirt, flecked darker)."""
     def main(m):
         """(its commonest colour, how many pixels of it, how many pixels are
-        another colour altogether - a shore's few drops of the sea on a sand)"""
-        if m not in _PLAIN:
+        another colour altogether - a shore's few drops of the sea on a sand)
+        Cached on the art: an id over 0x200 is its secondary tileset's own
+        (keyed by the id alone, Route 114's Fallarbor tiles gave Pacifidlog
+        its ground)."""
+        known = art.__dict__.setdefault("_plain", {})
+        if m not in known:
             px = list(art.cell_image(m).convert("RGB").getdata())
             c = commonest(px)
             foreign = sum(1 for p in px if sum(abs(p[i] - c[i]) for i in range(3)) > 150)
-            _PLAIN[m] = (c, px.count(c), foreign)
-        return _PLAIN[m]
+            known[m] = (c, px.count(c), foreign)
+        return known[m]
     m0 = art.metatile(x, y)
     forced = kind is not None
     if forced:
@@ -3040,7 +3115,7 @@ def plain_ground(art, layout, content, x, y, side=None, kind=None):
             if c in content or not (0 <= c[0] < layout.w and 0 <= c[1] < layout.h):
                 continue
             m = art.metatile(*c)
-            if main(m)[0] != kind:
+            if main(m)[0] != kind or (half and 2 * main(m)[1] < 256):
                 continue
             k = (main(m)[2], -main(m)[1], abs(dx) + abs(dy))
             if best is None or k < best[0]:
@@ -3052,13 +3127,13 @@ def plain_ground(art, layout, content, x, y, side=None, kind=None):
 
 def _plain_tile(art, m):
     """Is metatile m ground with no rock drawn on it (under a tenth)?"""
-    if (id(art), m) not in _PLAIN_TILE:
+    # cached on the art itself: keyed by id(art), a short-lived art (the
+    # ledges' own reading of an aliased map) could reuse a freed one's id
+    known = art.__dict__.setdefault("_plain_tile", {})
+    if m not in known:
         px = list(art.cell_image(m).convert("RGB").getdata())
-        _PLAIN_TILE[(id(art), m)] = sum(1 for p in px if p in ROCK_ALL) < len(px) // 10
-    return _PLAIN_TILE[(id(art), m)]
-
-
-_PLAIN_TILE = {}
+        known[m] = sum(1 for p in px if p in ROCK_ALL) < len(px) // 10
+    return known[m]
 
 
 def _plain_background(art, m, mask, ground):
@@ -3077,7 +3152,7 @@ def _plain_background(art, m, mask, ground):
     return near >= 0.9 * len(bg)
 
 
-def _behind(art, layout, x, y, rock, mask=None):
+def _behind(art, layout, x, y, rock, mask=None, half=False):
     """The ground a cut tile is drawn over, as a metatile: what lies north of
     it, or beside it. It runs on under the rock south of the tile - never
     drawn, the rock covers it at 45 degrees - where, seen from above, the
@@ -3094,13 +3169,13 @@ def _behind(art, layout, x, y, rock, mask=None):
             for (dx, dy, side) in ((0, -1, "S"), (-1, 0, "E"), (1, 0, "W"), (0, 0, None)):
                 nx, ny = x + dx, y + dy
                 if 0 <= nx < layout.w and 0 <= ny < layout.h and (nx, ny) not in rock or (dx, dy) == (0, 0):
-                    m = plain_ground(art, layout, rock, nx, ny, side, kind)
+                    m = plain_ground(art, layout, rock, nx, ny, side, kind, half)
                     if m is not None:
                         return m
     for (dx, dy, side) in ((0, -1, "S"), (-1, 0, "E"), (1, 0, "W")):
         nx, ny = x + dx, y + dy
         if 0 <= nx < layout.w and 0 <= ny < layout.h and (nx, ny) not in rock:
-            return plain_ground(art, layout, rock, nx, ny, side)
+            return plain_ground(art, layout, rock, nx, ny, side, half=half)
     return None
 
 

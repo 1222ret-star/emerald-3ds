@@ -5,7 +5,8 @@ A sign metatile draws the post over the ground it stands on. The upper layer
 is always the sign; on the lower layer, a pixel is ground when its colour is
 one the walkable cells around the sign draw on their own lower layer. What
 remains, closed off from the cell's border by a flood fill, is the sign's
-silhouette, one bit per pixel and row.
+silhouette, one bit per pixel and row. A sign drawn as a post's
+(voxel_cells.Layout.draws_post_sign) is its upper layer alone.
 """
 
 from collections import deque
@@ -45,21 +46,28 @@ def cutout_mask(opaque, width=16, height=16):
 
 
 def metatile_mask(pair, layout, x, y):
-    ground = ground_colours(pair, layout, x, y)
     metatile = layout.metatile(x, y)
+    if layout.draws_post_sign(metatile):
+        # all its lower layer is ground, however the cells around draw theirs
+        # (Dewford's sand, on both layers) and whatever it stands against
+        # (the corner of Lavaridge's gym)
+        return cutout_mask(pair.layer_pixels(metatile, 1))
+    ground = ground_colours(pair, layout, x, y)
     pixels = {p: c for p, c in pair.layer_pixels(metatile, 0).items() if c not in ground}
     pixels.update(pair.layer_pixels(metatile, 1))
     return cutout_mask(pixels)
 
 
-# A head wider than this, or bigger, is a crown or a roof the sign stands in
-# front of, not a part of it.
-HEAD_MAX_WIDTH = 14
+# A head as wide as its cell, or bigger than this, is a crown or a roof the
+# sign stands in front of, not a part of it. A gym's sign is a pixel short of
+# its cell's width, and so is the round top it draws in the cell north.
+HEAD_MAX_WIDTH = 15
 HEAD_MAX_PIXELS = 160
 
 
 def head_mask(pair, sign_rows, north):
-    """The part of a sign drawn in the cell north of it: a lamp's lantern.
+    """The part of a sign drawn in the cell north of it: a lamp's lantern,
+    a gym sign's top.
 
     Only the upper layer is a candidate - what the GBA draws over the player,
     who walks behind the lamp - and only the pixels 8-connected to the sign's

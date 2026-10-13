@@ -248,6 +248,14 @@ static uint8_t sAnimWork[128];
 /* Where the next pass starts looking for a page with dirty tiles. */
 static unsigned sAnimNext;
 static bool sAnimPending;
+/* The building pages' texels drawn from animated tiles (Rustboro's fountain:
+ * its jet, VoxelBuildings_AnimRun): the BG tiles written since they were
+ * last redrawn, and the linear buffer their blocks are composed in for the
+ * GPU to copy into the page - reused once the frame's copies are done. */
+#define VOXEL_BUILDING_ANIM_BYTES 4096u
+static uint8_t sBuildingAnimDirty[128];
+static bool sBuildingAnimPending;
+static uint16_t *sBuildingAnimOut;
 static void AnimForget(VoxelAtlasSlot *slot)
 {
     if (sAnimWorkAtlas == slot)
@@ -262,9 +270,13 @@ void CtrVoxel_NotifyTilesetAnimWrite(unsigned firstTile, unsigned tileCount)
     if (firstTile >= 1024) return;
     if (tileCount > 1024 - firstTile) tileCount = 1024 - firstTile;
     for (unsigned t = firstTile; t < firstTile + tileCount; ++t)
+    {
         for (unsigned page = 0; page < VOXEL_ATLAS_PAGES; ++page)
             sAnimDirty[page][t >> 3] |= 1u << (t & 7);
+        sBuildingAnimDirty[t >> 3] |= 1u << (t & 7);
+    }
     sAnimPending = true;
+    sBuildingAnimPending = true;
 }
 static bool AtlasJobBusy(void);
 static void AtlasJobCancel(void);
@@ -976,7 +988,9 @@ static int sDynamicX, sDynamicZ; /* the billboards' origin this frame */
  */
 #define VOXEL_BUILDING_PAGES 4
 #define VOXEL_PAGE_SLICE (64u * 1024u) /* texels per read: 128 KiB */
-#define VOXEL_PAGE_VRAM_BUDGET (768u * 1024u)
+/* Pages take their whole power-of-two texture (PageBytes): the Battle
+ * Frontier's two halves, in view together, are 512 KiB each. */
+#define VOXEL_PAGE_VRAM_BUDGET (1024u * 1024u)
 /* A page that found no room is asked for again only after this long. */
 #define VOXEL_PAGE_RETRY_FRAMES 120u
 
@@ -1030,19 +1044,34 @@ static bool sPageNoRoomLogged[VOXEL_MAX_PAGES];
 
 /* A page texture over a piece of the arena. Never C3D_TexDelete'd: that
  * would hand the piece to the console's allocator, which never gave it.
- * The piece holds the page's `h` rows; the texture is `th` tall, a power of
- * two, and its rows past `h` are never sampled (VoxelBuildings_PageSize). */
-static void PageTexInit(C3D_Tex *tex, void *data, unsigned w, unsigned h, unsigned th)
+ * The texture is `th` tall, a power of two, and so is its piece (PageBytes):
+ * only the page's own rows are streamed in, the rest are never sampled. */
+static void PageTexInit(C3D_Tex *tex, void *data, unsigned w, unsigned th)
 {
     memset(tex, 0, sizeof(*tex));
     tex->data = data;
     tex->fmt = GPU_RGBA5551;
-    tex->size = w * h * sizeof(uint16_t);
+    tex->size = w * th * sizeof(uint16_t);
     tex->width = (u16)w;
     tex->height = (u16)th;
     tex->param = GPU_TEXTURE_MODE(GPU_TEX_2D);
     C3D_TexSetFilter(tex, GPU_NEAREST, GPU_NEAREST);
     C3D_TexSetWrap(tex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+}
+
+/*
+ * The VRAM a page's texture takes: all `th` rows the GPU is told it has, not
+ * only the `h` rows the file holds. The rows past the page are never
+ * sampled, so on the console a piece of `h` rows was enough - but an
+ * emulator's texture cache (Azahar, Citra) takes the texture's whole range
+ * as its own, and over a neighbouring page, or past the arena into another
+ * surface, it was given the wrong texels: a map's houses drawn in one flat
+ * colour, or in another page's art, now and then, after the menu had moved
+ * the VRAM around them.
+ */
+static unsigned PageBytes(unsigned w, unsigned th)
+{
+    return w * th * sizeof(uint16_t);
 }
 
 static void PageFree(BuildingPageSlot *slot)
@@ -1300,13 +1329,13 @@ static void WantPage(int page, uint32_t keep, bool quiet)
      */
     while (victim->tex.data == NULL)
     {
-        unsigned bytes = w * h * sizeof(uint16_t);
+        unsigned bytes = PageBytes(w, th);
         void *block = VoxelArena_Alloc(&sPageArena, bytes, bytes < 256u * 1024u);
         BuildingPageSlot *drop = NULL;
 
         if (block != NULL)
         {
-            PageTexInit(&victim->tex, block, w, h, th);
+            PageTexInit(&victim->tex, block, w, th);
             victim->w = w;
             victim->h = h;
             break;
@@ -1789,6 +1818,12 @@ bool CtrVoxel_Init(void)
     sAnimOut = linearAlloc(VOXEL_ANIM_SLOTS * sizeof(VoxelAnimSlot));
     if (sAnimOut == NULL)
         CtrLog_Write(CTR_LOG_ERROR, "VOXEL: no linear memory for the animated tiles");
+    if (sHaveBuildings && VoxelBuildings_AnimRunCount() != 0)
+    {
+        sBuildingAnimOut = linearAlloc(VOXEL_BUILDING_ANIM_BYTES);
+        if (sBuildingAnimOut == NULL)
+            CtrLog_Write(CTR_LOG_ERROR, "VOXEL: no linear memory for the buildings' animated texels");
+    }
     sAnimWorkPage = 0;
     sAnimWorkAtlas = NULL;
     sReady = true;
@@ -1830,6 +1865,10 @@ void CtrVoxel_Shutdown(void)
     sAnimWorkAtlas = NULL;
     memset(sAnimDirty, 0, sizeof(sAnimDirty));
     sAnimPending = false;
+    linearFree(sBuildingAnimOut);
+    sBuildingAnimOut = NULL;
+    memset(sBuildingAnimDirty, 0, sizeof(sBuildingAnimDirty));
+    sBuildingAnimPending = false;
     linearFree(sAtlasStaging);
     sAtlasStaging = NULL;
     for (unsigned i = 0; i < VOXEL_ATLAS_SLOTS; ++i)
@@ -4242,7 +4281,8 @@ static bool HandleMapChange(int mapGroup, int mapNum, float playerX, float playe
     sDappleAnchorX = sDappleAnchorZ = 0;
     sBeltOriginX = sBeltOriginY = 0;
     ++sBeltGrid;
-    VoxelCamera_SetGround(&sCamera, VoxelRelief_LiftAt(playerX + 0.5f, playerZ + 0.5f), 1);
+    VoxelCamera_SetGround(&sCamera, VoxelRelief_LiftAt(playerX + 0.5f, playerZ + 0.5f)
+                                    + VoxelEntities_PlayerDeck(), 1);
     VoxelCamera_Snap(&sCamera, playerX, playerZ);
     return false;
 }
@@ -4538,6 +4578,58 @@ static void AnimateTiles(const VoxelMapInstance *inst)
     }
 }
 
+/*
+ * The building pages' animated texels (a fountain's jet): every run that
+ * reads a tile the game has written since the last pass, on a page in VRAM,
+ * is composed from the tiles as the game now holds them and copied over its
+ * blocks by the GPU - a few hundred bytes. Only the current map's: BG VRAM
+ * holds its tilesets, not those of the maps beside it, whose runs keep the
+ * frame they were drawn with until it is the current map again.
+ */
+static void AnimateBuildings(const VoxelMapInstance *inst)
+{
+    unsigned used = 0;
+    bool left = false;
+
+    if (!sBuildingAnimPending)
+        return;
+    if (sBuildingAnimOut == NULL)
+    {
+        sBuildingAnimPending = false;
+        return;
+    }
+    for (unsigned run = 0; run < VoxelBuildings_AnimRunCount(); ++run)
+    {
+        unsigned page, offset, bytes;
+        int layout;
+        BuildingPageSlot *slot;
+        uint16_t *out;
+
+        if (!VoxelBuildings_AnimRun(run, &page, &layout, &offset, &bytes) || layout != inst->layoutId
+         || !VoxelBuildings_AnimRunDirty(run, sBuildingAnimDirty))
+            continue;
+        slot = FindPage((int)page);
+        if (slot == NULL || slot->loaded < slot->w * slot->h)
+            continue;   /* not drawn now; redrawn at the next write once it is */
+        if (used + bytes > VOXEL_BUILDING_ANIM_BYTES || !CtrVideo_TryVoxelUpload())
+        {
+            left = true;    /* this frame is full: the rest at the next */
+            break;
+        }
+        out = (uint16_t *)((uint8_t *)sBuildingAnimOut + used);
+        VoxelBuildings_ComposeAnimRun(run, CtrVideo_GetBgVram(), out);
+        GSPGPU_FlushDataCache(out, bytes);
+        C3D_SyncTextureCopy((u32 *)out, 0, (u32 *)((uint8_t *)slot->tex.data + offset), 0, bytes, 8);
+        used += bytes;
+        ++sStats.animationUploads;
+    }
+    if (!left)
+    {
+        memset(sBuildingAnimDirty, 0, sizeof(sBuildingAnimDirty));
+        sBuildingAnimPending = false;
+    }
+}
+
 bool CtrVoxel_Update(void)
 {
     const VoxelMapInstance *inst;
@@ -4641,7 +4733,8 @@ bool CtrVoxel_Update(void)
     }
     else if (!sBattle.on)
     {
-        VoxelCamera_SetGround(&sCamera, VoxelRelief_LiftAt(smoothX + 0.5f, smoothZ + 0.5f), 0);
+        VoxelCamera_SetGround(&sCamera, VoxelRelief_LiftAt(smoothX + 0.5f, smoothZ + 0.5f)
+                                        + VoxelEntities_PlayerDeck(), 0);
         VoxelCamera_Update(&sCamera, smoothX, smoothZ);
     }
     if (sBattle.on)
@@ -4734,6 +4827,7 @@ bool CtrVoxel_Update(void)
         uint64_t animStart = svcGetSystemTick();
 
         AnimateTiles(inst);
+        AnimateBuildings(inst);
         sStats.animMs = MsSince(animStart);
     }
 

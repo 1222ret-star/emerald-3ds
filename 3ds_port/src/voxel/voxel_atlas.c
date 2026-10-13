@@ -305,14 +305,25 @@ static bool ComposeAt(const struct AtlasSource *src, const uint16_t *entries,
         }
     }
     /* a cut tile's background is clear: the alpha test leaves the ground
-     * drawn flat under it to show */
-    for (unsigned y = 0; cut != NULL && y < VOXEL_ATLAS_SLOT && y < 16; ++y)
+     * drawn flat under it to show (less what its straight diagonals take
+     * in: VoxelRelief_CutClear) */
+    if (cut != NULL)
     {
-        unsigned row = (unsigned)cut[2 * y] | ((unsigned)cut[2 * y + 1] << 8);
+        uint16_t clear[16];
 
-        for (unsigned x = 0; x < 16; ++x)
-            if ((row >> x) & 1u)
-                dest[CtrVideo_Texel(baseX + x, baseY + y, width)] &= (uint16_t)~1u;
+        VoxelRelief_CutClear(cut, clear);
+        for (unsigned y = 0; y < VOXEL_ATLAS_SLOT && y < 16; ++y)
+            for (unsigned x = 0; x < 16; ++x)
+            {
+                int from = VoxelRelief_CutFringe(cut, clear, (int)x, (int)y);
+
+                if ((clear[y] >> x) & 1u)
+                    dest[CtrVideo_Texel(baseX + x, baseY + y, width)] &= (uint16_t)~1u;
+                else if (from >= 0)
+                    /* kept for the polygon's edge: the rock's colour */
+                    dest[CtrVideo_Texel(baseX + x, baseY + y, width)] =
+                        dest[CtrVideo_Texel(baseX + (unsigned)(from % 16), baseY + (unsigned)(from / 16), width)];
+            }
     }
     return black;
 }

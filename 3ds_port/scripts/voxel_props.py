@@ -53,6 +53,27 @@ OBJECTS = {
                  (128, 129, 132, 133),
                  (144, 145, 148, 149)),
     },
+    # The same boulder and stack in Fallarbor's beige (Routes 114 and 115):
+    # the General's tiles drawn in the secondary tileset's palette 11, the
+    # boulder on the mountain's top, the stack in the sea and, on the land,
+    # as the mounds on Route 115's terraces
+    "sand_boulder_fallarbor": {
+        "land": True,
+        "tileset": "gTileset_General",
+        "secondary": "gTileset_Fallarbor",
+        "palette": 11,
+        "grid": ((88, 89),
+                 (104, 105)),
+    },
+    "sea_stack_fallarbor": {
+        "tileset": "gTileset_General",
+        "secondary": "gTileset_Fallarbor",
+        "palette": 11,
+        "grid": ((None, 65, 68, (69, True, 11)),
+                 (80, 81, 84, 85),
+                 (128, 129, 132, 133),
+                 (144, 145, 148, 149)),
+    },
     # Slateport market's goods, each a cell of the secondary tileset's
     # upper layer over whatever paving it stands on
     "basket_green": {"tileset": "gTileset_General", "secondary": "gTileset_Slateport",

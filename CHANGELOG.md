@@ -96,6 +96,14 @@ Fixed:
 - Battles: after opening the bag or the party in a battle, a stat change
   (Growl, Defense Curl and the like) covered the whole screen with its
   pattern instead of only the Pokémon.
+- Voxel mode: Rustboro's and Mauville's streets no longer stand up in low
+  blocks here and there (Rustboro's main road among them). Their paving is
+  the same tile as the middle of the white curbs round lawns and landings,
+  and was raised as curb.
+- Voxel mode: Rustboro's fountain is built again from its drawing: the rim
+  stands over the water, the dish sits on a stem in the middle, and its walls
+  are solid all round (one side was a dark slab and another see-through). Its
+  jet plays the game's animation, as on the GBA.
 
 ## 0.3.1 — 2026-10-10
 

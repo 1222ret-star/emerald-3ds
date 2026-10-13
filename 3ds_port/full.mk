@@ -388,6 +388,9 @@ map-includes:
 VOXEL_GFX_SOURCES := $(wildcard $(ROOT)/data/tilesets/primary/*/tiles.png $(ROOT)/data/tilesets/secondary/*/tiles.png)
 VOXEL_GFX_SOURCES += $(wildcard $(ROOT)/data/tilesets/primary/*/palettes/*.pal $(ROOT)/data/tilesets/secondary/*/palettes/*.pal)
 VOXEL_GFX_SOURCES += $(wildcard $(ROOT)/graphics/intro/scene_1/bg.png)
+# The tileset animations a model's texels follow (voxel_building_specs.py
+# FOUNTAIN_ANIM: Rustboro's fountain).
+VOXEL_GFX_SOURCES += $(wildcard $(ROOT)/data/tilesets/secondary/rustboro/anim/fountain/*.png)
 VOXEL_GFX_OUTPUTS := $(patsubst %.png,%.4bpp,$(filter %.png,$(VOXEL_GFX_SOURCES)))
 VOXEL_GFX_OUTPUTS += $(patsubst %.pal,%.gbapal,$(filter %.pal,$(VOXEL_GFX_SOURCES)))
 ifneq ($(strip $(VOXEL_GFX_OUTPUTS)),)
@@ -426,7 +429,7 @@ romfs/voxel/trees.rgba5551: scripts/gen_voxel_trees.py \
 # file). verify-voxel-buildings runs the proofs alone, even when the file is
 # up to date: the release build asks for it.
 romfs/voxel/buildings.bin: scripts/gen_voxel_buildings.py scripts/voxel_building.py \
-		scripts/voxel_building_specs.py scripts/dump_region_art.py scripts/voxel_props.py \
+		scripts/voxel_building_specs.py scripts/voxel_bridge.py scripts/dump_region_art.py scripts/voxel_props.py \
 		scripts/voxel_relief_fixes.py assets/voxel/relief_fixes.json \
 		$(ROOT)/data/layouts/layouts.json
 	@mkdir -p $(@D)
@@ -596,6 +599,27 @@ verify-bottom-map:
 verify: verify-voxel-regions
 verify-voxel-regions: romfs/voxel/regions.bin
 	"$(PYTHON)" -B tests/voxel_regions_test.py --cc "$(HOSTCC)"
+
+# The buildings' animated texels (Rustboro's fountain plays its jet), composed
+# by voxel_building.c from BG VRAM at each frame of the game's animation.
+.PHONY: verify-voxel-building-anim
+verify: verify-voxel-building-anim
+verify-voxel-building-anim: romfs/voxel/buildings.bin
+	"$(PYTHON)" -B tests/voxel_building_anim_test.py --cc "$(HOSTCC)"
+
+# A room's pieces judged by what the 45-degree proof cannot see
+# (scripts/voxel_defect_scan.py on gen_voxel_buildings' room facts): every
+# fault found in Littleroot's rooms, made on purpose on synthetic pieces, is
+# reported by its own kind, and the same piece made right by none; the
+# allowlist of faults accepted (assets/voxel/interior_lint_allow.toml) read
+# with a reason for each; and the parts that make them right (casings,
+# tables on legs, tops flat against a wall, pieces cut by their outlines,
+# frames seen through, domes) still exact at 45 degrees.
+.PHONY: verify-voxel-interior-lint
+verify: verify-voxel-interior-lint
+verify-voxel-interior-lint:
+	"$(PYTHON)" -B tests/voxel_interior_lint_test.py
+	"$(PYTHON)" -B tests/voxel_interior_parts_test.py
 
 # What the console builds of every map, checked by the engine's own code over
 # the shipped data (scripts/voxel_engine_view.py check, tests/voxel_scene_dump.c):

@@ -66,7 +66,7 @@ SCRATCH = 8192 + 64 * 18          # ctr_voxel.c VOXEL_CHUNK_SCRATCH
 # its own block, the largest ~80 KiB. To confirm on the console: no "no
 # linear memory" line in port.log.
 STATIC_BUDGET = 160 * 1024
-PAGE_ARENA = 768 * 1024           # ctr_voxel.c VOXEL_PAGE_VRAM_BUDGET
+PAGE_ARENA = 1024 * 1024          # ctr_voxel.c VOXEL_PAGE_VRAM_BUDGET
 SHAPE_FLAT, SHAPE_WATER = 0, 7    # voxel_world.h VoxelVisualShape
 SUN_DX, SUN_DZ, AMBIENT = 0.85, 0.55, 0.70
 TREE_DIM = 128
@@ -103,9 +103,9 @@ class Buildings:
 
     def __init__(self):
         b = self.blob = open(os.path.join(PORT, "romfs", "voxel", "buildings.bin"), "rb").read()
-        assert b[:4] == b"VXB7"
+        assert b[:4] == b"VXB8"
         (npages, nmodels, npm, nplaces, hbytes, nmasks) = struct.unpack_from("<6H", b, 4)
-        nverts, nvar = struct.unpack_from("<IH", b, 16)
+        nverts, nvar, ndecks = struct.unpack_from("<IHH", b, 16)
         o = 24
         self.pages = [struct.unpack_from("<HHI", b, o + 8 * i) for i in range(npages)]
         o += npages * 8
@@ -127,7 +127,7 @@ class Buildings:
         o += o & 1
         o += hbytes * 2 + nmasks * 32 + hbytes
         o += o & 1
-        o += nvar * 6
+        o += nvar * 6 + ndecks * 8
         o += (-o) & 3
         self.vert_at = o
         self._pages = {}
@@ -562,8 +562,8 @@ def static_bytes(bld, page_model):
 
 
 def layout_pages(bld):
-    """Layout id (1-based) -> its page's (width, rows), what the page arena
-    gives it, from the placements (one page a layout)."""
+    """Layout id (1-based) -> its page's (width, rows), from the placements
+    (one page a layout)."""
     b = bld.blob
     npages, nmodels, npm, nplaces = struct.unpack_from("<4H", b, 4)
     o = 24 + npages * 8 + nmodels * 16 + npm * 8
@@ -593,9 +593,12 @@ def page_pairs(bld):
         for c in m.get("connections") or []:
             other = maps.get(c.get("map"))
             b = sizes.get(lid_of.get(other.get("layout"))) if other else None
-            if a and b and a[0] * a[1] * 2 + b[0] * b[1] * 2 > PAGE_ARENA:
+            # a page takes its texture's power-of-two rows in the arena
+            # (ctr_voxel.c PageBytes), not only the rows it holds
+            need = (a[0] * texture_rows(a[1]) + b[0] * texture_rows(b[1])) * 2 if a and b else 0
+            if need > PAGE_ARENA:
                 pair = tuple(sorted((m["id"], other["id"])))
-                bad.add(pair + ((a[0] * a[1] + b[0] * b[1]) * 2 >> 10,))
+                bad.add(pair + (need >> 10,))
     return sorted(bad)
 
 

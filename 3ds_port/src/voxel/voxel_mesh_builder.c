@@ -619,31 +619,130 @@ static void EmitCutGround(VoxelBuilder *b, int x, int y, float u0, float v0, flo
         }
 }
 
+/* A cut tile cut along its diagonals (VoxelRelief_CutDiagonals). */
+typedef VoxelCutDiagonals CutDiagonals;
+
+/* A triangle of the cell, its vertices at pixels (X, Y) of the tile, cut by
+ * the diagonals: what is left drawn as quads (a fan of the convex piece). */
+static void EmitCutTri(VoxelBuilder *b, const VoxelVertex *v0, const VoxelVertex *v1,
+                       const VoxelVertex *v2, const float px[3][2], const CutDiagonals *cut)
+{
+    VoxelVertex poly[2][3 + 4];
+    float pp[2][3 + 4][2];
+    int n = 3, cur = 0;
+
+    poly[0][0] = *v0; poly[0][1] = *v1; poly[0][2] = *v2;
+    for (int i = 0; i < 3; ++i)
+    {
+        pp[0][i][0] = px[i][0];
+        pp[0][i][1] = px[i][1];
+    }
+    for (int k = 0; k < cut->count && n > 0; ++k)
+    {
+        int m = 0, nxt = cur ^ 1;
+
+        for (int i = 0; i < n; ++i)
+        {
+            int j = (i + 1) % n;
+            float di = cut->a[k] * pp[cur][i][0] + cut->b[k] * pp[cur][i][1] - cut->c[k];
+            float dj = cut->a[k] * pp[cur][j][0] + cut->b[k] * pp[cur][j][1] - cut->c[k];
+
+            if (di <= 0.0f)
+            {
+                poly[nxt][m] = poly[cur][i];
+                pp[nxt][m][0] = pp[cur][i][0];
+                pp[nxt][m][1] = pp[cur][i][1];
+                ++m;
+            }
+            if ((di < 0.0f && dj > 0.0f) || (di > 0.0f && dj < 0.0f))
+            {
+                float t = di / (di - dj);
+                const VoxelVertex *p = &poly[cur][i], *q = &poly[cur][j];
+
+                poly[nxt][m] = (VoxelVertex){ p->x + (q->x - p->x) * t, p->y + (q->y - p->y) * t,
+                                              p->z + (q->z - p->z) * t, p->u + (q->u - p->u) * t,
+                                              p->v + (q->v - p->v) * t,
+                                              p->shade + (q->shade - p->shade) * t };
+                pp[nxt][m][0] = pp[cur][i][0] + (pp[cur][j][0] - pp[cur][i][0]) * t;
+                pp[nxt][m][1] = pp[cur][i][1] + (pp[cur][j][1] - pp[cur][i][1]) * t;
+                ++m;
+            }
+        }
+        n = m;
+        cur = nxt;
+    }
+    for (int i = 1; i + 1 < n; i += 2)
+    {
+        if (i + 2 < n)
+            VoxelBuilder_Quad(b, &poly[cur][0], &poly[cur][i], &poly[cur][i + 1], &poly[cur][i + 2]);
+        else
+            VoxelBuilder_Quad(b, &poly[cur][0], &poly[cur][i], &poly[cur][i + 1], &poly[cur][i + 1]);
+    }
+}
+
+/* A quad of the cell (p0..p3 at pixels px), split into two triangles as
+ * VoxelBuilder_Quad splits it, each cut by the diagonals; whole when none
+ * of them reaches it. */
+static void EmitCutQuad(VoxelBuilder *b, const VoxelVertex *p0, const VoxelVertex *p1,
+                        const VoxelVertex *p2, const VoxelVertex *p3, const float px[4][2],
+                        const CutDiagonals *cut)
+{
+    bool inside = true, outside = false;
+
+    for (int k = 0; k < cut->count; ++k)
+    {
+        int in = 0;
+
+        for (int i = 0; i < 4; ++i)
+            in += cut->a[k] * px[i][0] + cut->b[k] * px[i][1] <= cut->c[k];
+        inside = inside && in == 4;
+        outside = outside || in == 0;
+    }
+    if (outside)
+        return;
+    if (inside)
+    {
+        VoxelBuilder_Quad(b, p0, p1, p2, p3);
+        return;
+    }
+    {
+        const float t0[3][2] = { { px[0][0], px[0][1] }, { px[1][0], px[1][1] }, { px[2][0], px[2][1] } };
+        const float t1[3][2] = { { px[0][0], px[0][1] }, { px[2][0], px[2][1] }, { px[3][0], px[3][1] } };
+
+        EmitCutTri(b, p0, p1, p2, t0, cut);
+        EmitCutTri(b, p0, p2, p3, t1, cut);
+    }
+}
+
 /* `metatile` >= 0 draws the cell with that atlas id (a cut tile's). With
  * `onFloor`, every quad lying on `floor` (pixels) is left out: the ground
  * drawn flat under it is that quad already, and the two would fight for
- * its depth. */
+ * its depth. `rows`: the cut tile's background bits, cut along its
+ * diagonals where it is a polygon (VoxelRelief_CutDiagonals). */
 static void EmitRelief(VoxelBuilder *b, int x, int y, const int16_t *g, const int16_t *s,
                        int artY, int metatile, bool onFloor, int floor, const uint8_t *rows)
 {
     const int n = VOXEL_RELIEF_SIDE - 1;
     float u0, v0, u1, v1;
+    CutDiagonals cut;
 
     if (metatile >= 0 ? !MetatileUV(b, metatile, &u0, &v0, &u1, &v1)
                       : !VoxelMesh_TileUV(b, x, artY, &u0, &v0, &u1, &v1))
         return;
+    VoxelRelief_CutDiagonals(rows, &cut);
     /* The drawing's own light is in it, a face's included: shadows only. */
     b->artShaded = true;
     if (!VoxelRelief_IsSlope(g) && !VoxelRelief_IsSlope(s))
     {
         float h = g[0] / 16.0f, d = s[0] / 16.0f;
+        static const float kWhole[4][2] = { { 0, 0 }, { 16, 0 }, { 16, 16 }, { 0, 16 } };
 
         /* Through the lit quad, as all ground is: what stands in the sun
          * (a house beside the mountain) shades it. */
-        VoxelBuilder_Quad(b, &(VoxelVertex){x, h, y + d, u0, v0, SHADE_TOP},
-                          &(VoxelVertex){x + 1, h, y + d, u1, v0, SHADE_TOP},
-                          &(VoxelVertex){x + 1, h, y + 1 + d, u1, v1, SHADE_TOP},
-                          &(VoxelVertex){x, h, y + 1 + d, u0, v1, SHADE_TOP});
+        EmitCutQuad(b, &(VoxelVertex){x, h, y + d, u0, v0, SHADE_TOP},
+                    &(VoxelVertex){x + 1, h, y + d, u1, v0, SHADE_TOP},
+                    &(VoxelVertex){x + 1, h, y + 1 + d, u1, v1, SHADE_TOP},
+                    &(VoxelVertex){x, h, y + 1 + d, u0, v1, SHADE_TOP}, kWhole, &cut);
         b->artShaded = false;
         return;
     }
@@ -699,11 +798,23 @@ static void EmitRelief(VoxelBuilder *b, int x, int y, const int16_t *g, const in
              * meeting on a diagonal of the cell (gen_voxel_relief.py), and a
              * quad on it has its two corners off the crease level with each
              * other - cut the other way it would fold across the crease. */
+            float px[4][2];
+
+            for (int k = 0; k < 4; ++k)
+            {
+                px[k][0] = 16.0f * (i + di[k]) / n;
+                px[k][1] = 16.0f * (j + dj[k]) / n;
+            }
             if (g[j * VOXEL_RELIEF_SIDE + i] == g[(j + 1) * VOXEL_RELIEF_SIDE + i + 1]
              && g[j * VOXEL_RELIEF_SIDE + i + 1] != g[(j + 1) * VOXEL_RELIEF_SIDE + i])
-                VoxelBuilder_Quad(b, &p[1], &p[2], &p[3], &p[0]);
+            {
+                const float pr[4][2] = { { px[1][0], px[1][1] }, { px[2][0], px[2][1] },
+                                         { px[3][0], px[3][1] }, { px[0][0], px[0][1] } };
+
+                EmitCutQuad(b, &p[1], &p[2], &p[3], &p[0], pr, &cut);
+            }
             else
-                VoxelBuilder_Quad(b, &p[0], &p[1], &p[2], &p[3]);
+                EmitCutQuad(b, &p[0], &p[1], &p[2], &p[3], px, &cut);
         }
     b->vertexFace = false;
     b->artShaded = false;
@@ -1117,13 +1228,20 @@ void VoxelMesh_EmitGroundRow(VoxelBuilder *builder, const VoxelMapInstance *inst
                         unsigned ns;
                         int nc = VoxelRelief_Cut(inst, x, y - 1, &nf, &ng, &nw, &ns);
 
+                        const uint8_t *nrows = NULL;
+                        unsigned nl, nm;
+
                         if (nc >= 0 && nc < (int)VOXEL_CUTS
                          && MetatileUV(builder, (int)(VOXEL_CUT_FIRST + (unsigned)nc), &a0, &b0, &a1, &b1))
+                        {
                             nart = (int)(VOXEL_CUT_FIRST + (unsigned)nc);
+                            if (!VoxelRelief_CutVariant((unsigned)nc, &nl, &nm, &nrows))
+                                nrows = NULL;
+                        }
                         builder->lift = -1.0f / 16.0f;
                         builder->shift = builder->lift;
                         EmitRelief(builder, x, y, north, VoxelRelief_Depth(inst, x, y - 1), y - 1, nart,
-                                   false, 0, NULL);
+                                   false, 0, nrows);
                         builder->lift = 0.0f;
                         builder->shift = 0.0f;
                     }
@@ -1283,6 +1401,21 @@ void VoxelMesh_EmitGroundRow(VoxelBuilder *builder, const VoxelMapInstance *inst
                                   u0, v0, u1, v1, SHADE_TOP);
                     builder->lift = 0.0f;
                     builder->shift = 0.0f;
+                }
+                /* a signpost on a bridge stands on its deck, lifted and
+                 * moved south by the deck's height as its drawing is */
+                {
+                    float deck;
+
+                    if (VoxelSign_IsCell(inst, x, y)
+                     && VoxelBuildings_DeckAt(inst, x + 0.5f, y + 0.5f, 0, &deck))
+                    {
+                        builder->lift = VoxelRelief_CellLift(inst, x, y) + deck;
+                        builder->shift = VoxelRelief_CellShift(inst, x, y) + deck;
+                        VoxelSign_EmitStanding(builder, inst, x, y);
+                        builder->lift = 0.0f;
+                        builder->shift = 0.0f;
+                    }
                 }
                 continue;
             }

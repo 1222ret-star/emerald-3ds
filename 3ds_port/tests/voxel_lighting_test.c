@@ -95,6 +95,13 @@ float VoxelBuildings_LayoutTop(const VoxelMapInstance *inst)
     (void)inst;
     return VoxelBuildings_MaxTop();
 }
+/* No bridge deck in these scenes. */
+bool VoxelBuildings_DeckAt(const VoxelMapInstance *inst, float worldX, float worldZ,
+                           unsigned elevation, float *lift)
+{
+    (void)inst; (void)worldX; (void)worldZ; (void)elevation; (void)lift;
+    return false;
+}
 VoxelVisualShape VoxelWorld_ClassifyTile(int x, int z)
 {
     if (VoxelWorld_GetInstanceAt(x, z) == NULL) return VOXEL_SHAPE_VOID;

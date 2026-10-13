@@ -8,6 +8,7 @@
 #include "voxel_atlas.h"
 #include "voxel_regions.h"
 #include "voxel_relief.h"
+#include "voxel_building.h"
 
 #ifndef SIGN_MASK_PATH
 #define SIGN_MASK_PATH "voxel/signposts.bin"
@@ -429,6 +430,16 @@ static bool ShadowOf(const VoxelMapInstance *inst, int x, int y, SignShadow *s)
     if (relief != NULL)
         s->base = relief[3 * VOXEL_RELIEF_SIDE + 2] / 16.0f;
     s->zMid = (float)(y - (head ? 1 : 0)) + (float)(s->low / 8) * 0.5f + 0.25f;
+    {
+        /* on a bridge's deck (voxel_mesh_builder.c stands it there) */
+        float deck;
+
+        if (VoxelBuildings_DeckAt(inst, x + 0.5f, y + 0.5f, 0, &deck))
+        {
+            s->base += deck;
+            s->zMid += deck;
+        }
+    }
     return true;
 }
 
