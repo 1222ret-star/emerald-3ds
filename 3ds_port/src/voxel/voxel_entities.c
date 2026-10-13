@@ -424,7 +424,7 @@ static void PictureSize(const struct Sprite *sprite, const struct ObjectEvent *o
         return;
     info = GetObjectEventGraphicsInfo(obj->graphicsId);
     if ((info->width > *w || info->height > *h)
-     && info->width <= VOXEL_SPRITE_SLOT_DIM && info->height <= VOXEL_SPRITE_SLOT_DIM)
+     && info->width <= (int)VOXEL_SPRITE_SLOT_DIM && info->height <= (int)VOXEL_SPRITE_SLOT_DIM)
     {
         *w = info->width;
         *h = info->height;
@@ -910,8 +910,13 @@ static bool IsReflectiveFootprint(float ax, float az, float bx, float bz, float 
     return true;
 }
 
-/* One quad per reflected object. Grow only through cells that the world marks
- * as water or ice; the original ground effect merely says water is nearby. */
+/* A reflected object's quad. Grow only through cells that the world marks as
+ * water or ice; the original ground effect merely says water is nearby. It is
+ * cut across the card in VOXEL_REFLECTION_STRIPS strips, each grown over the
+ * water under it alone: a step onto a one-tile puddle has the reflection come
+ * in with the walker, as the GBA's shows through the water's own pixels,
+ * instead of none until the card is wholly over the puddle and then all of it
+ * at once. Neighbouring strips of one length are one quad. */
 static void EmitReflection(VoxelBuilder *reflections, const VoxelSpriteSlot *slot,
                            unsigned index, float worldX, float worldZ,
                            float rightX, float rightZ, float stretch)
@@ -925,28 +930,49 @@ static void EmitReflection(VoxelBuilder *reflections, const VoxelSpriteSlot *slo
     float halfW = slot->width / VOXEL_PIXELS_PER_TILE * 0.5f;
     float cardLength = slot->height / VOXEL_PIXELS_PER_TILE * stretch;
     float fullLength = cardLength;
-    float length = 0.0f;
+    float lengths[VOXEL_REFLECTION_STRIPS];
     float cx = worldX + 0.5f, nearZ = worldZ + 1.0f;
     float shift = VoxelRelief_ShiftAt(cx, nearZ + 0.5f);
-    float ax = cx - rightX * halfW, az = nearZ - rightZ * halfW + shift;
-    float bx = cx + rightX * halfW, bz = nearZ + rightZ * halfW + shift;
     float y = VoxelRelief_LiftAt(cx, nearZ + 0.5f) + 0.035f;
+    const unsigned strips = VOXEL_REFLECTION_STRIPS;
 
     if (fullLength > 1.75f) fullLength = 1.75f;
-    for (float next = 0.25f; next <= fullLength + 0.0001f; next += 0.25f)
+    for (unsigned s = 0; s < strips; ++s)
     {
-        if (!IsReflectiveFootprint(ax, az, bx, bz, next))
-            break;
-        length = next;
+        /* across the card: t = 0 at its left edge (u0), 1 at its right (u1) */
+        float a = halfW * (2.0f * s / strips - 1.0f), b = halfW * (2.0f * (s + 1) / strips - 1.0f);
+        float ax = cx + rightX * a, az = nearZ + rightZ * a + shift;
+        float bx = cx + rightX * b, bz = nearZ + rightZ * b + shift;
+
+        lengths[s] = 0.0f;
+        for (float next = 0.25f; next <= fullLength + 0.0001f; next += 0.25f)
+        {
+            if (!IsReflectiveFootprint(ax, az, bx, bz, next))
+                break;
+            lengths[s] = next;
+        }
     }
-    if (length < 0.25f)
-        return;
-    float vFar = v1 + (v0 - v1) * (length / cardLength);
-    VoxelBuilder_Quad(reflections,
-        &(VoxelVertex){ax, y, az, u0, v1, 1.0f},
-        &(VoxelVertex){bx, y, bz, u1, v1, 1.0f},
-        &(VoxelVertex){bx, y, bz + length, u1, vFar, 1.0f},
-        &(VoxelVertex){ax, y, az + length, u0, vFar, 1.0f});
+    for (unsigned s = 0, e; s < strips; s = e)
+    {
+        float length = lengths[s];
+
+        for (e = s + 1; e < strips && lengths[e] == length; ++e)
+            ;
+        if (length < 0.25f)
+            continue;
+        float t0 = (float)s / strips, t1 = (float)e / strips;
+        float a = halfW * (2.0f * t0 - 1.0f), b = halfW * (2.0f * t1 - 1.0f);
+        float ax = cx + rightX * a, az = nearZ + rightZ * a + shift;
+        float bx = cx + rightX * b, bz = nearZ + rightZ * b + shift;
+        float ua = u0 + (u1 - u0) * t0, ub = u0 + (u1 - u0) * t1;
+        float vFar = v1 + (v0 - v1) * (length / cardLength);
+
+        VoxelBuilder_Quad(reflections,
+            &(VoxelVertex){ax, y, az, ua, v1, 1.0f},
+            &(VoxelVertex){bx, y, bz, ub, v1, 1.0f},
+            &(VoxelVertex){bx, y, bz + length, ub, vFar, 1.0f},
+            &(VoxelVertex){ax, y, az + length, ua, vFar, 1.0f});
+    }
 }
 
 /* ── Field effects ──────────────────────────────────────────────────────── */

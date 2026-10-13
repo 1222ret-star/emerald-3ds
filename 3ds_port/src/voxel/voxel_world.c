@@ -527,6 +527,12 @@ bool VoxelWorld_IsVisibleReflectiveSurface(int worldX, int worldY)
     behavior = UNPACK_BEHAVIOR(GetMetatileAttribute(inst, metatileId));
     if (!MetatileBehavior_IsReflective(behavior) && !MetatileBehavior_IsIce(behavior))
         return false;
+    /* A bridge's deck over a pond (Route 104's pier, the only one there is):
+     * the GBA shows a walker's reflection under the bridge, in the water the
+     * planks hide; here the deck is no water surface, and a reflection laid
+     * on it was drawn over the planks. The water beside it still reflects. */
+    if (behavior == MB_REFLECTION_UNDER_BRIDGE)
+        return false;
 
     /* Fortree's 0x288-0x29A puddle family contains grass artwork despite its
      * MB_PUDDLE behavior. The original 2D ground effect treats it as nearby
