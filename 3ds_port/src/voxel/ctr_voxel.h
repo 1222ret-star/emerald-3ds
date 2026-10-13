@@ -21,6 +21,9 @@ bool CtrVoxel_Update(void);
  * finishes is uploaded by the next Update.
  */
 void CtrVoxel_AfterSubmit(uint64_t frameBeginTick);
+/* Called instead after a frame the world was not drawn in: what it holds only
+ * to be drawn (the night lamps' buffers) goes once no queued frame reads it. */
+void CtrVoxel_Idle(void);
 /* Game VRAM animation transfer: tile numbers are relative to BG_VRAM. */
 void CtrVoxel_NotifyTilesetAnimWrite(unsigned firstTile, unsigned tileCount);
 

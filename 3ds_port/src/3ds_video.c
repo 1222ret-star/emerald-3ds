@@ -10308,6 +10308,8 @@ void CtrVideo_Present(void)
      * the time the CPU would otherwise wait for the VBlank. */
     if (overworld || battleUpdated)
         CtrVoxel_AfterSubmit(start);
+    else
+        CtrVoxel_Idle();
 #endif
     uint64_t now = CtrPlatform_Milliseconds();
     if (now - sFpsStart >= 1000)

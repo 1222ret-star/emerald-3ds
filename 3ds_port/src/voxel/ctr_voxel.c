@@ -134,13 +134,22 @@ typedef struct
  */
 #define VOXEL_SPRITE_RESERVE 128u
 #define VOXEL_REFLECTION_RESERVE (VOXEL_SPRITE_SLOTS * VOXEL_REFLECTION_VERTICES)
-#define VOXEL_LAMP_RESERVE 2046u
-#define VOXEL_LAMP_GROUND_RESERVE 4092u
-#define VOXEL_DYNAMIC_VERTICES (VOXEL_SPRITE_RESERVE + VOXEL_SHADOW_RESERVE + VOXEL_REFLECTION_RESERVE + VOXEL_LAMP_RESERVE + VOXEL_LAMP_GROUND_RESERVE)
+#define VOXEL_DYNAMIC_VERTICES (VOXEL_SPRITE_RESERVE + VOXEL_SHADOW_RESERVE + VOXEL_REFLECTION_RESERVE)
 #define VOXEL_SHADOW_FIRST VOXEL_SPRITE_RESERVE
 #define VOXEL_REFLECTION_FIRST (VOXEL_SHADOW_FIRST + VOXEL_SHADOW_RESERVE)
-#define VOXEL_LAMP_FIRST (VOXEL_REFLECTION_FIRST + VOXEL_REFLECTION_RESERVE)
-#define VOXEL_LAMP_GROUND_FIRST (VOXEL_LAMP_FIRST + VOXEL_LAMP_RESERVE)
+
+/*
+ * The night lamps' glass and the pools they cast (UpdateNightLamps): buffers
+ * of their own, glass first. 96 KiB of linear memory and 144 KiB of heap,
+ * which an Old 3DS has little of: taken when lamps are first lit and given
+ * back once they are not (DAY / NIGHT off, indoors, by day, a battle).
+ */
+#define VOXEL_LAMP_RESERVE 2046u
+#define VOXEL_LAMP_GROUND_RESERVE 4092u
+#define VOXEL_LAMP_VERTICES (VOXEL_LAMP_RESERVE + VOXEL_LAMP_GROUND_RESERVE)
+#define VOXEL_LAMP_GROUND_FIRST VOXEL_LAMP_RESERVE
+/* Unlit this long, no frame still queued draws from them: freed. */
+#define VOXEL_LAMP_RELEASE_MS 100.0f
 
 /* One atlas per tileset pair, shared by every map that uses that pair. Six:
  * walking back and forth through a string of towns and routes reaches five
@@ -975,6 +984,12 @@ static unsigned sSpriteVertices;
 static unsigned sReflectionVertices;
 static unsigned sLampVertices, sLampGroundVertices;
 static bool sLampReady;
+static VoxelVertex *sLampScratch;     /* builder output, VOXEL_LAMP_VERTICES */
+static VoxelGpuVertex *sLampGpu;      /* linear, VOXEL_LAMP_VERTICES */
+static uint64_t sLampDrawn;           /* tick of the last draw from sLampGpu */
+static uint32_t sLampRetry;           /* no buffers asked for before this frame */
+static bool sLampNoRoomLogged;
+static void LampsRelease(bool now);
 static uint32_t sLampSignature, sLampDigest;
 static int sLampX, sLampZ;
 static int sLampView[4];
@@ -2111,6 +2126,7 @@ fail:
 
 void CtrVoxel_Shutdown(void)
 {
+    LampsRelease(true);
     StreamStop();
     AtlasJobCancel();
     ReleaseAllChunks();
@@ -4424,6 +4440,11 @@ static void UpdateView(float playerX, float playerZ, bool crossed, bool cut)
     sViewReady = true;
 }
 
+void CtrVoxel_Idle(void)
+{
+    LampsRelease(false);
+}
+
 void CtrVoxel_AfterSubmit(uint64_t frameBeginTick)
 {
     static float sOthersMs;
@@ -4742,6 +4763,88 @@ static void BattleCamera(void)
     VoxelCamera_Frame(&sCamera, x, z, ground, pitch, distance);
 }
 
+/* The lamps' buffers given back: at once (`now`: nothing queued draws from
+ * them), or once unlit for VOXEL_LAMP_RELEASE_MS. */
+static void LampsRelease(bool now)
+{
+    if (sLampGpu == NULL && sLampScratch == NULL)
+        return;
+    if (!now && TicksMs(svcGetSystemTick() - sLampDrawn) < VOXEL_LAMP_RELEASE_MS)
+        return;
+    linearFree(sLampGpu);
+    free(sLampScratch);
+    sLampGpu = NULL;
+    sLampScratch = NULL;
+    sLampReady = false;
+    sLampVertices = sLampGroundVertices = 0;
+}
+
+/* The lamps' buffers, for the first lamps lit: whether they are there. When
+ * there is no room, the lamps stay dark and are asked for again later. */
+static bool LampsTake(void)
+{
+    if (sLampGpu != NULL)
+        return true;
+    if (sFrame < sLampRetry)
+        return false;
+    sLampScratch = malloc(VOXEL_LAMP_VERTICES * sizeof(VoxelVertex));
+    sLampGpu = sLampScratch != NULL ? linearAlloc(VOXEL_LAMP_VERTICES * sizeof(VoxelGpuVertex)) : NULL;
+    if (sLampGpu == NULL)
+    {
+        free(sLampScratch);
+        sLampScratch = NULL;
+        sLampRetry = sFrame + VOXEL_PAGE_RETRY_FRAMES;
+        if (!sLampNoRoomLogged)
+            CtrLog_Write(CTR_LOG_VIDEO, "VOXEL: no room for the night lamps (%lu KiB linear, linear free=%lu): "
+                         "they stay dark until there is",
+                         (unsigned long)(VOXEL_LAMP_VERTICES * sizeof(VoxelGpuVertex) >> 10),
+                         (unsigned long)linearSpaceFree());
+        sLampNoRoomLogged = true;
+        return false;
+    }
+    sLampReady = false;
+    return true;
+}
+
+/* The lamps on screen and the light they cast, rebuilt when the view moves. */
+static void UpdateNightLamps(void)
+{
+    if (!CtrGame_IsOutdoor() || CtrDayNight_Get()->glow <= 0.0f)
+    {
+        sLampReady = false;
+        sLampVertices = sLampGroundVertices = 0;
+        LampsRelease(false);
+        return;
+    }
+    if (!LampsTake())
+    {
+        sLampVertices = sLampGroundVertices = 0;
+        return;
+    }
+    if (sLampReady && sLampSignature == sInstanceSignature && sLampDigest == sLiveDigest
+        && sLampX == sDynamicX && sLampZ == sDynamicZ
+        && memcmp(sLampView, sViewRect, sizeof(sLampView)) == 0)
+        return;
+    VoxelBuilder glass, ground;
+    VoxelBuilder_Init(&glass, sLampScratch, VOXEL_LAMP_RESERVE);
+    VoxelBuilder_Init(&ground, sLampScratch + VOXEL_LAMP_GROUND_FIRST, VOXEL_LAMP_GROUND_RESERVE);
+    VoxelBuilder_SetOrigin(&glass, sDynamicX, sDynamicZ);
+    VoxelBuilder_SetOrigin(&ground, sDynamicX, sDynamicZ);
+    for (unsigned index = 0; index < VoxelWorld_InstanceCount(); ++index)
+        VoxelSign_EmitNight(&glass, &ground, VoxelWorld_Instance(index),
+                           sViewRect[0] - 3, sViewRect[1] - 3, sViewRect[2] + 3, sViewRect[3] + 3);
+    sLampVertices = glass.count;
+    sLampGroundVertices = ground.count;
+    PackDynamic(sLampScratch, glass.count, sLampGpu);
+    PackDynamic(sLampScratch + VOXEL_LAMP_GROUND_FIRST, ground.count, sLampGpu + VOXEL_LAMP_GROUND_FIRST);
+    sLampSignature = sInstanceSignature;
+    sLampDigest = sLiveDigest;
+    sLampX = sDynamicX;
+    sLampZ = sDynamicZ;
+    memcpy(sLampView, sViewRect, sizeof(sLampView));
+    sLampReady = true;
+}
+
 /*
  * The animated tiles (water, flowers) of the current map's atlas. A pass takes
  * the tiles written since the last one for one page and redraws the metatiles
@@ -4751,38 +4854,6 @@ static void BattleCamera(void)
  * read back into a CPU copy, recomposed and written out whole, which was 6-7 ms
  * of a frame whenever it came round.
  */
-static void UpdateNightLamps(VoxelVertex *dynamic)
-{
-    if (!CtrGame_IsOutdoor() || CtrDayNight_Get()->glow <= 0.0f)
-    {
-        sLampReady = false;
-        sLampVertices = sLampGroundVertices = 0;
-        return;
-    }
-    if (sLampReady && sLampSignature == sInstanceSignature && sLampDigest == sLiveDigest
-        && sLampX == sDynamicX && sLampZ == sDynamicZ
-        && memcmp(sLampView, sViewRect, sizeof(sLampView)) == 0)
-        return;
-    VoxelBuilder glass, ground;
-    VoxelBuilder_Init(&glass, dynamic + VOXEL_LAMP_FIRST, VOXEL_LAMP_RESERVE);
-    VoxelBuilder_Init(&ground, dynamic + VOXEL_LAMP_GROUND_FIRST, VOXEL_LAMP_GROUND_RESERVE);
-    VoxelBuilder_SetOrigin(&glass, sDynamicX, sDynamicZ);
-    VoxelBuilder_SetOrigin(&ground, sDynamicX, sDynamicZ);
-    for (unsigned index = 0; index < VoxelWorld_InstanceCount(); ++index)
-        VoxelSign_EmitNight(&glass, &ground, VoxelWorld_Instance(index),
-                           sViewRect[0] - 3, sViewRect[1] - 3, sViewRect[2] + 3, sViewRect[3] + 3);
-    sLampVertices = glass.count;
-    sLampGroundVertices = ground.count;
-    PackDynamic(dynamic + VOXEL_LAMP_FIRST, glass.count, sDynamic + VOXEL_LAMP_FIRST);
-    PackDynamic(dynamic + VOXEL_LAMP_GROUND_FIRST, ground.count, sDynamic + VOXEL_LAMP_GROUND_FIRST);
-    sLampSignature = sInstanceSignature;
-    sLampDigest = sLiveDigest;
-    sLampX = sDynamicX;
-    sLampZ = sDynamicZ;
-    memcpy(sLampView, sViewRect, sizeof(sLampView));
-    sLampReady = true;
-}
-
 static void AnimateTiles(const VoxelMapInstance *inst)
 {
     VoxelAtlasSlot *active;
@@ -5151,6 +5222,7 @@ bool CtrVoxel_Update(void)
         sSpriteVertices = sReflectionVertices = 0;
         sLampVertices = sLampGroundVertices = 0;
         sLampReady = false;
+        LampsRelease(false);
         sStats.reflections = 0;
 #if CTR_VOXEL_LIGHTING
         sShadowVertices = 0;
@@ -5170,7 +5242,7 @@ bool CtrVoxel_Update(void)
         sDynamicX = (int)floorf(sCamera.targetX);
         sDynamicZ = (int)floorf(sCamera.targetZ);
 
-        UpdateNightLamps(dynamic);
+        UpdateNightLamps();
         VoxelBuilder_Init(&sprites, dynamic, VOXEL_SPRITE_RESERVE);
         VoxelBuilder_SetOrigin(&sprites, sDynamicX, sDynamicZ);
         VoxelBuilder_Init(&reflections, dynamic + VOXEL_REFLECTION_FIRST,
@@ -5320,6 +5392,7 @@ void CtrVoxel_ParkVram(void)
 {
     if (!sReady || sParked)
         return;
+    LampsRelease(true);
     StreamStop();
     AtlasJobCancel();
     JobCancel();
@@ -7138,7 +7211,7 @@ void CtrVoxel_Draw(C3D_RenderTarget *target, int eye)
     BindVertices(sDynamic);
 
     if (!indoor && !sBattle.on && CtrGame_IsOutdoor() && CtrDayNight_Get()->glow > 0.0f
-        && (sLampVertices != 0 || sLampGroundVertices != 0))
+        && sLampGpu != NULL && (sLampVertices != 0 || sLampGroundVertices != 0))
     {
         float strength = CtrDayNight_Get()->glow;
         SetGrade(&unlit);
@@ -7147,6 +7220,8 @@ void CtrVoxel_Draw(C3D_RenderTarget *target, int eye)
         C3D_DepthMap(true, -1.0f, 3.0f / 65535.0f);
         C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD,
                       GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_ZERO, GPU_ONE);
+        BindVertices(sLampGpu);
+        sLampDrawn = svcGetSystemTick();
         if (sLampGroundVertices != 0)
         {
             LampTexEnv(strength, true);
@@ -7155,8 +7230,9 @@ void CtrVoxel_Draw(C3D_RenderTarget *target, int eye)
         if (sLampVertices != 0)
         {
             LampTexEnv(strength, false);
-            C3D_DrawArrays(GPU_TRIANGLES, VOXEL_LAMP_FIRST, sLampVertices);
+            C3D_DrawArrays(GPU_TRIANGLES, 0, sLampVertices);
         }
+        BindVertices(sDynamic);
         C3D_DepthMap(true, -1.0f, 0.0f);
         C3D_AlphaTest(true, GPU_GREATER, 0);
         C3D_ColorLogicOp(GPU_LOGICOP_COPY);

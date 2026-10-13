@@ -42,9 +42,12 @@ render pass. Source daytime pixels are unchanged. Frames, roof decorations,
 signs and opaque doors remain dark; only authored glass is eligible.
 
 Lamps reuse VXS2 sign metadata without changing the sign asset format.
-Glass and ground pools have fixed dynamic-buffer budgets of 2,046 and 4,092
-vertices respectively: approximately 98 KiB additional GPU storage and 144 KiB
-CPU scratch. Exhausted budgets truncate optional lighting, never overflow.
+Glass and ground pools have fixed budgets of 2,046 and 4,092 vertices
+respectively: approximately 96 KiB of linear memory and 144 KiB of CPU
+scratch, taken when lamps are first lit and given back once they are not
+(lighting off, indoors, by day, a battle). Without room the lamps stay dark
+and are asked for again later. Exhausted budgets truncate optional lighting,
+never overflow.
 There are at most two additional draw calls per eye, with depth testing and
 alpha blending; ordinary render state is restored afterwards.
 
