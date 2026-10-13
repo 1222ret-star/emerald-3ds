@@ -3,7 +3,7 @@
  * as a GBA screen (full.mk, CTR_GBA_CENTRED_SRCS): the fly map, the Town Map,
  * the title menu with the professor's speech, the naming screen, the clock,
  * the choice of starter from the professor's bag, the communication error
- * screen, the Berry Blender and the wireless minigames;
+ * screen, the Berry Blender, the wireless minigames and contests;
  * and into pokenav.c, pokemon_storage_system.c (the PC's boxes),
  * pokemon_summary_screen.c, item_menu.c (the bag), pokedex.c and trade.c,
  * whose screens are shown on the bottom screen instead.
