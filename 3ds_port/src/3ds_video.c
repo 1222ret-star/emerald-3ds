@@ -5773,6 +5773,13 @@ static void ObjWindowCompose(void)
     if (!sBattle && !sStage) return;
     if ((display & 0x9000) != 0x9000 || (display & 7) > 2 || !layers) return;
     if (!ObjWindowBounds(&x0, &y0, &x1, &y1)) return;
+    /* Only what can be on screen: the VS letters end sliding off it as they
+     * grow, a box far wider than any surface. */
+    if (x0 < VIEW_LEFT) x0 = VIEW_LEFT;
+    if (y0 < VIEW_TOP) y0 = VIEW_TOP;
+    if (x1 > VIEW_RIGHT) x1 = VIEW_RIGHT;
+    if (y1 > VIEW_BOTTOM) y1 = VIEW_BOTTOM;
+    if (x0 >= x1 || y0 >= y1) return;
     if (out & 31 & ~in) Error(12, "OBJ window hiding layers not supported");
     sObjWinWanted = true;
     sObjWinNeed = x1 - x0 > y1 - y0 ? x1 - x0 : y1 - y0;
