@@ -90,6 +90,11 @@ static const char kMagic[4] = {'E', 'M', '3', 'L'};
 #define WAIT_MS 20        /* the thread looks this often while a message waits for its ack */
 #define IDLE_MS 100       /* and this often otherwise (and reads, should no event come) */
 #define STATS_MS 10000    /* its counts go to the log this often */
+/* A system that left a message of ours unacknowledged this long after it
+ * was first sent, and sent nothing meanwhile, is gone: one switched off or
+ * out of range may stay in the network's list for a long time (in Azahar, a
+ * closed one for good), and the link would wait for it. */
+#define SILENT_MS 6000
 
 enum
 {
@@ -139,6 +144,7 @@ struct OutMessage
     uint8_t type;
     uint16_t len;
     uint32_t sentMs; /* 0: not sent yet */
+    uint32_t firstMs; /* when it was first sent */
     uint8_t data[MSG_MAX];
 };
 
@@ -151,6 +157,7 @@ struct Node
     uint16_t outHead, outCount;
     uint16_t nextSeq;
     bool overflowed;
+    uint32_t heardMs; /* its last frame, or when it joined */
     /* Messages from it. */
     uint16_t expect;
     bool ackDue;
@@ -274,6 +281,7 @@ static void NodeJoined(uint16_t id)
 
     memset(n, 0, sizeof(*n));
     n->present = true;
+    n->heardMs = LocalLink_Milliseconds();
     n->info.valid = 1;
     n->info.id = id;
     if (id != sL.myId)
@@ -326,6 +334,7 @@ static void HandleFrame(uint16_t from, const uint8_t *frame, size_t size)
     n = &sL.nodes[from];
     if (!n->present)
         NodeJoined(from); /* its frame came before the status said so */
+    n->heardMs = LocalLink_Milliseconds();
 
     /* What it has of ours. */
     while (n->outCount && SeqBefore(n->out[n->outHead].seq, h->ack))
@@ -406,6 +415,8 @@ static void FlushNode(uint16_t id, uint32_t now)
                 continue;
             if (m->sentMs)
                 sL.stats.resent++;
+            else
+                m->firstMs = now;
             if (body + MSG_HEADER + m->len > FRAME_MAX)
                 break;
             p[0] = m->seq & 0xFF;
@@ -858,6 +869,41 @@ static void StartSession(uint8_t kind)
     TakeNetwork(false);
 }
 
+/* Systems we wait on that went silent are gone (see SILENT_MS). Without the
+ * host (node 1) there is no session; a host sends a silent client away. */
+static void DropSilent(uint32_t now)
+{
+    for (uint16_t id = 1; id < NODE_SLOTS; id++)
+    {
+        struct Node *n = &sL.nodes[id];
+        bool silent;
+
+        LightLock_Lock(&sL.lock);
+        /* An idle session sends nothing: what counts is how long the
+         * oldest message waits, and nothing heard all that time. */
+        silent = n->present && id != sL.myId && n->outCount && n->out[n->outHead].sentMs
+              && (int32_t)(now - n->out[n->outHead].firstMs) >= SILENT_MS
+              && (int32_t)(now - n->heardMs) >= SILENT_MS;
+        LightLock_Unlock(&sL.lock);
+        if (!silent)
+            continue;
+        CtrLog_Write(CTR_LOG_GAME, "local: player %u silent for %lu ms, a message waiting %lu ms: gone", id,
+                     now - n->heardMs, now - n->out[n->outHead].firstMs);
+        if (!sL.hosting && id == 1) /* the host */
+        {
+            LeaveNetwork(false);
+            EndSession(LOCAL_SESSION_NONE);
+            return;
+        }
+        if (sL.hosting)
+            udsEjectClient(id);
+        LightLock_Lock(&sL.lock);
+        NodeLeft(id);
+        sL.nodeMask &= ~(1u << (id - 1));
+        LightLock_Unlock(&sL.lock);
+    }
+}
+
 /* Messages waiting for their ack, or an ack waiting to go: the thread looks
  * again soon (lock held). */
 static bool Unacked(void)
@@ -901,6 +947,8 @@ static void LocalThread(void *unused)
             uint32_t now = LocalLink_Milliseconds();
 
             UpdateNodes();
+            if (sL.inNetwork)
+                DropSilent(now);
             if (sL.inNetwork)
                 MergeAlone();
             if (sL.inNetwork)
