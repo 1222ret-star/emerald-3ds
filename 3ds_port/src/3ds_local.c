@@ -68,6 +68,16 @@ static const char kMagic[4] = {'E', 'M', '3', 'L'};
 #define SEARCH_JITTER_MS 1000
 #define MERGE_MS 1500
 #define MERGE_JITTER_MS 1500
+/* Only so long after it started hosting: the case is two players starting
+ * together. A player who comes later finds the host itself. On hardware a
+ * host can't look while hosting, so each look closes and reopens it. */
+#define MERGE_WINDOW_MS 20000
+
+/* UDS connection status values (udsConnectionStatus.status). */
+#define STATUS_IDLE 3
+#define STATUS_HOST 6
+#define STATUS_CLIENT 9
+#define STATUS_SPECTATOR 10
 
 #define NODE_SLOTS 17     /* UDS node ids are 1-16 */
 #define OUT_QUEUE 128     /* messages to one system not yet acknowledged */
@@ -165,6 +175,7 @@ static struct
     bool hosting;
     uint32_t token;       /* ours, in our session's beacon */
     uint32_t nextMergeMs; /* a lone host looks for other sessions then */
+    uint32_t mergeUntilMs; /* and not after this */
     uint16_t myId;
     uint32_t generation;
     udsBindContext bind;
@@ -460,18 +471,20 @@ static void EndSession(uint8_t state)
     LightLock_Unlock(&sL.lock);
 }
 
-static void LeaveNetwork(void)
+static void LeaveNetwork(bool quiet)
 {
+    Result left, unbound;
+
     if (!sL.inNetwork)
         return;
     sL.inNetwork = false;
-    if (sL.hosting)
-        udsDestroyNetwork();
-    else
-        udsDisconnectNetwork();
-    udsUnbind(&sL.bind);
+    left = sL.hosting ? udsDestroyNetwork() : udsDisconnectNetwork();
+    unbound = udsUnbind(&sL.bind);
     sL.hosting = false;
-    CtrLog_Write(CTR_LOG_GAME, "local: left the session");
+    if (R_FAILED(left) || R_FAILED(unbound))
+        CtrLog_Write(CTR_LOG_ERROR, "local: leaving: %08lx, unbinding: %08lx", left, unbound);
+    else if (!quiet)
+        CtrLog_Write(CTR_LOG_GAME, "local: left the session");
 }
 
 /* Who's in the network now: players joining and leaving. */
@@ -488,9 +501,7 @@ static void UpdateNodes(void)
     if (st.status != 6 && st.status != 9 && st.status != 10)
     {
         CtrLog_Write(CTR_LOG_GAME, "local: the session ended (status %lu)", st.status);
-        udsUnbind(&sL.bind);
-        sL.inNetwork = false;
-        sL.hosting = false;
+        LeaveNetwork(false);
         EndSession(LOCAL_SESSION_NONE);
         return;
     }
@@ -530,6 +541,49 @@ static bool StartUds(void)
     }
     sL.udsReady = true;
     return true;
+}
+
+/* The wireless service started again: what it was in is gone. On hardware it
+ * was once left refusing to scan or host (c8a113ea, a wrong state) after a
+ * session ended. */
+static bool RestartUds(void)
+{
+    CtrLog_Write(CTR_LOG_GAME, "local: restarting the wireless service");
+    if (sL.inNetwork)
+        udsUnbind(&sL.bind);
+    sL.inNetwork = false;
+    sL.hosting = false;
+    if (sL.udsReady)
+        udsExit();
+    sL.udsReady = false;
+    svcSleepThread(100000000LL);
+    return StartUds();
+}
+
+/* Before scanning or hosting: the service in no network (nothing left over
+ * from the last session), or started again. */
+static bool EnsureIdle(void)
+{
+    udsConnectionStatus st;
+    Result ret;
+
+    if (!StartUds())
+        return false;
+    ret = udsGetConnectionStatus(&st);
+    if (R_SUCCEEDED(ret) && st.status == STATUS_IDLE)
+        return true;
+    CtrLog_Write(CTR_LOG_GAME, "local: wireless not idle (%08lx, status %lu): closing", ret, R_SUCCEEDED(ret) ? st.status : 0);
+    if (R_SUCCEEDED(ret) && st.status == STATUS_HOST)
+        ret = udsDestroyNetwork();
+    else if (R_SUCCEEDED(ret))
+        ret = udsDisconnectNetwork();
+    if (sL.inNetwork)
+        udsUnbind(&sL.bind);
+    sL.inNetwork = false;
+    sL.hosting = false;
+    if (R_SUCCEEDED(udsGetConnectionStatus(&st)) && st.status == STATUS_IDLE)
+        return true;
+    return RestartUds();
 }
 
 static const char *BuildHex(char *out, const uint8_t *id)
@@ -587,6 +641,8 @@ static bool Connect(const udsNetworkScanInfo *net)
 /* otherBuild: a session of this counter of another build was seen. */
 static bool JoinNearby(uint8_t kind, uint32_t lookMs, bool *otherBuild)
 {
+    int failures = 0;
+
     static uint32_t scanBuffer[0x4000 / 4];
     uint32_t until = LocalLink_Milliseconds() + lookMs;
 
@@ -600,7 +656,9 @@ static bool JoinNearby(uint8_t kind, uint32_t lookMs, bool *otherBuild)
         {
             CtrLog_Write(CTR_LOG_ERROR, "local: scan failed (%08lx)", ret);
             free(nets);
-            svcSleepThread(200000000LL);
+            /* Once more from scratch; then give up for this time. */
+            if (++failures > 1 || !RestartUds())
+                return false;
             continue;
         }
         for (size_t i = 0; i < total; i++)
@@ -634,13 +692,30 @@ static bool HostSession(uint8_t kind)
     if (R_FAILED(ret))
     {
         CtrLog_Write(CTR_LOG_ERROR, "local: hosting failed (%08lx)", ret);
-        return false;
+        if (!RestartUds())
+            return false;
+        ret = udsCreateNetwork(&net, sPassphrase, strlen(sPassphrase) + 1, &sL.bind, DATA_CHANNEL,
+                               UDS_DEFAULT_RECVBUFSIZE);
+        if (R_FAILED(ret))
+        {
+            CtrLog_Write(CTR_LOG_ERROR, "local: hosting failed again (%08lx)", ret);
+            return false;
+        }
     }
     ret = udsSetApplicationData(&app, sizeof(app));
     if (R_FAILED(ret))
         CtrLog_Write(CTR_LOG_ERROR, "local: beacon data not set (%08lx)", ret);
     sL.hosting = true;
     sL.nextMergeMs = LocalLink_Milliseconds() + MERGE_MS + (uint32_t)(rand() % MERGE_JITTER_MS);
+    return true;
+}
+
+/* A new session hosted: lone, it may look for another for a while. */
+static bool HostNewSession(uint8_t kind)
+{
+    if (!HostSession(kind))
+        return false;
+    sL.mergeUntilMs = LocalLink_Milliseconds() + MERGE_WINDOW_MS;
     return true;
 }
 
@@ -690,7 +765,8 @@ static void MergeAlone(void)
     bool found = false;
     Result ret = -1;
 
-    if (!sL.hosting || now < sL.nextMergeMs || (sL.nodeMask & ~(1u << (sL.myId - 1))))
+    if (!sL.hosting || now < sL.nextMergeMs || now >= sL.mergeUntilMs
+     || (sL.nodeMask & ~(1u << (sL.myId - 1))))
         return;
     sL.nextMergeMs = now + MERGE_MS + (uint32_t)(rand() % MERGE_JITTER_MS);
     if (!scanHostingFails)
@@ -707,12 +783,15 @@ static void MergeAlone(void)
     }
     if (scanHostingFails)
     {
-        udsDestroyNetwork();
-        udsUnbind(&sL.bind);
-        sL.inNetwork = false;
-        ret = udsScanBeacons(scanBuffer, sizeof(scanBuffer), &nets, &total, COMM_ID, 0, NULL, false);
+        LeaveNetwork(true);
+        ret = EnsureIdle() ? udsScanBeacons(scanBuffer, sizeof(scanBuffer), &nets, &total, COMM_ID, 0, NULL, false) : -1;
         if (R_FAILED(ret))
+        {
+            CtrLog_Write(CTR_LOG_ERROR, "local: looking while alone failed (%08lx)", ret);
+            free(nets);
+            nets = NULL;
             total = 0;
+        }
     }
     for (size_t i = 0; i < total && !found; i++)
     {
@@ -729,12 +808,8 @@ static void MergeAlone(void)
     {
         CtrLog_Write(CTR_LOG_GAME, "local: another session of this counter nearby, moving to it");
         if (sL.inNetwork)
-        {
-            udsDestroyNetwork();
-            udsUnbind(&sL.bind);
-            sL.inNetwork = false;
-        }
-        if (!Connect(&nets[target]))
+            LeaveNetwork(true);
+        if (!EnsureIdle() || !Connect(&nets[target]))
             found = false;
     }
     free(nets);
@@ -752,9 +827,9 @@ static void StartSession(uint8_t kind)
 {
     bool in, otherBuild = false;
 
-    LeaveNetwork();
+    LeaveNetwork(false);
     EndSession(LOCAL_SESSION_SEARCHING);
-    if (!StartUds())
+    if (!EnsureIdle())
     {
         EndSession(LOCAL_SESSION_FAILED);
         return;
@@ -769,7 +844,7 @@ static void StartSession(uint8_t kind)
         return;
     }
     if (!in)
-        in = HostSession(kind);
+        in = EnsureIdle() && HostNewSession(kind);
     if (!in)
     {
         EndSession(LOCAL_SESSION_FAILED);
@@ -817,7 +892,7 @@ static void LocalThread(void *unused)
         }
         else if (leave)
         {
-            LeaveNetwork();
+            LeaveNetwork(false);
             EndSession(LOCAL_SESSION_NONE);
         }
 
@@ -868,7 +943,7 @@ static void LocalThread(void *unused)
             sL.stats.wakes++;
         }
     }
-    LeaveNetwork();
+    LeaveNetwork(false);
 }
 
 /* The thread has something to do. */
