@@ -2836,11 +2836,14 @@ class Card:
 
     `art` is the piece's own image; `foot` the row it stands on; the columns
     it spans are read off the art. `voff`: the rows below the model's drawing
-    where the card's own pixels are, so that it shows nothing else.
+    where the card's own pixels are, so that it shows nothing else. `base`:
+    lifted that high onto what it stands on (pots on a stand), as far back
+    as it is lifted - its foot drawn where it was.
     """
 
-    def __init__(self, name, art, foot, voff=0):
+    def __init__(self, name, art, foot, voff=0, base=0):
         self.name, self.art, self.foot, self.voff = name, art, float(foot), voff
+        self.base = float(base)
 
     def emit(self, mesh):
         W, H = self.art.size
@@ -2850,9 +2853,9 @@ class Card:
         if not cols:
             return
         u0, u1 = float(min(cols)), float(max(cols) + 1)
-        v0, f = float(min(rows)), self.foot
+        v0, f, b = float(min(rows)), self.foot, self.base
         h = f - v0
-        front = [(u0, -1.0, f), (u1, -1.0, f), (u1, h, f), (u0, h, f)]
+        front = [(u0, b - 1.0, f + b), (u1, b - 1.0, f + b), (u1, b + h, f + b), (u0, b + h, f + b)]
         mesh.poly([(x, y, z, x, z - y + self.voff) for (x, y, z) in front], SHADE_ART,
                   self.name + ".card")
 

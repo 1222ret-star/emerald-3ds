@@ -760,7 +760,14 @@ def room_facts(spec, layout, pieces, drawn, owner, shade, fpx, legs_of=()):
             votes = collections.Counter()
             for (x, y) in mine:
                 if y == fy and fy + 1 < H:
-                    o = owner[fy + 1][x]
+                    # past what stands on the same top in front of it: a pot
+                    # behind a row of plants on a stand, its foot hidden
+                    yy = fy + 1
+                    while (yy + 1 < H and owner[yy][x] is not None and owner[yy][x] >= 0
+                           and owner[yy][x] != k
+                           and pieces[owner[yy][x]].get("base", 0) == pc["base"]):
+                        yy += 1
+                    o = owner[yy][x]
                     top = pieces[o].get("base", 0) + pieces[o]["height"] if o is not None else 0
                     if o is not None and o >= 0 and o != k and abs(top - pc["base"]) <= 2:
                         votes[o] += 1
@@ -908,8 +915,8 @@ def auto_leave(pieces, grids, ground, hexes, supports, W, H):
     make the room's walls and floor and are more theirs than its own, not
     those its body is made of two pixels in (the wall round a computer's
     corners; a white cupboard keeps its white) - and, for a card, any of
-    those. What it stands on is support_left's. Walls, filled pieces and
-    corners leave nothing."""
+    those, but for one lifted onto a stand. What it stands on is
+    support_left's. Walls, filled pieces and corners leave nothing."""
     lum = lambda c: _hex_lum(c)  # noqa: E731
     shell = [k for k, pc in enumerate(pieces)
              if pc.get("facet") or pc.get("walls") or pc["name"].split("_")[0] in SHELL_PIECES]
@@ -931,8 +938,12 @@ def auto_leave(pieces, grids, ground, hexes, supports, W, H):
         theirs = room - collections.Counter(hexes[y][x] for (x, y) in inside if roomy[y][x])
         if pc.get("card"):
             # a card's leaves have the wall between them, deep in its shape,
-            # and every stuff of the room round it: its band, its shadows
-            out.append({c for c in ours if theirs[c] > 2 * ours[c] and lum(c) >= 90})
+            # and every stuff of the room round it: its band, its shadows.
+            # Lifted onto a stand, what is round it is the stand's top
+            # (support_left), not the room's - whose counter may be drawn
+            # in its pot's orange
+            out.append(set() if k in supports else
+                       {c for c in ours if theirs[c] > 2 * ours[c] and lum(c) >= 90})
             continue
         body = {hexes[y][x] for (x, y) in inside
                 if all((x + i, y + j) in inside for i in range(-2, 3) for j in range(-2, 3))}
@@ -942,19 +953,22 @@ def auto_leave(pieces, grids, ground, hexes, supports, W, H):
     return out
 
 
-def support_left(k, s, grids, hexes, W, H):
+def support_left(k, s, grids, hexes, W, H, sibs=()):
     """The pixels of a lifted piece's shape that are its support's top going
     on under it (the desk's squares in a book's rectangle), reached from the
     piece's outline: the colours that are more the support's than its own;
     or, where those would take half the piece (an open book as grey as its desk),
     only what has the support's colour two to eight pixels along the row
-    outside the piece. Never half the piece."""
+    outside the piece. Never half the piece. The support's top is what of
+    its shape the things standing on it (`sibs`, besides this one) do not
+    hold: pots in a row on a stand are not the stand's colours."""
     inside = {(x, y) for y in range(H) for x in range(W) if grids[k][y][x]}
     edge = {(x, y) for (x, y) in inside
             if any(n not in inside for n in ((x + 1, y), (x - 1, y), (x, y + 1), (x, y - 1)))}
     ours = collections.Counter(hexes[y][x] for (x, y) in inside)
-    theirs = collections.Counter(hexes[y][x] for y in range(H) for x in range(W)
-                                 if grids[s][y][x] and not grids[k][y][x])
+    top = [[grids[s][y][x] and not grids[k][y][x] and not any(grids[j][y][x] for j in sibs)
+            for x in range(W)] for y in range(H)]
+    theirs = collections.Counter(hexes[y][x] for y in range(H) for x in range(W) if top[y][x])
     main = commonest(theirs)
     alike = {(x, y) for (x, y) in inside if hexes[y][x] in main
              and theirs[hexes[y][x]] > ours[hexes[y][x]] and _hex_lum(hexes[y][x]) >= 90}
@@ -967,8 +981,7 @@ def support_left(k, s, grids, hexes, W, H):
         if _hex_lum(c) < 90:
             continue
         for d in (2, 4, 6, 8):
-            if any(0 <= xx < W and not grids[k][y][xx] and grids[s][y][xx] and hexes[y][xx] == c
-                   for xx in (x - d, x + d)):
+            if any(0 <= xx < W and top[y][xx] and hexes[y][xx] == c for xx in (x - d, x + d)):
                 goes_on.add((x, y))
                 break
     left = _flood(edge & goes_on, goes_on)
@@ -1088,6 +1101,31 @@ def dome_fit(obj, height, base, seg=16, rings=4):
         grow += 0.25
 
 
+class ViewHull:
+    """The 45-degree view of a part's polygons, emitted into it as into a
+    mesh: whether a point of the drawing is under one of them."""
+
+    def __init__(self):
+        self.tris = []
+
+    def tri(self, a, b, c, *_):
+        self.tris.append([(p[0], p[2] - p[1]) for p in (a, b, c)])
+
+    def poly(self, pts, *_):
+        for k in range(1, len(pts) - 1):
+            self.tri(pts[0], pts[k], pts[k + 1])
+
+    def covers(self, u, v):
+        for (ax, ay), (bx, by), (cx, cy) in self.tris:
+            d1 = (bx - ax) * (v - ay) - (by - ay) * (u - ax)
+            d2 = (cx - bx) * (v - by) - (cy - by) * (u - bx)
+            d3 = (ax - cx) * (v - cy) - (ay - cy) * (u - cx)
+            if not ((d1 < -1e-9 or d2 < -1e-9 or d3 < -1e-9) and
+                    (d1 > 1e-9 or d2 > 1e-9 or d3 > 1e-9)):
+                return True
+        return False
+
+
 def ball_fit(obj, base, seg=16, rings=8):
     """A ball drawn as a circle (a Poke Ball on a counter): the ellipsoid
     sitting on `base` whose 45-degree view is that circle - as wide as the
@@ -1102,27 +1140,6 @@ def ball_fit(obj, base, seg=16, rings=8):
     pts = [(u + 0.5, v + 0.5) for v in range(H) for u in range(W) if opx[u, v][3] >= 128]
     x0, x1 = min(u for u, _ in pts) - 0.5, max(u for u, _ in pts) + 0.5
     top, foot = min(v for _, v in pts) - 0.5, max(v for _, v in pts) + 0.5
-
-    class Hull:
-        """The 45-degree view of the lathe's polygons."""
-        def __init__(self):
-            self.tris = []
-
-        def tri(self, a, b, c, *_):
-            self.tris.append([(p[0], p[2] - p[1]) for p in (a, b, c)])
-
-        def poly(self, pts, *_):
-            for k in range(1, len(pts) - 1):
-                self.tri(pts[0], pts[k], pts[k + 1])
-
-    def inside(t, u, v):
-        (ax, ay), (bx, by), (cx_, cy) = t
-        d1 = (bx - ax) * (v - ay) - (by - ay) * (u - ax)
-        d2 = (cx_ - bx) * (v - by) - (cy - by) * (u - bx)
-        d3 = (ax - cx_) * (v - cy) - (ay - cy) * (u - cx_)
-        return not ((d1 < -1e-9 or d2 < -1e-9 or d3 < -1e-9) and
-                    (d1 > 1e-9 or d2 > 1e-9 or d3 > 1e-9))
-
     grow = 0.0
     while True:
         cx, rx = (x0 + x1) / 2.0, (x1 - x0) / 2.0 + grow
@@ -1134,10 +1151,95 @@ def ball_fit(obj, base, seg=16, rings=8):
         profile = [(yc - ry * math.cos(math.pi * i / rings),
                     0.0 if i in (0, rings) else rx * math.sin(math.pi * i / rings))
                    for i in range(rings + 1)]
-        hull = Hull()
+        hull = ViewHull()
         vb.ProjLathe("ball", cx, cz, profile, squash=rz / rx, seg=seg).emit(hull)
-        if all(any(inside(t, u, v) for t in hull.tris) for (u, v) in pts):
+        if all(hull.covers(u, v) for (u, v) in pts):
             return cx, cz, rx, rz, profile
+        grow += 0.125
+
+
+def lathe_fit(obj, height, base, squash=0.7, bands=4, seg=16):
+    """A turned thing drawn standing (a jar, its mouth open on top): a
+    surface of revolution on its support's top at `base`, `height` tall,
+    its plan `squash` as deep as it is wide - a ball's, the market's urn's
+    - its radius at `bands` + 1 rings evenly up it fitted so that its
+    45-degree view covers every pixel of the piece's own (`obj`, local)
+    and as few others as it can: the drawing's belly, shoulder and neck,
+    where a ball or a dome under it overhangs its outline (holes, cut by
+    the drawing, from the console's camera). Each ring is an ellipse,
+    seen at 45 degrees as one `squash` as tall as it is wide, `y` higher
+    up the drawing: a row is covered as far out as the widest of them
+    across it. Searched down the axis's foot (its Z) a quarter pixel at
+    a time, from a straight drum and from the drawing's own half-widths,
+    each ring's radius stepped while that misses fewer pixels or covers
+    fewer that are not the piece's; then grown until the polygons that
+    stand for it (vb.ProjLathe, `seg` points round) cover those pixels'
+    centres. Returns (cx, cz, profile)."""
+    W, H = obj.size
+    opx = obj.load()
+    own = {(u, v) for v in range(H) for u in range(W) if opx[u, v][3] >= 128}
+    x0, x1 = min(u for u, _ in own), max(u for u, _ in own) + 1
+    top, foot = min(v for _, v in own), max(v for _, v in own) + 1
+    cx, h = (x0 + x1) / 2.0, float(height)
+    rows = range(top - 2, foot + 2)
+    # each row's pixels by their distance from the axis: its own, and the rest
+    need = {v: [abs(u + 0.5 - cx) for u in range(x0, x1) if (u, v) in own] for v in rows}
+    spare = {v: [abs(u + 0.5 - cx) for u in range(x0 - 2, x1 + 2) if (u, v) not in own]
+             for v in rows}
+    n = int(4 * h) + 1
+    ys = [h * k / (n - 1) for k in range(n)]
+
+    def radius(radii, y):
+        t = y / h * bands
+        i = min(int(t), bands - 1)
+        return radii[i] + (radii[i + 1] - radii[i]) * (t - i)
+
+    def cost(cz, radii):
+        rs = [(y, radius(radii, y)) for y in ys]
+        c = 0
+        for v in rows:
+            dv = v + 0.5 + base - cz
+            w = -1.0
+            for y, r in rs:
+                if r > 0:
+                    t = (dv + y) / (squash * r)
+                    if -1.0 <= t <= 1.0:
+                        w = max(w, r * math.sqrt(1.0 - t * t))
+            c += 1000 * sum(1 for d in need[v] if d > w) + sum(1 for d in spare[v] if d <= w)
+        return c
+
+    def drawn(cz):
+        return [max(need.get(int(math.floor(cz - base - h * i / bands)), []) + [0.0]) + 0.5
+                for i in range(bands + 1)]
+
+    best = None
+    k = 0
+    while top + h + 0.25 * k <= foot:
+        cz = top + h + base + 0.25 * k
+        k += 1
+        for radii in ([(x1 - x0) / 2.0] * (bands + 1), drawn(cz)):
+            c0 = cost(cz, radii)
+            better = True
+            while better:
+                better = False
+                for i in range(bands + 1):
+                    for d in (-0.25, 0.25, -1.0, 1.0):
+                        rr = list(radii)
+                        rr[i] = max(0.0, rr[i] + d)
+                        c1 = cost(cz, rr)
+                        if c1 < c0:
+                            radii, c0, better = rr, c1, True
+            if best is None or c0 < best[0]:
+                best = (c0, cz, radii)
+    _, cz, radii = best
+    pts = [(u + 0.5, v + 0.5) for (u, v) in own]
+    grow = 0.0
+    while True:
+        profile = [(base + h * i / bands, r + grow) for i, r in enumerate(radii)]
+        hull = ViewHull()
+        vb.ProjLathe("lathe", cx, cz, profile, squash=squash, seg=seg).emit(hull)
+        if all(hull.covers(u, v) for (u, v) in pts):
+            return cx, cz, profile
         grow += 0.125
 
 
@@ -1540,8 +1642,9 @@ def interior_specs(spec):
         leave = set(pc.get("leave", ())) | (set() if pc.get("fill") or pc.get("facet") else shade)
         # what of its support support_left finds in its shape: the outline
         # has the last word on it (outline_trim)
-        taken = (support_left(k, supports[k], grids, hexes, W, H) if k in supports
-                 and not pc.get("fill") else set())
+        taken = (support_left(k, supports[k], grids, hexes, W, H,
+                              [j for j, s_ in supports.items() if s_ == supports[k] and j != k])
+                 if k in supports and not pc.get("fill") else set())
         left = set()
         if leaves[k]:
             # the room round it, from its own edge in: a plant's card
@@ -1849,7 +1952,8 @@ def interior_specs(spec):
                 back = back - y0 * 16 - pc.get("base", 0)
             if pc.get("card"):
                 art.paste(obj, (0, 2 * h * 16 + sh + th))
-                parts = [vb.Card(pc["name"], obj, foot, voff=2 * h * 16 + sh + th)]
+                parts = [vb.Card(pc["name"], obj, foot, voff=2 * h * 16 + sh + th,
+                                 base=pc.get("base", 0))]
             elif pc.get("run"):
                 # built from the side (an escalator): each section, (x, y) in
                 # the room's pixels, runs back from z0 to z1 with its drawing
@@ -1886,6 +1990,11 @@ def interior_specs(spec):
                 # top, its drawing projected on it - exact at 45 degrees
                 cx, cz, rx, rz, profile = ball_fit(obj, pc.get("base", 0))
                 parts = [vb.ProjLathe(pc["name"], cx, cz, profile, squash=rz / rx, seg=16)]
+            elif pc.get("round") == "lathe":
+                # turned (a jar): its belly, shoulder and neck as drawn, its
+                # drawing projected on it - exact at 45 degrees
+                cx, cz, profile = lathe_fit(obj, pc["height"], pc.get("base", 0))
+                parts = [vb.ProjLathe(pc["name"], cx, cz, profile, squash=0.7, seg=16)]
             elif pc.get("round") == "dome":
                 # round, not a drawing pushed back: a smooth cap with its
                 # drawing projected on it, exact at 45 degrees
@@ -3784,9 +3893,12 @@ def room_check(models, layout_id, out_dir):
     return bad
 
 
-def verify(models, out):
-    """The proofs: each model against its drawing, each room as composed.
-    Writes the diagnostic images to `out`; True when all of them pass."""
+def verify(models, out, complete=True):
+    """The proofs: each model against its drawing, each room as composed, and
+    each room's pieces by the interior lint. Writes the diagnostic images to
+    `out`; True when all of them pass. `complete` when the models are the
+    whole game's (not --only): only then is an allowance for a piece that was
+    not built a stale one."""
     failed = False
     for model in models:
         judged = model
@@ -3831,7 +3943,8 @@ def verify(models, out):
             print("bridge %-26s composed with the terrain: %d pixel(s) differ from the drawing"
                   % (lid, bad))
             failed = failed or bad != 0
-    interior_lint(models, rooms, out)
+    if interior_lint(models, rooms, out, complete):
+        failed = True
     return not failed
 
 
@@ -3926,38 +4039,80 @@ def lint_allowed(path=LINT_ALLOW):
     return data.get("allow", {}), list(data.get("finished", []))
 
 
-def interior_lint(models, rooms, out):
-    """A warning, not a proof yet: what voxel_defect_scan.py finds on each
-    room's own pieces that the 45-degree proofs cannot see - a line a room
-    here, every piece's in out/interior_lint.txt. A fault the allowlist
-    accepts is listed with its reason and not counted."""
+def lint_verdict(faults, linted, allowed, finished, rooms, complete=True):
+    """The interior lint judged, in every room: it fails the build (F5).
+
+    `faults` are the faults found, (room, piece, kind, text), on the pieces
+    `linted`. Each one is a failure but one the allowlist accepts with its
+    reason. So is an allowance that finds no fault any more - the piece put
+    right, renamed or gone, or its kind misspelt: kept, it would hide the
+    next fault of that kind on that piece unread - and a finished room the
+    game has no pieces for. Without `complete` (an --only build) a piece or
+    room that was not built is not judged. Returns the report's lines and the
+    failures."""
+    lines, failures = [], []
+    found = collections.defaultdict(set)
+    for lid, piece, kind, text in faults:
+        found[piece].add(kind)
+        reason = allowed.get(piece, {}).get(kind)
+        if reason:
+            lines.append("%-40s %-28s %-8s %s (allowed: %s)" % (lid, piece, kind, text, reason))
+        else:
+            lines.append("%-40s %-28s %-8s %s" % (lid, piece, kind, text))
+            failures.append("%s %s: %s %s" % (lid, piece, kind, text))
+    for piece, kinds in sorted(allowed.items()):
+        if piece not in linted and not complete:
+            continue
+        for kind in sorted(kinds):
+            if kind not in found[piece]:
+                failures.append("%s %s: allowed, but %s; remove it from the allowlist"
+                                % (piece, kind, "not found" if piece in linted
+                                   else "no such piece is linted"))
+    for lid in finished:
+        if lid not in rooms and complete:
+            failures.append("%s: finished, but no room has interior pieces in it" % lid)
+    return lines, failures
+
+
+def interior_lint(models, rooms, out, complete=True):
+    """What voxel_defect_scan.py finds on each room's own pieces that the
+    45-degree proofs cannot see, judged by lint_verdict: a line a room with
+    faults here, every piece's in out/interior_lint.txt. Returns the number
+    of failures - faults the allowlist does not accept, and stale entries in
+    it. Strict in every room: the finished ones, approved on the console,
+    and every other (held to no fault from a new room's first build)."""
     import voxel_defect_scan as vds     # (it imports this module)
     allowed, finished = lint_allowed()
-    lines = []
+    faults, linted = [], set()
     for lid in rooms:
-        found, accepted = collections.Counter(), 0
         for m in models:
             lint = m.spec.get("lint")
             if (m.spec["layout"] != lid or not lint or lint["kind"] == "shell"
                     or m.name.endswith("_bare")):
                 continue
+            linted.add(m.name)
             for kind, text in vds.scan_piece(m, lint, collections.defaultdict(set)):
-                reason = allowed.get(m.name, {}).get(kind)
-                if reason:
-                    accepted += 1
-                    lines.append("%-40s %-28s %-8s %s (allowed: %s)"
-                                 % (lid, m.name, kind, text, reason))
-                    continue
-                found[kind] += 1
-                lines.append("%-40s %-28s %-8s %s" % (lid, m.name, kind, text))
-        if found:
-            print("room %-28s interior lint (warning%s): %s"
-                  % (lid, ", a finished room" if lid in finished else "",
-                     ", ".join("%s %d" % kv for kv in found.most_common())))
-        elif accepted:
-            print("room %-28s interior lint: 0 (%d allowed)" % (lid, accepted))
+                faults.append((lid, m.name, kind, text))
+    lines, failures = lint_verdict(faults, linted, allowed, finished, rooms, complete)
+    for lid in rooms:
+        mine = [f for f in faults if f[0] == lid]
+        bad = collections.Counter(kind for _, piece, kind, _ in mine
+                                  if not allowed.get(piece, {}).get(kind))
+        if bad:
+            print("room %-28s interior lint: FAIL %s"
+                  % (lid, ", ".join("%s %d" % kv for kv in bad.most_common())))
+        elif mine:
+            print("room %-28s interior lint: 0 (%d allowed)" % (lid, len(mine)))
+    print("interior lint: %d room(s), %d failure(s), %d fault(s) allowed; "
+          "finished on the console: %d of %d"
+          % (len(rooms), len(failures), len(faults) - sum(
+              1 for _, piece, kind, _ in faults if not allowed.get(piece, {}).get(kind)),
+             len(set(finished) & set(rooms)), len(rooms)))
+    for text in failures:
+        print("    " + text)
     with open(os.path.join(out, "interior_lint.txt"), "w", encoding="utf-8") as f:
-        f.write("\n".join(lines) + "\n")
+        f.write("\n".join(lines + ["FAIL " + t for t in failures]) + "\n")
+    return len(failures)
 
 
 def main():
@@ -3980,8 +4135,9 @@ def main():
     if args.preview:
         for model in models:
             preview(model, out, args.cams.split(",") if args.cams else None)
-    if checks and not verify(models, out):
-        raise SystemExit("a model does not reproduce its drawing")
+    if checks and not verify(models, out, complete=not args.only):
+        raise SystemExit("a model does not reproduce its drawing, or a room fails its "
+                         "interior lint (see above, and %s)" % os.path.join(out, "interior_lint.txt"))
     if args.output:
         export(models, args.output)
     if args.town:

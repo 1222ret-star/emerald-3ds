@@ -79,8 +79,9 @@ jobs:
         run: make -C build/upstream/3ds_port release PYTHON=python3
       - name: Audit the build outputs that would ship
         run: |
-          mkdir -p ship/payload && cp build/upstream/3ds_port/dist/Emerald3DS.3dsx build/upstream/3ds_port/dist/Emerald3DS.smdh ship/payload/
-          python3 -c "import zipfile,pathlib; z=zipfile.ZipFile('ship.zip','w'); [z.write(p, p.relative_to('ship')) for p in pathlib.Path('ship/payload').iterdir()]"
+          mkdir -p ship && cp build/upstream/3ds_port/dist/Emerald3DS.3dsx build/upstream/3ds_port/dist/Emerald3DS.smdh ship/
+          # In payload/, where the release ships them (release_audit_allow.toml [large]).
+          python3 -c "import zipfile,pathlib; z=zipfile.ZipFile('ship.zip','w'); [z.write(p, 'payload/' + p.name) for p in pathlib.Path('ship').iterdir()]"
           python3 tools/release_audit.py --zip ship.zip --strict
       - uses: actions/upload-artifact@v4
         with:

@@ -13,7 +13,11 @@ delimits them (outline_trim); what is drawn no deeper than its front
 its own and its drawing at 45 degrees (voxel_building.ProjRun); a counter
 modelled whole on its U of a plan, its corners cut on the slant and the
 yard between its arms open (voxel_building.PlanPrism); a ball, round and
-its circle at 45 degrees (ball_fit); what a ball hides of the arm it
+its circle at 45 degrees (ball_fit); a jar turned, its belly and neck
+as drawn (lathe_fit); a card lifted onto a stand (Card `base`); what of
+a stand's shape is its top,
+not the pots in a row on it (support_left `sibs`), nor the room round it
+a pot's (auto_leave); what a ball hides of the arm it
 stands on, that arm's own column (fill_hidden "column"); and a stool in
 blocks, its cushion's corners cut on its base and foot, its drawing at 45
 degrees and each hidden side a quad of its wide strip
@@ -288,6 +292,39 @@ check("trim: a box's shadow beside it is the floor's", (6, 2) not in kept and (6
 check("trim: its top edge above its outline stays", all((x, 0) in kept for x in range(6)))
 
 
+# ── support_left: what of a stand's shape is its top ────────────────────
+
+# a stand of green slats with three pots in a row on it, each its orange
+# down one side and its dark the rest: the pots in front of the back one
+# are not the stand's top, nor their orange the stand's colour
+SW, SH = 8, 40
+pots = [[[x < SW and y0 <= y < y0 + 10 for x in range(SW)] for y in range(SH)]
+        for y0 in (2, 15, 28)]
+hx = [["9cd59c"] * SW for _ in range(SH)]
+for pg in pots:
+    for y in range(SH):
+        for x in range(SW):
+            if pg[y][x]:
+                hx[y][x] = "e6a44a" if x < 3 else "414a6a"
+stand = [[True] * SW for _ in range(SH)]
+grids = pots + [stand]
+alone = g.support_left(0, 3, grids, hx, SW, SH)
+check("support: the pots in front are the stand's (no sibs)", len(alone) == 30, len(alone))
+check("support: pots in a row on a stand keep their colours",
+      not g.support_left(0, 3, grids, hx, SW, SH, sibs=[1, 2]))
+# and a pot standing on it as a card: the room beside the stand has a
+# counter drawn on its floor in the pot's orange, which is not round the pot
+RW = 16
+room_hx = [row + ["e6a44a"] * (RW - SW) for row in hx]
+card_grids = [[row + [False] * (RW - SW) for row in pots[0]],
+              [[x < SW for x in range(RW)] for _ in range(SH)]]
+cards = [{"name": "plant", "card": True, "base": 8, "height": 10}, {"name": "stand", "height": 8}]
+check("support: a card on the floor leaves the room's orange",
+      "e6a44a" in g.auto_leave(cards, card_grids, None, room_hx, {}, RW, SH)[0])
+check("support: a card on a stand keeps its pot's orange",
+      not g.auto_leave(cards, card_grids, None, room_hx, {0: 1}, RW, SH)[0])
+
+
 # ── what the drawing shows no depth of, and what is seen through ────────
 
 board = Image.new("RGBA", (16, 16), CLEAR)
@@ -408,6 +445,60 @@ check("ball: as deep as it is tall", abs((max(ys) - min(ys)) / 2 - rz) < 1e-9,
       (max(ys) - min(ys), rz))
 check("ball: as wide as its circle, its 45-degree view as tall",
       6 <= rx < 6.6 and abs(rz * 2 ** 0.5 - (rx - 0.0)) < 0.7, (rx, rz))
+
+# ── a jar: turned, its belly and neck as drawn (lathe_fit) ──────────────
+# Mr. Briney's jars: an open mouth on a neck, a wide belly, its foot
+# drawn narrower; 14 wide and 14 tall, standing on the floor
+
+JAR = [".....#OOOO#.....",
+       "....#O####O#....",
+       "...#O######O#...",
+       "...#O######O#...",
+       "...#WO####OW#...",
+       "..#OOWOOOOWWW#..",
+       ".#OHHOWWWWWWWW#.",
+       ".#OHHOOWWWWWWW#.",
+       ".#OOOOOWWWWWWW#.",
+       ".#WOOOWWWWWWWW#.",
+       ".#RWWRRWWRRWWR#.",
+       "..#RRRRRRRRRR#..",
+       "..#RRRRRRRRRR#..",
+       "...##RRRRRR##..."]
+jar = Image.new("RGBA", (16, 16), CLEAR)
+jpx = jar.load()
+for y, row in enumerate(JAR):
+    for x, c in enumerate(row):
+        if c != ".":
+            jpx[x, y + 1] = {"#": OUTLINE, "O": WOOD, "W": CLOTH, "H": HEM, "R": RED}[c]
+cx, cz, profile = g.lathe_fit(jar, 7, 0)
+model, res = exact(jar, jar, [vb.ProjLathe("t", cx, cz, profile, squash=0.7, seg=16)], (1, 1))
+check("jar: its drawing again at 45 degrees", res == (0, 0, 0), res)
+ys = [p[1] for (tri, _, _) in model.mesh.tris for p in tri]
+check("jar: on the floor, as tall as told", min(ys) == 0 and abs(max(ys) - 7) < 1e-9,
+      (min(ys), max(ys)))
+radii = [r for (_, r) in profile]
+check("jar: its belly wider than its foot and its mouth",
+      max(radii) == max(radii[1:3]) and radii[1] > radii[-1] + 1, radii)
+hull = g.ViewHull()
+vb.ProjLathe("t", cx, cz, profile, squash=0.7, seg=16).emit(hull)
+own = {(x, y) for y in range(16) for x in range(16) if jpx[x, y][3]}
+over = sum(1 for y in range(16) for x in range(16)
+           if (x, y) not in own and hull.covers(x + 0.5, y + 0.5))
+check("jar: no wider than its drawing but a few pixels (no ball's shoulders)", over <= 8, over)
+
+# ── a card lifted onto a stand (Card `base`): its foot as drawn ─────────
+
+pot = Image.new("RGBA", (16, 16), CLEAR)
+ppx = pot.load()
+for y in range(4, 14):
+    for x in range(4, 12):
+        ppx[x, y] = OUTLINE if x in (4, 11) or y == 13 else (CLOTH if y < 8 else WOOD)
+model, res = exact(pot, pot, [vb.Card("t", pot, 14, base=8)], (1, 1))
+check("lifted card: its drawing again at 45 degrees", res == (0, 0, 0), res)
+ys = [p[1] for (tri, _, _) in model.mesh.tris for p in tri]
+zs = {p[2] for (tri, _, _) in model.mesh.tris for p in tri}
+check("lifted card: standing on the stand's top, as far back", min(ys) == 7 and zs == {22.0},
+      (min(ys), zs))
 
 # ── what a ball hides of a counter's arm: the arm's own column ──────────
 # the arm: its outline at x 0 and 15, its rim at 1 and 14, its top between;

@@ -427,11 +427,16 @@ romfs/voxel/trees.rgba5551: scripts/gen_voxel_trees.py \
 # in the GBA's projection and refuses to write one that differs from its art
 # by a single pixel, so a spec that stops matching fails the build here
 # (--verify: the release builder only exports, checked by the CRC of this
-# file). verify-voxel-buildings runs the proofs alone, even when the file is
+# file). So does a room's interior lint (scripts/voxel_defect_scan.py on its
+# pieces): a fault the allowlist (assets/voxel/interior_lint_allow.toml) does
+# not accept with its reason, or an entry in it that finds no fault any more,
+# in any room - see build/buildings/interior_lint.txt.
+# verify-voxel-buildings runs the proofs alone, even when the file is
 # up to date: the release build asks for it.
 romfs/voxel/buildings.bin: scripts/gen_voxel_buildings.py scripts/voxel_building.py scripts/voxel_night.py \
 		scripts/voxel_building_specs.py scripts/voxel_bridge.py scripts/dump_region_art.py scripts/voxel_props.py \
 		scripts/voxel_relief_fixes.py assets/voxel/relief_fixes.json \
+		scripts/voxel_defect_scan.py assets/voxel/interior_lint_allow.toml \
 		$(ROOT)/data/layouts/layouts.json
 	@mkdir -p $(@D)
 	"$(PYTHON)" scripts/gen_voxel_buildings.py --verify --output $@
@@ -615,7 +620,8 @@ verify-voxel-building-anim: romfs/voxel/buildings.bin
 # fault found in Littleroot's rooms, made on purpose on synthetic pieces, is
 # reported by its own kind, and the same piece made right by none; the
 # allowlist of faults accepted (assets/voxel/interior_lint_allow.toml) read
-# with a reason for each; and the parts that make them right (casings,
+# with a reason for each, and the verdict that fails the build on the rest,
+# and on an entry in it that finds no fault; and the parts that make them right (casings,
 # tables on legs, tops flat against a wall, pieces cut by their outlines,
 # frames seen through, domes) still exact at 45 degrees.
 .PHONY: verify-voxel-interior-lint

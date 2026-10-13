@@ -66,7 +66,7 @@ static unsigned sRequestCount, sFrame, starts;
 enum { JOB_GROUND, JOB_TREES, JOB_MODELS, JOB_BORDER, JOB_BORDER_TREES, JOB_SORT, JOB_PACK, JOB_STATICS, JOB_DONE };
 #define VOXEL_GROUND_SLICE_CELLS 1
 #define VOXEL_MODEL_SLICE_TRIANGLES 64
-#define VOXEL_STATIC_SLICE_TRIANGLES 64u
+#define VOXEL_STATIC_SLICE_TRIANGLES 64
 #define VOXEL_SLICE_CAP_MS 5.0f
 static float sPhaseMs[JOB_DONE + 1];
 static uint32_t sPhaseFrame[JOB_DONE + 1];
@@ -94,23 +94,20 @@ static unsigned sUploadCommands, sRenderReserve;
         source += function(voxel, signature)
     source += r'''
 static struct { unsigned count, staticCount; } sBuilder;
+static bool sHaveBuildings;
+/* Static models: each mesh cached once its slices of conversion are done. */
 typedef struct { unsigned pageModel; bool lit; } VoxelStaticDraw;
-static VoxelStaticDraw sJobStatics[3];
-static bool staticCached[3], staticReady;
-static unsigned staticPrepareCalls;
-static const void *StaticMeshFind(unsigned pageModel, bool lit) {
-    assert(pageModel < 3 && lit == sJobStatics[pageModel].lit);
-    return staticCached[pageModel] ? &sJobStatics[pageModel] : NULL;
+static VoxelStaticDraw sJobStatics[4];
+static struct StaticMesh { unsigned slicesLeft; } meshes[4];
+static unsigned prepares;
+static const struct StaticMesh *StaticMeshFind(unsigned pageModel, bool lit) {
+    (void)lit; return meshes[pageModel].slicesLeft ? NULL : &meshes[pageModel];
 }
 static bool StaticMeshPrepare(unsigned pageModel, bool lit, unsigned triangles) {
-    assert(pageModel < 3 && lit == sJobStatics[pageModel].lit);
-    assert(triangles == VOXEL_STATIC_SLICE_TRIANGLES);
-    ++staticPrepareCalls;
-    if (!staticReady) return false;
-    staticCached[pageModel] = true;
-    return true;
+    (void)lit; assert(triangles == VOXEL_STATIC_SLICE_TRIANGLES); ++prepares;
+    if (meshes[pageModel].slicesLeft) --meshes[pageModel].slicesLeft;
+    return meshes[pageModel].slicesLeft == 0;
 }
-static bool sHaveBuildings;
 static unsigned cells[2][64];
 static void EmitCells(bool trees, int x0, int y0, int x1, int y1) {
     for (int y = y0; y < y1; ++y) for (int x = x0; x < x1; ++x) {
@@ -305,32 +302,6 @@ int main(void) {
     assert(sAtlases[0].generation == 0 && sAtlases[1].generation == 0);
     /* Production phase transitions must cover each cell once and capture
      * terrainCount once, before the first cell of the tree pass. */
-    memset(&sJob, 0, sizeof(sJob));
-    sJob.phase = JOB_PACK;
-    sBuilder.staticCount = 0;
-    JobStep();
-    assert(sJob.phase == JOB_DONE);
-    sJob.phase = JOB_PACK;
-    sBuilder.staticCount = 3;
-    for (unsigned index = 0; index < 3; ++index)
-        sJobStatics[index] = (VoxelStaticDraw){index, index != 1};
-    JobStep();
-    assert(sJob.phase == JOB_STATICS && sJob.staticIndex == 0);
-    JobStep();
-    assert(sJob.phase == JOB_STATICS && sJob.staticIndex == 0 && staticPrepareCalls == 1);
-    staticReady = true;
-    JobStep();
-    assert(sJob.phase == JOB_STATICS && sJob.staticIndex == 1 && staticPrepareCalls == 2);
-    staticCached[1] = true;
-    JobStep();
-    assert(sJob.phase == JOB_STATICS && sJob.staticIndex == 3 && staticPrepareCalls == 4);
-    JobStep();
-    assert(sJob.phase == JOB_DONE && staticPrepareCalls == 4);
-    sJob.phase = JOB_STATICS;
-    sJob.staticIndex = 0;
-    JobStep();
-    assert(sJob.phase == JOB_DONE && sJob.staticIndex == 3 && staticPrepareCalls == 7);
-    sBuilder.staticCount = 0;
     for (unsigned border = 0; border < 2; ++border) {
         memset(&sJob, 0, sizeof(sJob)); memset(cells, 0, sizeof(cells));
         sBuilder.count = 0;
@@ -342,6 +313,17 @@ int main(void) {
         assert(sJob.col == 0 && sJob.row == 0);
         for (unsigned c = 0; c < 64; ++c) assert(cells[0][c] == 1 && cells[1][c] == 1);
     }
+    /* A chunk with no static models is done once packed; one with models is
+     * done once each is converted (or found cached), a slice a step. */
+    memset(&sJob, 0, sizeof(sJob)); sBuilder.staticCount = 0;
+    sJob.phase = JOB_PACK; JobStep(); assert(sJob.phase == JOB_DONE);
+    for (unsigned i = 0; i < 3; ++i) sJobStatics[i].pageModel = i;
+    meshes[1].slicesLeft = 2; meshes[2].slicesLeft = 1; sBuilder.staticCount = 3;
+    sJob.phase = JOB_PACK; JobStep(); assert(sJob.phase == JOB_STATICS);
+    unsigned staticSteps = 0;
+    while (sJob.phase == JOB_STATICS) { JobStep(); assert(++staticSteps <= 8); }
+    assert(staticSteps == 4 && prepares == 4 && sJob.staticIndex == 3);
+    for (unsigned i = 0; i < 3; ++i) assert(StaticMeshFind(i, false));
     /* Prefetch has only 1 ms per frame. A historical 5 ms sample must
      * become runnable without promoting the chunk to visible first. */
     sFrame = 100; NotePhaseCost(1, 10.0f);
@@ -353,7 +335,7 @@ int main(void) {
     NotePhaseCost(1, 0.2f);
     assert(PhaseCost(1) <= 1.0f); /* do not resurrect the stale outlier */
     ++sFrame; NotePhaseCost(1, 2.0f); assert(PhaseCost(1) == 2.0f);
-    puts("PASS runtime: in-frame visit charged once, warm-up cap, post-submit prefetch admission, zero budget/backoff, stale deadline, preemption, promotion, cancellation ordering, page triangle ranges, queue admission");
+    puts("PASS runtime: in-frame visit charged once, warm-up cap, post-submit prefetch admission, zero budget/backoff, stale deadline, preemption, promotion, cancellation ordering, page triangle ranges, queue admission, static model slices");
     return 0;
 }
 '''
