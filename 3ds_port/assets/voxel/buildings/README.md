@@ -156,6 +156,11 @@ Rustboro's railings add three rules:
 - No flank stands where a block goes on into the block east or west of it.
 - The tile list must hold every variant of the railing: the same railing
   over grass or a building's shade is another metatile.
+- `fill`: tiles that belong to the object only inside a run of its drawn
+  tiles. The General tileset's curb frames a paved slab whose middle (05E)
+  has no stone in it; Rustboro and Mauville pave their streets with that
+  same tile, and as curb their roads stood up in 3-pixel blocks. A run made
+  only of `fill` tiles is ground.
 
 Shadows: the lighting casts a model from one height per cell. A cell the
 solid covers less than FOOTPRINT_FULL/256 of (a railing's line, a hedge's
@@ -164,22 +169,27 @@ pixels. As a box, a railing darkened its whole cell and cast a block. The
 ground patches under a model are lit like the terrain, so a shadow falls
 across them too; the model keeps the shading it was drawn with.
 
-Texture pages are packed bottom-left on a skyline, not on shelves. Two
-pages of 512 KiB do not fit the 768 KiB VRAM block together: the page of a
-room next to Rustboro (512 KiB) must stay at 256 KiB or less, or crossing
-the door leaves one of them waiting. So a long, thin piece (a side wall the
-room's full length) is split.
+Texture pages are packed bottom-left on a skyline, not on shelves. The
+pages of maps in view together must fit the 1 MiB VRAM block: the page of a
+room next to Rustboro (512 KiB) must stay small, or crossing the door
+leaves one of them waiting. So a long, thin piece (a side wall the room's
+full length) is split.
 
 A page is a power of two wide but only as tall as the rows it uses, in
 whole tiles of 8: the GPU samples it as a texture the next power of two
-tall, and the rows past the page are neither stored nor given VRAM (no
-face reads them). Each width is tried, tallest drawing first and largest
+tall, and the rows past the page are not stored (no face reads them).
+They still take their VRAM (`ctr_voxel.c` PageBytes): given only the stored
+rows, the texture ran into the next page, or past the block into another
+surface, and an emulator's texture cache (Azahar) claims the texture's whole
+range - a map's houses came out in one flat colour or in another page's art.
+Each width is tried, tallest drawing first and largest
 first, and the fewest texels win. Rounded up to 512×512, the Battle
 Frontier's two halves took 512 KiB each, and no splitting could bring
 either to 256 KiB: West's faces read about 120,000 texels and East's about
 150,000, more than a 512×256 page holds. At their own height they take
-512×352 and 512×384, 736 KiB together. `voxel_engine_view.py check` adds
-up the pages of connected maps.
+512×352 and 512×384 in the file, but 512 KiB each in VRAM: 1 MiB
+together, which is why the block is that size. `voxel_engine_view.py check`
+adds up the pages of connected maps at their VRAM size.
 
 ## Projected surfaces: smooth shapes that stay exact
 
@@ -244,6 +254,92 @@ built as boxes (`thin`). It writes a report per model and tag, and renders
 views with every flagged face tinted (`--view name:cx,cz,pitch,yaw,dist`).
 Run it on a town after modelling it, then look at what it tints; then
 `voxel_engine_view.py view` shows the same place as the console builds it.
+
+A room's pieces are judged further by what `interior_specs` knows of them
+(the spec's `lint`, never exported: which pixels are each piece's, what it
+stands on, the stretch its sides are dressed with):
+
+- `stripes`: a side tile that changes colour column after column, a barcode
+  once laid along the side (the television's 2-px side, the chairs' backs);
+- `copied`: a side tile carrying the front's drawing - an outline line
+  across it a pixel or two thick, clear of its rims, or down it: the
+  drawers seen again on a desk's end, a fridge's door split on its side;
+- `foreign`: hidden faces (sides, backs, depth behind the drawing) reading
+  what is not the piece's own - the room round it, empty texels (fins);
+- `dark`: sides mostly of one colour far darker than the piece, its outline
+  stretched (pieces not `solid`: their sides are the drawn end column);
+- `under`: the floor, the rug or the shadow under a table in the front's
+  four lowest rows, a wall down to the floor - its sides tinted with its
+  front (a tablecloth hanging to the floor all round). Only where the
+  floor reaches in from round it: a sink's doors painted in the planks'
+  colours inside their outline are its doors;
+- `bleed`: a piece standing on another (`base`) carrying its support's
+  colours, the desk's top stood up on a book (`leave` them) - from where
+  the support's own pixels run on into it, not a computer's grey line that
+  the desk's edge happens to share;
+- `cut`: a support with holes in its top where what stands on it took its
+  pixels (unless it `fill`s what it hides, as the Centers' counter does);
+- `backdrop`: a piece carrying the room round it - the wall seen behind a
+  computer's corners, which at 45 degrees lies on the wall and from the
+  game's camera on the computer's top, laid back to the wall with it (a
+  ghost of its outline floating there). The colours that are more the
+  room's walls and floor than the piece's, reached from where the room
+  runs on into it in the same colour, not the ones its body is made of (a
+  white cupboard is not the wall's trim, a tap's white spoke beside the
+  baseboard seen through it is the tap's);
+- `flat`: no depth at all, a paper plane (a chair's back drawn as tall as
+  its rows); `card_bg`: a plant's card carrying the wall or the floor;
+  `floating`: lifted onto nothing.
+
+Cards are exempt from `holes` (their gaps are the leaves'), and a room's
+walls from `ground` (a plaster can be the floor's own colour).
+A fault that is so only by how the piece is drawn - a sink's doors painted
+in the planks' colours, inside its outline - goes in
+`assets/voxel/interior_lint_allow.toml` with its reason (`[allow.<piece>]`,
+`<kind> = "reason"`), never a weaker rule: `--verify` and the scan list it
+and do not count it, in every room the piece stands in. Its `finished` list
+is the rooms approved on the console, whose lint is to stay at 0.
+`--console [--pitches 34,40,46]` renders the layout from the game's follow
+camera (yaw 0, the player's pitches, `AdaptDistance`'s distance) at six
+places, and `--only room_a,room_b` builds only those models (May's house
+stands Brendan's television: both). The cases are proved on synthetic pieces
+by `tests/voxel_interior_lint_test.py` (in `make verify`). Littleroot's six
+rooms are where they were found, and what they were calibrated on.
+
+What `interior_specs` builds against those faults
+(`tests/voxel_interior_parts_test.py`):
+
+- a piece's pixels are what its outline closes in (`outline_trim`): what
+  its support has past it both along the row and down the column is the
+  support's (the desk's border down a computer's side), and what lies
+  beside or below it in a colour its body has nowhere is the floor's (a
+  box's shadow down its side);
+- its sides are the casing its front shows at its ends (`plain_side`: a
+  bookcase's frame, not its books), outlined only where the front is;
+- on legs (`leg_split`), its top ends at the first row of its front that
+  no longer runs its whole width; below, column by column (`table_plan`),
+  posts up to `POST_WIDTH` pixels, as deep as they are wide and dressed
+  with their own front; pedestals and an apron as deep as the top; back
+  posts where the top hides them at 45 degrees. The top's side is what its
+  front shows under the same colour of its edge (`slab_side`: a
+  tablecloth's hem in the middle, the wood at its corners);
+- a top `against` a wall that is drawn deeper than the floor in front of it
+  lies flat to the wall's face: the rows behind it are the wall's to hide,
+  at 45 degrees too (`behind_wall`, skipped and counted by the proofs);
+- what is drawn no deeper than its front, or a single row of outline more
+  (a chair's back, a bed's head board), is two pixels deep, not a plane
+  (`is_flat`);
+- `through`: what the room is seen through (a tap's spokes, a bed's open
+  head frame) leaves its `leave` colours inside its outline too, as holes,
+  and its back is its front again, holes and all (`Relief(see_through)`),
+  so it is seen through from behind as from before;
+- `round="dome"`: a round lid (the lab machine's glass dome) is a smooth
+  cap, its drawing projected on it (`ProjDome`), fitted so its 45-degree
+  view covers every pixel it owns (`dome_fit`), not its drawing pushed back
+  into a hood.
+
+Something lying on another piece is as tall as its edge, not its drawing:
+an open book on a desk is a pixel thick, its pages its top.
 
 ## Finding faults: the map against its drawing
 
@@ -368,6 +464,28 @@ got worse (four cells did: two in Lavaridge by 24 px, two in Route 109 by
 244 656, Route 108 from 12 196 to 979, Rustboro from 21 527 to 14 798, Route
 121 from 6 492 to 3 168; Faraway Island lost 285 px (a curb's corner on the
 snow it rims), Verdanturf 108, Mt Chimney 28, Southern Island 6, Slateport 1.
+
+## Animated texels (Rustboro's fountain)
+
+A model's texture is baked from the drawing as it stands, so a tile the game
+animates (the fountain's jet, two frames every 8 frames) would stay still. A
+`parts_art` spec may return a third value, `live`: texels of its texture
+that show a pixel of the drawing as the game draws it at the moment, clear
+where that pixel is `bg`. The generator resolves each to its upper-layer
+tile, pixel and palette, proves that composing them from the tilesets'
+tiles gives the texture, and writes them after the pages (the "ANIM" table:
+runs of whole 8x8 blocks of a page). The console recomposes a run from BG
+VRAM whenever the game writes one of its tiles, on the current map, and has
+the GPU copy it over the page (`VoxelBuildings_ComposeAnimRun`,
+`AnimateBuildings`).
+
+The fountain keeps the jet out of the drawing it is laid with (what lies
+behind it, read off the two frames) and draws it on a card from a band of
+its own, so that nothing of either frame is left painted on the pool. The
+frames are read from their `.4bpp` (`FOUNTAIN_ANIM`), which the release
+builder rebuilds from the ROM (`tools/vtree_manifest.py ANIM_FRAMES`).
+`tests/voxel_building_anim_test.py` renders the exported fountain at each
+frame against the drawing.
 
 ## Memory
 

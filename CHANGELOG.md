@@ -2,6 +2,64 @@
 
 ## Unreleased
 
+- Day/night, city lights and the berry clock, by @jesus0m (pull request
+  #57), all off by default. The windows' glow and the lamps take memory
+  only while they light: the masks share the voxel page arena and the lamps'
+  buffers are freed shortly after the last one goes out, so with day/night
+  off nothing is reserved. Known limit: at 120X the sun moves every 7.5
+  seconds and each step relights the voxel world, which an Old 3DS shows as
+  frame drops; at 1X it runs smoothly.
+
+- Dewford exterior models and the bounded window-mask pool
+  have user-reported physical-3DS acceptance. Follow-up fixes give the caught-mon
+  Pokédex its own clipped, scroll-isolated bottom-screen layout and recover the
+  gym-side sign from its original two-cell artwork. The user confirms the final
+  preview on a physical 3DS and authorizes publication on October 12, 2026.
+
+- User-tested refinement: brighter, cool-blue outdoor
+  nights with a moonlit ambient blend capped at 6%, eased with the existing clock.
+  Reuse the 2D/voxel texture stages without extra draw calls or assets; keep warm
+  window/lamp emission, neutral interiors/UI and complete black/white fades.
+- Local staging packs now select their ROM fingerprint from the compiled game
+  language, rather than marking Spanish data as English. An explicitly supplied
+  ROM must match that language; synthetic tests cover both profiles and rejection.
+- City lighting (user-reported 3DS acceptance): extend authored voxel
+  glass masks to shared Pokémon Centers, marts and gyms, Rustboro apartment
+  blocks and Devon; correct Littleroot east-house window coordinates.
+  Original Rustboro lamps emit warm glass and bounded floor-only light pools,
+  cached with the visible map state and faded by the existing shared clock.
+  Unmodelled buildings and classic 2D windows remain outside local emission.
+- CI: remove Python 3.12-only f-string expressions from asset-table generation
+  so the Python 3.11 build container can bootstrap. Add URI/offset regression
+  tests in that container and update voxel fixtures for tileset-aware tree APIs,
+  atlas dimensions and clock updates. Package CI's engine-only ZIP under the
+  existing allowed `payload/` layout without weakening publication checks.
+- Experimental follow-up: berry growth shares clock acceleration, with
+  fractional bonus-minute carry, continuous speed changes and save-bound clock
+  persistence. Sleep/offline time stays at 1X; daily RTC events remain original.
+- Correct Spanish clock accents, add display-only EVENING / TARDE and
+  translate modern party EXP text; the wild and foe prefixes stay as the
+  Spanish ROM writes them.
+- Experimental follow-up: clock-driven voxel sun and cast shadows, with
+  15-game-minute direction updates through the existing chunk budget,
+  retained caster caches, and no additional shadow rendering pass.
+- Experimental follow-up: two-hour eased visual transitions and authored
+  amber window emission on shared exterior voxel houses (including Petalburg),
+  disabled with day/night and excluded from interiors. No new encounter bands.
+- Opt-in ORIGINAL / TIMED grass encounters on eleven Hoenn routes, shared
+  by random encounters, Sweet Scent and new visible wild spawns, with original
+  levels/rates and unchanged water, caves, facilities and special encounters.
+- Optional bottom MAP footer showing effective HH:MM, time band and clock
+  rate, independently of lighting, localized in Spanish and partial-redrawn.
+
+- Optional outdoor morning, day, sunset and night lighting in classic 2D and
+  voxel mode, disabled by default and configurable from ENHANCEMENTS.
+- Independent clock speeds from 1X to 120X, without accelerating
+  Emerald's daily RTC events or modifying the GBA save format.
+- Spanish labels for the touch-screen settings tabs, enhancements, cheats,
+  option values and give-items menu; English labels and saved settings stay
+  unchanged.
+
 New and improved:
 
 - Italian: the game in Italian from your own Pokémon Versione Smeraldo (Italy) ROM.
@@ -96,6 +154,14 @@ Fixed:
 - Battles: after opening the bag or the party in a battle, a stat change
   (Growl, Defense Curl and the like) covered the whole screen with its
   pattern instead of only the Pokémon.
+- Voxel mode: Rustboro's and Mauville's streets no longer stand up in low
+  blocks here and there (Rustboro's main road among them). Their paving is
+  the same tile as the middle of the white curbs round lawns and landings,
+  and was raised as curb.
+- Voxel mode: Rustboro's fountain is built again from its drawing: the rim
+  stands over the water, the dish sits on a stem in the middle, and its walls
+  are solid all round (one side was a dark slab and another see-through). Its
+  jet plays the game's animation, as on the GBA.
 
 ## 0.3.1 — 2026-10-10
 

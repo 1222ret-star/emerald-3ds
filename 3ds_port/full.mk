@@ -76,6 +76,7 @@ BACKEND_SRCS += src/3ds_extras.c
 # Local wireless play: the emulated Wireless Adapter the game's link code
 # talks to (its radio is src/3ds_local.c).
 BACKEND_SRCS += src/3ds_rfu_adapter.c
+BACKEND_SRCS += src/3ds_encounter_tables.c
 # The frame profiler times the engine's own routines through linker wrappers.
 BACKEND_SRCS += src/3ds_prof_wrap.c
 PROF_WRAPPED := RunTasks AnimateSprites BuildOamBuffer ProcessDma3Requests \
@@ -406,6 +407,9 @@ map-includes:
 VOXEL_GFX_SOURCES := $(wildcard $(ROOT)/data/tilesets/primary/*/tiles.png $(ROOT)/data/tilesets/secondary/*/tiles.png)
 VOXEL_GFX_SOURCES += $(wildcard $(ROOT)/data/tilesets/primary/*/palettes/*.pal $(ROOT)/data/tilesets/secondary/*/palettes/*.pal)
 VOXEL_GFX_SOURCES += $(wildcard $(ROOT)/graphics/intro/scene_1/bg.png)
+# The tileset animations a model's texels follow (voxel_building_specs.py
+# FOUNTAIN_ANIM: Rustboro's fountain).
+VOXEL_GFX_SOURCES += $(wildcard $(ROOT)/data/tilesets/secondary/rustboro/anim/fountain/*.png)
 VOXEL_GFX_OUTPUTS := $(patsubst %.png,%.4bpp,$(filter %.png,$(VOXEL_GFX_SOURCES)))
 VOXEL_GFX_OUTPUTS += $(patsubst %.pal,%.gbapal,$(filter %.pal,$(VOXEL_GFX_SOURCES)))
 ifneq ($(strip $(VOXEL_GFX_OUTPUTS)),)
@@ -441,11 +445,16 @@ romfs/voxel/trees.rgba5551: scripts/gen_voxel_trees.py \
 # in the GBA's projection and refuses to write one that differs from its art
 # by a single pixel, so a spec that stops matching fails the build here
 # (--verify: the release builder only exports, checked by the CRC of this
-# file). verify-voxel-buildings runs the proofs alone, even when the file is
+# file). So does a room's interior lint (scripts/voxel_defect_scan.py on its
+# pieces): a fault the allowlist (assets/voxel/interior_lint_allow.toml) does
+# not accept with its reason, or an entry in it that finds no fault any more,
+# in any room - see build/buildings/interior_lint.txt.
+# verify-voxel-buildings runs the proofs alone, even when the file is
 # up to date: the release build asks for it.
-romfs/voxel/buildings.bin: scripts/gen_voxel_buildings.py scripts/voxel_building.py \
-		scripts/voxel_building_specs.py scripts/dump_region_art.py scripts/voxel_props.py \
+romfs/voxel/buildings.bin: scripts/gen_voxel_buildings.py scripts/voxel_building.py scripts/voxel_night.py \
+		scripts/voxel_building_specs.py scripts/voxel_bridge.py scripts/dump_region_art.py scripts/voxel_props.py \
 		scripts/voxel_relief_fixes.py assets/voxel/relief_fixes.json \
+		scripts/voxel_defect_scan.py assets/voxel/interior_lint_allow.toml \
 		$(ROOT)/data/layouts/layouts.json
 	@mkdir -p $(@D)
 	"$(PYTHON)" scripts/gen_voxel_buildings.py --verify --output $@
@@ -512,6 +521,7 @@ verify-voxel-trees: build/voxel_tree_test.exe
 	./build/voxel_tree_test.exe
 
 build/voxel_tree_test.exe: tests/voxel_tree_test.c src/voxel/voxel_tree.c \
+		tests/voxel_tileset_fixture.h \
 		src/voxel/voxel_mesh_builder.c src/voxel/voxel_sign.c \
 		src/voxel/voxel_tree.h src/voxel/voxel_mesh_builder.h \
 		src/voxel/voxel_world.h src/voxel/voxel_atlas.h src/voxel/voxel_regions.h \
@@ -532,6 +542,7 @@ verify-voxel-lighting: build/voxel_lighting_on_test.exe build/voxel_lighting_off
 LIGHTING_TEST_SRCS := tests/voxel_lighting_test.c src/voxel/voxel_lighting.c src/voxel/voxel_sign.c \
 	src/voxel/voxel_mesh_builder.c src/voxel/voxel_tree.c src/voxel/voxel_relief.c
 LIGHTING_TEST_HEADERS := src/voxel/voxel_lighting.h src/voxel/voxel_mesh_builder.h \
+	tests/voxel_tileset_fixture.h \
 	src/voxel/voxel_world.h src/voxel/voxel_regions.h src/voxel/voxel_atlas.h src/voxel/voxel_tree.h \
 	src/voxel/voxel_building.h
 build/voxel_lighting_on_test.exe: $(LIGHTING_TEST_SRCS) $(LIGHTING_TEST_HEADERS)
@@ -564,7 +575,7 @@ build/voxel_sign_test.exe: tests/voxel_sign_test.c src/voxel/voxel_sign.c src/vo
 	@mkdir -p $(@D)
 	$(HOSTCC) -std=c99 -O2 -Wall -Wextra -Werror -Iinclude -Isrc/voxel \
 		-DVOXEL_HOST_FILES -DSIGN_MASK_PATH='"romfs/voxel/signposts.bin"' \
-		tests/voxel_sign_test.c src/voxel/voxel_sign.c -o $@
+		tests/voxel_sign_test.c src/voxel/voxel_sign.c -lm -o $@
 
 # The mountains' geometry against what the projection allows, every drawn
 # group (scripts/voxel_relief_check.py), compared with the run before.
@@ -614,6 +625,36 @@ verify-bottom-map:
 verify: verify-voxel-regions
 verify-voxel-regions: romfs/voxel/regions.bin
 	"$(PYTHON)" -B tests/voxel_regions_test.py --cc "$(HOSTCC)"
+
+# The buildings' animated texels (Rustboro's fountain plays its jet), composed
+# by voxel_building.c from BG VRAM at each frame of the game's animation.
+.PHONY: verify-voxel-building-anim
+verify: verify-voxel-building-anim
+verify-voxel-building-anim: romfs/voxel/buildings.bin
+	"$(PYTHON)" -B tests/voxel_building_anim_test.py --cc "$(HOSTCC)"
+
+# A room's pieces judged by what the 45-degree proof cannot see
+# (scripts/voxel_defect_scan.py on gen_voxel_buildings' room facts): every
+# fault found in Littleroot's rooms, made on purpose on synthetic pieces, is
+# reported by its own kind, and the same piece made right by none; the
+# allowlist of faults accepted (assets/voxel/interior_lint_allow.toml) read
+# with a reason for each, and the verdict that fails the build on the rest,
+# and on an entry in it that finds no fault; and the parts that make them right (casings,
+# tables on legs, tops flat against a wall, pieces cut by their outlines,
+# frames seen through, domes) still exact at 45 degrees.
+.PHONY: verify-voxel-interior-lint
+verify: verify-voxel-interior-lint
+verify-voxel-interior-lint:
+	"$(PYTHON)" -B tests/voxel_interior_lint_test.py
+	"$(PYTHON)" -B tests/voxel_interior_parts_test.py
+
+.PHONY: verify-pokedex-capture verify-voxel-dewford
+verify: verify-pokedex-capture verify-voxel-dewford
+verify-pokedex-capture:
+	"$(PYTHON)" -B tests/pokedex_capture_test.py --tree "$(ROOT)" --cc "$(HOSTCC)" --sanitize
+
+verify-voxel-dewford:
+	"$(PYTHON)" -B tests/voxel_dewford_test.py --tree "$(ROOT)"
 
 # What the console builds of every map, checked by the engine's own code over
 # the shipped data (scripts/voxel_engine_view.py check, tests/voxel_scene_dump.c):

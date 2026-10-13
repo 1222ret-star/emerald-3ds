@@ -210,6 +210,7 @@ enum
     CTR_CENTRED_TRADE,
     /* The Berry Blender: its bowl, an affine layer, kept to the picture. */
     CTR_CENTRED_BLENDER,
+    CTR_CENTRED_POKEDEX_CAUGHT,
     CTR_CENTRED_SCREENS
 };
 void CtrVideo_SetCentred(unsigned screen);

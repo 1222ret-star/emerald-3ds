@@ -116,6 +116,56 @@ def parse(blob):
     return {"layouts": layouts, "variants": variants, "cuts": cuts}
 
 
+_CUT_DIR = ((0, -1), (0, 1), (-1, 0), (1, 0), (-1, -1), (1, -1), (-1, 1), (1, 1))
+
+
+def cut_clear(rows):
+    """The texels a cut variant's texture leaves clear, as voxel_relief.c
+    VoxelRelief_CutClear has them (16 rows of bits): its background, less
+    the halves of background pixels its straight 45-degree sides take in
+    (the engine cuts the tile along those sides instead)."""
+    rock = [(i, j) for j in range(16) for i in range(16) if not (rows[j] >> i) & 1]
+    clear = list(rows)
+    if not rock or len(rock) == 256:
+        return clear
+    c = [max(a * i + b * j for i, j in rock) for a, b in _CUT_DIR]
+    for j in range(16):
+        for i in range(16):
+            inside = all(a * i + b * j <= ck for (a, b), ck in zip(_CUT_DIR, c))
+            if inside == bool((rows[j] >> i) & 1):
+                return clear        # no polygon: its staircase, as drawn
+    if not any(c[k] < a * (c[3] if a > 0 else -c[2]) + b * (c[1] if b > 0 else -c[0])
+               for k, (a, b) in enumerate(_CUT_DIR) if k >= 4):
+        return clear                # no 45-degree side
+    for j in range(16):
+        for i in range(16):
+            if (clear[j] >> i) & 1 and all(
+                    a * (i if a > 0 else i + 1) + b * (j if b > 0 else j + 1) < ck + (a > 0) + (b > 0)
+                    for (a, b), ck in zip(_CUT_DIR, c)):
+                clear[j] &= ~(1 << i)
+    return clear
+
+
+_AROUND = ((-1, 0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, -1), (-1, 1), (1, 1))
+
+
+def cut_fringe(rows, clear):
+    """{(x, y): (sx, sy)}: the background pixels cut_clear keeps drawn, each
+    with the rock pixel beside it whose colour it takes (as voxel_relief.c
+    VoxelRelief_CutFringe: west, east, north, south, then the corners)."""
+    out = {}
+    for y in range(16):
+        for x in range(16):
+            if not (rows[y] >> x) & 1 or (clear[y] >> x) & 1:
+                continue
+            for dx, dy in _AROUND:
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < 16 and 0 <= ny < 16 and not (rows[ny] >> nx) & 1:
+                    out[(x, y)] = (nx, ny)
+                    break
+    return out
+
+
 def pack(relief):
     tables = []
     for lid in sorted(relief["layouts"]):

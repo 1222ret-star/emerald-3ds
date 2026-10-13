@@ -62,4 +62,8 @@ bool VoxelSign_HeadGround(const VoxelMapInstance *inst, int x, int y, int *metat
 void VoxelSign_Init(void);
 void VoxelSign_Shutdown(void);
 
+bool VoxelSign_IsLantern(const uint16_t head[16]);
+void VoxelSign_EmitNight(VoxelBuilder *glass, VoxelBuilder *ground,
+                       const VoxelMapInstance *inst, int x0, int y0, int x1, int y1);
+
 #endif

@@ -29,7 +29,10 @@
 #define VOXEL_SPRITE_SLOTS      16u
 #define VOXEL_SPRITE_PIXELS     (VOXEL_SPRITE_ATLAS_DIM * VOXEL_SPRITE_ATLAS_DIM)
 #define VOXEL_CAST_SHADOW_VERTICES 6u
-#define VOXEL_REFLECTION_VERTICES 6u
+/* A reflection is cut across its card into strips, each over the water under
+ * it (EmitReflection): at most one quad a strip. */
+#define VOXEL_REFLECTION_STRIPS 4u
+#define VOXEL_REFLECTION_VERTICES (6u * VOXEL_REFLECTION_STRIPS)
 
 /* Forgets every cached slot, so the next update re-decodes from scratch. */
 void VoxelEntities_Reset(void);
@@ -41,6 +44,8 @@ void VoxelEntities_Reset(void);
  * once per step no matter how smooth its damping is.
  */
 void VoxelEntities_GetPlayerWorldPos(float *worldX, float *worldZ);
+/* How high a bridge's deck carries the player, tiles (0 off one). */
+float VoxelEntities_PlayerDeck(void);
 /* First vertex of the emitted player quad, or -1 when invisible/not emitted. */
 int VoxelEntities_PlayerVertexFirst(void);
 

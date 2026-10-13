@@ -12,7 +12,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import voxel_cells  # noqa: E402
-from voxel_sign_mask import head_mask, metatile_mask  # noqa: E402
+from voxel_sign_mask import event_board_masks, head_mask, metatile_mask  # noqa: E402
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 PORT = os.path.join(ROOT, "3ds_port")
@@ -44,6 +44,57 @@ def head_ground(layout, pair, x, y):
     return layout.metatile(x, y + 2) if not layout.off_map(x, y + 2) else 0
 
 
+def blocked_head(pair, head, north):
+    """A sign's head in a blocked cell - the wall it stands against:
+    Lavaridge's gym sign tops the corner of the gym - when that cell's upper
+    layer is the head and nothing else. Asked of sign events only: a rock in
+    the sea is a post, and the ripples round its top are no head.
+    Its ground is its own drawing: its lower layer alone is a metatile the map
+    may not hold, and the atlas has only the map's."""
+    return all(head[py] >> px & 1 for px, py in pair.layer_pixels(north, 1))
+
+
+def sign_record(layout, pair, x, y):
+    """A signpost's mask rows, its head's (0 for none) and the metatile the
+    head's cell is drawn with under it."""
+    rows = metatile_mask(pair, layout, x, y)
+    if y == 0:
+        return rows, [0] * 16, 0
+    north = layout.metatile(x, y - 1)
+    head = head_mask(pair, rows, north)
+    if any(head) and not layout.blocked(x, y - 1):
+        return rows, head, head_ground(layout, pair, x, y - 1)
+    if any(head) and (x, y) in layout.signs and blocked_head(pair, head, north):
+        return rows, head, north
+    return rows, [0] * 16, 0
+
+
+def layout_records(layout_id, layout, pair):
+    records = []
+    for y in range(layout.h):
+        for x in range(layout.w):
+            if layout.role_at(x, y) != "signpost":
+                board = event_board_masks(pair, layout, x, y)
+                if board is not None:
+                    rows, head, ground = board
+                    records.append((layout_id, x, y, rows, head, ground))
+                continue
+            records.append((layout_id, x, y) + sign_record(layout, pair, x, y))
+    return records
+
+
+def write_records(records, path):
+    """VXS2: a record is the sign's cell, its 16 mask rows, the 16 rows of
+    its head in the cell north of it (a lamp's lantern; 0 for none) and the
+    metatile that cell's ground is drawn with instead."""
+    records = sorted(records, key=lambda item: (item[0], item[2], item[1]))
+    with open(path, "wb") as stream:
+        stream.write(b"VXS2")
+        stream.write(struct.pack("<I", len(records)))
+        for layout_id, x, y, rows, head, ground in records:
+            stream.write(struct.pack("<HHH16H16HH", int(layout_id), x, y, *rows, *head, ground))
+
+
 def main():
     with open(os.path.join(ROOT, "data", "layouts", "layouts.json"),
               encoding="utf-8") as stream:
@@ -59,29 +110,11 @@ def main():
         if key not in pairs:
             pairs[key] = voxel_cells.pair_for(*key)
         pair = pairs[key]
-        for y in range(layout.h):
-            for x in range(layout.w):
-                if layout.role_at(x, y) != "signpost":
-                    continue
-                rows = metatile_mask(pair, layout, x, y)
-                head, ground = [0] * 16, 0
-                if y > 0 and not layout.blocked(x, y - 1):
-                    head = head_mask(pair, rows, layout.metatile(x, y - 1))
-                    if any(head):
-                        ground = head_ground(layout, pair, x, y - 1)
-                records.append((layout_id, x, y, rows, head, ground))
-    records.sort(key=lambda item: (item[0], item[2], item[1]))
+        records.extend(layout_records(layout_id, layout, pair))
     # The runtime uses the numeric layout id, not the string map name.
     # layouts.json ids are numeric in the generated map table.
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
-    with open(OUT, "wb") as stream:
-        # VXS2: a record is the sign's cell, its 16 mask rows, the 16 rows of
-        # its head in the cell north of it (a lamp's lantern; 0 for none) and
-        # the metatile that cell's ground is drawn with instead
-        stream.write(b"VXS2")
-        stream.write(struct.pack("<I", len(records)))
-        for layout_id, x, y, rows, head, ground in records:
-            stream.write(struct.pack("<HHH16H16HH", int(layout_id), x, y, *rows, *head, ground))
+    write_records(records, OUT)
     print("voxel sign masks: %d records, %d with a head -> %s"
           % (len(records), sum(1 for r in records if any(r[4])), OUT))
 

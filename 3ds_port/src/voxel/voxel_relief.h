@@ -130,5 +130,33 @@ int VoxelRelief_Cut(const VoxelMapInstance *inst, int x, int y, float *foot, int
 unsigned VoxelRelief_CutCount(void);
 bool VoxelRelief_CutVariant(unsigned i, unsigned *layout, unsigned *metatile,
                             const uint8_t **rows);
+/*
+ * A cut tile whose rock is a polygon of straight sides (the generator
+ * straightens them: voxel_terraces.py straight_mask) is cut along its
+ * 45-degree sides rather than by its texels, which leave a staircase where
+ * the drawing has a straight diagonal. `count` sides a*X + b*Y <= c over the
+ * tile's pixels (X, Y from 0 to 16), through the outer corners of the rock's
+ * pixels beside them; none when the rock is no polygon (two pieces, a notch)
+ * or its polygon has no 45-degree side. VoxelRelief_CutClear gives the
+ * texels the tile's texture leaves clear: its background, less the halves of
+ * background pixels those sides take in (drawn, or the cut would show them
+ * as notches in the straight line).
+ */
+typedef struct
+{
+    int count;
+    int8_t a[4], b[4];
+    int16_t c[4];
+} VoxelCutDiagonals;
+void VoxelRelief_CutDiagonals(const uint8_t *rows, VoxelCutDiagonals *out);
+void VoxelRelief_CutClear(const uint8_t *rows, uint16_t clear[16]);
+/*
+ * A background pixel VoxelRelief_CutClear keeps drawn shows only the part of
+ * it inside the rock's polygon: it takes the colour of a rock pixel beside
+ * it (west, east, north, south, then the corners), not the ground's (a fleck
+ * of grass on the rock's edge). The index (y * 16 + x) of that pixel, or -1
+ * when (x, y) is no such pixel or has no rock beside it.
+ */
+int VoxelRelief_CutFringe(const uint8_t *rows, const uint16_t clear[16], int x, int y);
 
 #endif

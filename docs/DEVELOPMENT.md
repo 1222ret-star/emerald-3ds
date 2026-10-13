@@ -69,6 +69,28 @@ and VRAM behave differently there.
 
 ## Host tests
 
+The SDK-free day/night clock and lighting tests can also run separately:
+`make -C 3ds_port verify-daynight`. They are included in `make verify` and CI.
+`make -C 3ds_port verify-clock-store` exercises save-bound clock state, CRCs,
+fractions, file replacement/backup recovery and failed writes. After bootstrap,
+`python3 3ds_port/tests/berry_clock_test.py --tree build/upstream` compiles the
+actual berry/minute update functions and checks all six speeds, midnight,
+no double credit, watering/stopped-tree rules and original expiry. Repeat
+with `--tree build/upstream-es` for Spanish. Native clock and storage tests
+also pass ASan/UBSan on macOS.
+The shared-clock consumers and timed encounter resolver are tested by
+`make -C 3ds_port verify-daynight verify-encounters`. After bootstrap, run
+`python3 3ds_port/tests/encounter_tables_test.py --tree build/upstream` to
+check every production route rule, its pinned species, levels/rates and
+original fallbacks under ASan/UBSan. Use `--tree build/upstream-es` for Spanish.
+`python3 3ds_port/tests/bottom_map_test.py` compares partial/full map redraws,
+including the clock footer, midnight, toggles and location changes.
+`python3 3ds_port/tests/voxel_night_test.py --cc clang` checks authored window
+masks and the real VXB7/VXB8 readers without a bootstrapped tree (Pillow is
+required). Add `--assets build/upstream/3ds_port/romfs/voxel/buildings.bin`
+to check generated pages as well, or run `verify-night-windows` in that tree.
+See [day/night validation](DAY_NIGHT.md) for the hardware acceptance checklist.
+
 `make verify` builds and runs the C host tests (input decoding, video decode,
 pack parser, voxel world hashing, arena, atlas, trees, lighting, ground mesh,
 signposts, relief) and audits the link. The builder's tests:

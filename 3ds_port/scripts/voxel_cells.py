@@ -293,13 +293,13 @@ class Layout:
         a bush drawn over whoever stands behind it is not a post), is not
         foliage or part of a house, and has open ground or a
         different drawing to its north (a fence's run repeats itself).
-        A sign drawn with a post's metatile (post_metatiles) is one wherever
-        it stands, walkable to its south: Littleroot's house signs stand
-        against the house's wall."""
+        A sign drawn as a post (drawn_as_post) is one wherever it stands,
+        walkable to its south: Littleroot's house signs stand against the
+        house's wall."""
         if not self.outdoor or not self.blocked(x, y):
             return False
         if (not self.blocked(x, y + 1) and not self.off_map(x, y + 1)
-                and post_key(self, self.metatile(x, y)) in post_metatiles(self.events)):
+                and self.drawn_as_post(self.metatile(x, y))):
             return True
         if self.free_post(x, y):
             return True
@@ -311,6 +311,27 @@ class Layout:
             return False
         sides = [(x + dx, y) for dx in (-1, 1) if self.blocked(x + dx, y)]
         return len(sides) == 1 and sides[0] in self.houses()
+
+    def drawn_as_post(self, metatile):
+        """Drawn as a sign that stands open on three sides somewhere: with
+        its metatile (post_metatiles) or with its sign (draws_post_sign)."""
+        return (post_key(self, metatile) in post_metatiles(self.events)
+                or self.draws_post_sign(metatile))
+
+    def draws_post_sign(self, metatile):
+        """Its upper layer is a post's, pixel for pixel: that sign, over
+        whatever ground its own tileset draws under it. Dewford's, Fortree's
+        and Lavaridge's gym signs are the General tileset's, against the
+        gym's wall or beside a tree."""
+        post_metatiles(self.events)
+        upper = self.upper_drawing(metatile)
+        return upper is not None and upper in self.events.post_drawings
+
+    def upper_drawing(self, metatile):
+        """A metatile's upper layer, pixel by pixel, or None when it draws
+        nothing there."""
+        upper = pair_for(self.primary, self.secondary).layer_pixels(metatile, 1)
+        return frozenset(upper.items()) if upper else None
 
     def free_post(self, x, y):
         """A post open on three sides: a sign event, or a drawing that is
@@ -388,10 +409,12 @@ def post_key(layout, metatile):
 def post_metatiles(events):
     """The metatiles signs are drawn with: every sign event's that stands
     open on three sides somewhere (a town's sign in the middle of a square).
-    The same metatile against a wall is the same sign. Kept on `events`."""
+    The same metatile against a wall is the same sign. Kept on `events`,
+    with the upper layers they draw (`post_drawings`, Layout.draws_post_sign)."""
     if getattr(events, "posts", None) is None:
         events.posts = set()        # the layouts read below ask it too
-        found = set()
+        events.post_drawings = set()
+        found, drawings = set(), set()
         with open(os.path.join(ROOT, "data", "layouts", "layouts.json"), encoding="utf-8") as f:
             entries = json.load(f)["layouts"]
         for entry in entries:
@@ -401,7 +424,10 @@ def post_metatiles(events):
             for (x, y) in layout.signs:
                 if not layout.off_map(x, y) and layout.open_post(x, y):
                     found.add(post_key(layout, layout.metatile(x, y)))
-        events.posts = found
+                    upper = layout.upper_drawing(layout.metatile(x, y))
+                    if upper is not None:
+                        drawings.add(upper)
+        events.posts, events.post_drawings = found, drawings
     return events.posts
 
 

@@ -4,7 +4,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "global.h"
+#include "voxel_tileset_fixture.h"
 
 #include "voxel_lighting.h"
 #include "voxel_atlas.h"
@@ -23,6 +23,7 @@ static bool sHousePresent = true, sTreePresent;
 static bool sRailPresent;
 static const uint16_t sRailMask[16] = {[14] = 0xFFFF, [15] = 0xFFFF};
 static int sOffsetX, sOffsetZ;
+static unsigned sTileReads;
 
 /* voxel_tree.c compares the map's secondary tileset with this object to
  * recognise Dewford's tree art; this test never builds trees, so an empty
@@ -43,6 +44,7 @@ bool VoxelWorld_UsesTreeSprites(const VoxelMapInstance *inst) { return inst != N
 int VoxelWorld_GetMetatileId(int x, int z)
 {
     int lx = x - sOffsetX, lz = z - sOffsetZ;
+    ++sTileReads;
     if (VoxelWorld_GetInstanceAt(x, z) == NULL) return -1;
     if (sHousePresent && lx >= 4 && lx < 6 && lz >= 4 && lz < 6) return 2;
     if (sTreePresent && lx >= 8 && lx < 10 && lz >= 4 && lz < 6)
@@ -95,6 +97,13 @@ float VoxelBuildings_LayoutTop(const VoxelMapInstance *inst)
     (void)inst;
     return VoxelBuildings_MaxTop();
 }
+/* No bridge deck in these scenes. */
+bool VoxelBuildings_DeckAt(const VoxelMapInstance *inst, float worldX, float worldZ,
+                           unsigned elevation, float *lift)
+{
+    (void)inst; (void)worldX; (void)worldZ; (void)elevation; (void)lift;
+    return false;
+}
 VoxelVisualShape VoxelWorld_ClassifyTile(int x, int z)
 {
     if (VoxelWorld_GetInstanceAt(x, z) == NULL) return VOXEL_SHAPE_VOID;
@@ -125,6 +134,85 @@ static void Ground(VoxelBuilder *builder, int x, int z)
 {
     VoxelMesh_Top(builder, (float)x, (float)z, 0, 0, 0, 1, 1, 0, 1);
 }
+
+#if CTR_VOXEL_LIGHTING
+static void MovingSunTests(void)
+{
+    static const float directions[][2] = {
+        {1.35f, 0.35f}, {-1.35f, 0.35f}, {0.0f, 0.55f},
+        {1.0f, -0.55f}, {-1.0f, -0.55f}, {1.0f, 0.0f}, {0.0f, 0.0f}
+    };
+    uint32_t oldHash = VoxelLighting_Hash(0, 0, 4, 4);
+
+    assert(VoxelLighting_SetSun(-1.0f, 0.55f, 1.0f, 101));
+    assert(oldHash != VoxelLighting_Hash(0, 0, 4, 4));
+    assert(VoxelLighting_Sample(2.5f, 0, 6.0f) < 0.8f);
+    assert(VoxelLighting_Sample(6.5f, 0, 6.0f) == 1.0f);
+    assert(VoxelLighting_Face(1, 0, 0) == 1.0f);
+    assert(VoxelLighting_Face(-1, 0, 0) == VOXEL_AMBIENT);
+    assert(!VoxelLighting_SetSun(-1.0f, 0.55f, 1.0f, 101));
+    assert(VoxelLighting_SetSun(1.0f, 0.55f, 1.0f, 102));
+    assert(VoxelLighting_Sample(6.5f, 0, 6.0f) < 0.8f);
+    assert(VoxelLighting_Sample(2.5f, 0, 6.0f) == 1.0f);
+    assert(VoxelLighting_Face(-1, 0, 0) == 1.0f);
+    unsigned reads = sTileReads, rays = VoxelLighting_Rays();
+    assert(VoxelLighting_SetSun(0.0f, 0.55f, 0.0f, 1));
+    assert(VoxelLighting_Sample(6.5f, 0, 6.0f) == 1.0f);
+    assert(VoxelLighting_Face(1, 0, 0) == 1.0f);
+    assert(sTileReads == reads && VoxelLighting_Rays() == rays);
+    assert(!VoxelLighting_SetSun(NAN, 0.55f, 1.0f, 103));
+    assert(!VoxelLighting_SetSun(2.0f, 0.55f, 1.0f, 103));
+    assert(!VoxelLighting_SetSun(0.0f, 0.55f, -1.0f, 103));
+
+    sTreePresent = sRailPresent = true;
+    float directionSamples[7][100];
+    for (unsigned direction = 0; direction < sizeof(directions) / sizeof(directions[0]); ++direction)
+    {
+        VoxelLighting_SetSun(directions[direction][0], directions[direction][1], 1.0f, direction + 300);
+        VoxelLighting_Reset();
+        for (unsigned sample = 0; sample < 100; ++sample)
+            directionSamples[direction][sample] = VoxelLighting_Sample(
+                (float)(sample % 10) * 1.3f - 1.0f, 0.37f,
+                (float)(sample / 10) * 1.3f - 1.0f);
+    }
+    for (unsigned direction = 0; direction < sizeof(directions) / sizeof(directions[0]); ++direction)
+    {
+        assert(VoxelLighting_SetSun(directions[direction][0], directions[direction][1], 1.0f, direction + 400));
+        for (unsigned sample = 0; sample < 100; ++sample)
+            assert(directionSamples[direction][sample] == VoxelLighting_Sample(
+                (float)(sample % 10) * 1.3f - 1.0f, 0.37f,
+                (float)(sample / 10) * 1.3f - 1.0f));
+    }
+    for (unsigned direction = 0; direction < sizeof(directions) / sizeof(directions[0]); ++direction)
+    {
+        assert(VoxelLighting_SetSun(directions[direction][0], directions[direction][1], 1.0f, direction + 200));
+        for (unsigned height = 0; height < 3; ++height)
+            for (unsigned row = 0; row < 45; ++row)
+                for (unsigned column = 0; column < 60; ++column)
+                {
+                    float sampleX = (float)column * 0.27f - 1.0f;
+                    float sampleZ = (float)row * 0.31f - 1.0f;
+                    float sampleY = (float)height * 0.37f;
+                    float optimized;
+
+                    sCeilingOverride = 0.0f;
+                    gVoxelLightingStepEveryPoint = false;
+                    VoxelLighting_Reset();
+                    optimized = VoxelLighting_Sample(sampleX, sampleY, sampleZ);
+                    sCeilingOverride = 200.0f;
+                    gVoxelLightingStepEveryPoint = true;
+                    VoxelLighting_Reset();
+                    assert(optimized == VoxelLighting_Sample(sampleX, sampleY, sampleZ));
+                }
+    }
+    sTreePresent = sRailPresent = false;
+    sCeilingOverride = 0.0f;
+    gVoxelLightingStepEveryPoint = false;
+    assert(VoxelLighting_SetSun(0.85f, 0.55f, 1.0f, 0));
+    VoxelLighting_Reset();
+    puts("PASS moving sun: both shadow directions, face lighting, zero axes, bounded rays, cache reuse, night, hash invalidation, 56700 oracle samples");
+}
+#endif
 
 int main(void)
 {
@@ -333,6 +421,7 @@ int main(void)
     sRailPresent = false;
     VoxelLighting_Reset();
 
+    MovingSunTests();
     sMaps[1].indoor = true;
     VoxelLighting_Reset();
     assert(VoxelLighting_Sample(3.5f, 0, 3.5f) == 1.0f);

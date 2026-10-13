@@ -49,6 +49,9 @@ SOURCES += src/3ds_data.c src/3ds_pak.c src/3ds_settings.c src/3ds_prof.c src/3d
 SOURCES += src/3ds_video.c src/3ds_video_decode.c src/3ds_bottom_screen.c
 # Local wireless play (include/3ds_local.h).
 SOURCES += src/3ds_local.c
+SOURCES += src/3ds_daynight.c
+SOURCES += src/3ds_clock_store.c
+SOURCES += src/3ds_encounters.c
 LIBS := -lcitro2d -lcitro3d $(LIBS)
 OBJECTS := $(patsubst src/%.c,build/%.o,$(SOURCES))
 GAMEFLAGS := -DPORTABLE -DPLATFORM_3DS -D__3DS__ -DMODERN=1 -DUBFIX -D__INTELLISENSE__
@@ -57,7 +60,7 @@ GAMEFLAGS += -iquote include -iquote ../include -iquote ../include/constants -iq
 VOXEL ?= 1
 CPPFLAGS += -DCTR_VOXEL_ENABLED=$(VOXEL)
 GAMEFLAGS += -DCTR_VOXEL_ENABLED=$(VOXEL)
-# Baked fixed-sun lighting and contact shadows, targeting Old 3DS.
+# Baked clock-driven lighting and contact shadows, targeting Old 3DS.
 VOXEL_LIGHTING ?= 1
 ifneq ($(VOXEL_LIGHTING),0)
 ifneq ($(VOXEL_LIGHTING),1)
@@ -222,7 +225,7 @@ release: build/$(TARGET)_3dsx.elf $(TARGET).smdh romfs/boot.txt $(ROMFS_DATA_OUT
 # The data pack, built from this tree's own staging: the release path, tested
 # without the builder.
 pak: romfs/engine/abi.bin
-	"$(PYTHON)" $(SCRIPTS)/staging.py pak --romfs romfs --out build/emerald3ds.pak
+	"$(PYTHON)" $(SCRIPTS)/staging.py pak --romfs romfs --out build/emerald3ds.pak --game-config $(ROOT)/include/constants/global.h
 
 # Loose game data for sdmc:/3ds/emerald3ds/devdata/ (see tools/dev_assets.py).
 devdata: romfs/engine/abi.bin
@@ -240,6 +243,47 @@ build/input_test.exe: tests/input_test.c src/3ds_input_decode.c include/3ds_inpu
 	$(HOSTCC) -std=c99 -O2 -Wall -Wextra -Werror -Iinclude tests/input_test.c src/3ds_input_decode.c -o $@
 
 verify: verify-video
+verify: verify-daynight
+verify: verify-clock-store
+verify: verify-night-windows
+verify: verify-night-lamps
+verify: verify-encounters
+.PHONY: verify-encounters
+verify-encounters: build/encounters_test.exe
+	./build/encounters_test.exe
+
+build/encounters_test.exe: tests/encounters_test.c src/3ds_encounters.c include/3ds_encounters.h
+	@mkdir -p build
+	$(HOSTCC) -std=c99 -O2 -Wall -Wextra -Werror -Iinclude tests/encounters_test.c src/3ds_encounters.c -o $@
+
+.PHONY: verify-daynight
+.PHONY: verify-night-windows
+.PHONY: verify-night-lamps
+verify-night-lamps: build/voxel_lamps_test$(EXESUFFIX)
+	./build/voxel_lamps_test$(EXESUFFIX)
+
+build/voxel_lamps_test$(EXESUFFIX): tests/voxel_lamps_test.c src/voxel/voxel_sign.c src/voxel/voxel_sign.h
+	@mkdir -p build
+	$(HOSTCC) -std=c99 -O2 -Wall -Wextra -Werror -Iinclude -Isrc/voxel -DVOXEL_HOST_FILES -DSIGN_MASK_PATH='"build/voxel_lamps_fixture.bin"' tests/voxel_lamps_test.c src/voxel/voxel_sign.c -lm -o $@
+
+verify-night-windows:
+	"$(PYTHON)" tests/voxel_night_test.py --cc "$(HOSTCC)" --assets romfs/voxel/buildings.bin
+
+verify-daynight: build/daynight_test.exe
+	./build/daynight_test.exe
+
+.PHONY: verify-clock-store
+verify-clock-store: build/clock_store_test$(EXESUFFIX)
+	./build/clock_store_test$(EXESUFFIX)
+
+build/clock_store_test$(EXESUFFIX): tests/clock_store_test.c src/3ds_clock_store.c src/3ds_daynight.c src/3ds_pak.c include/3ds_clock_store.h include/3ds_daynight.h
+	@mkdir -p build
+	$(HOSTCC) -std=c99 -O2 -Wall -Wextra -Werror -Drename=CtrTestRename -Iinclude tests/clock_store_test.c src/3ds_clock_store.c src/3ds_daynight.c src/3ds_pak.c -lm -o $@
+
+build/daynight_test.exe: tests/daynight_test.c src/3ds_daynight.c include/3ds_daynight.h include/3ds_platform.h
+	@mkdir -p build
+	$(HOSTCC) -std=c99 -O2 -Wall -Wextra -Werror -Iinclude tests/daynight_test.c src/3ds_daynight.c -lm -o $@
+
 .PHONY: verify-video
 verify-video: build/video_decode_test.exe
 	./build/video_decode_test.exe

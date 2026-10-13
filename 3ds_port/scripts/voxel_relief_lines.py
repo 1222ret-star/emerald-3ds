@@ -44,6 +44,7 @@ PORT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 
 import voxel_building as vb  # noqa: E402
+import voxel_relief_fixes as vrf  # noqa: E402
 from PIL import Image, ImageDraw  # noqa: E402
 
 GRID = 64                      # tests/voxel_mesh_dump.c: the virtual atlas
@@ -106,7 +107,7 @@ def relief_cuts():
 def building_variants():
     """[(layout, metatile, quarters)] of buildings.bin's ground variants."""
     b = open(os.path.join(PORT, "romfs", "voxel", "buildings.bin"), "rb").read()
-    assert b[:4] == b"VXB7"
+    assert b[:4] == b"VXB8"
     pages, models, pmodels, places, hbytes, masks = struct.unpack_from("<6H", b, 4)
     nverts, nvar = struct.unpack_from("<IH", b, 16)
     o = 24 + pages * 8 + models * 16 + pmodels * 8 + places * 16
@@ -151,9 +152,12 @@ class Atlas:
             lay, mt, rows = self.cuts[k]
             im = self._art(lay).cell_image(mt).copy()
             px = im.load()
+            clear = vrf.cut_clear(rows)     # as voxel_atlas.c composes it
+            for (i, j), (si, sj) in vrf.cut_fringe(rows, clear).items():
+                px[i, j] = px[si, sj]
             for j in range(16):
                 for i in range(16):
-                    if (rows[j] >> i) & 1:
+                    if (clear[j] >> i) & 1:
                         px[i, j] = (0, 0, 0, 0)
             return im
         k = aid - METATILE_REAL

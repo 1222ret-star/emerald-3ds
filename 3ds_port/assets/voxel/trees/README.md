@@ -46,6 +46,12 @@ ledge edge, `025` tall grass, `02D` reflective water, `035`/`193` water, `0CE`
 rock. `1EC–1ED` are the bottom row of a large tree. The secondary tilesets'
 variants keep their art.
 
+A small tree at the foot of a mountain (its crown's cell backed by a cliff or
+shelf, two cells north of the trunk) stands up steeper, the plane's top at the
+trunk cell's north edge: leant back at 50° it ran into the rock and came out of
+it where the rock falls away, a corner's slope (Route 110, by New Mauville's
+entrance).
+
 Dewford Town's small tree (its secondary tileset, so the ids only mean a tree
 there) is replaced the same way with its own art: the trunk cells `23A` (on
 the sand) and `243` (inside the wood, where the next crown overlaps it, also
