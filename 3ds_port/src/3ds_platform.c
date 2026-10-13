@@ -8,6 +8,7 @@
 #include "3ds_audio.h"
 #include "3ds_video.h"
 #include "3ds_assets.h"
+#include "3ds_local.h"
 #include "voxel/ctr_voxel.h"
 /* The bottom-screen diagnostic overlay: off, and no longer toggled by SELECT.
  * The figures it showed are still logged periodically to the SD card. */
@@ -23,10 +24,19 @@ static CtrTiming sTiming;
 static void Lifecycle(APT_HookType type, void *parameter)
 {
     (void)parameter;
-    if (type == APTHOOK_ONSUSPEND || type == APTHOOK_ONSLEEP)
+    if (type == APTHOOK_ONSLEEP)
+    {
+        CtrLog_Write(CTR_LOG_BOOT, "suspend/sleep");
+        /* The lid closed in a link: it ends for everyone. The game finds the
+         * link lost when it wakes, as the others already have. */
+        LocalLink_LeaveBeforeSleep();
+    }
+    else if (type == APTHOOK_ONSUSPEND)
         CtrLog_Write(CTR_LOG_BOOT, "suspend/sleep");
     else if (type == APTHOOK_ONRESTORE || type == APTHOOK_ONWAKEUP)
     {
+        if (type == APTHOOK_ONWAKEUP)
+            LocalLink_AfterWake();
         CtrDayNight_Resume();
         CtrInput_Clear();
         sLastFrame = CtrPlatform_Milliseconds();
@@ -101,6 +111,9 @@ bool CtrPlatform_Init(void)
     /* A console without dumped DSP firmware still plays; it just plays silent.
      * CtrAudio_Init says so in the log and the game is left running. */
     CtrAudio_Init();
+    /* The radio of the emulated Wireless Adapter; idle until a link counter
+     * starts a session. */
+    LocalLink_Init();
     return true;
 }
 
@@ -267,7 +280,9 @@ static void PaceUpdate(void)
 
 static bool FrameShown(uint64_t now)
 {
-    int speed = CtrSettings_Speed();
+    /* In a local wireless session everyone plays at the same speed: the link
+     * code times out on a partner that runs slower. */
+    int speed = LocalLink_InSession() ? 1 : CtrSettings_Speed();
     float since = sShownTick ? (now - sShownTick) * 1000.0f / SYSCLOCK_ARM11 : FRAME_MS;
 
     if (sPace && speed <= 1)
@@ -295,11 +310,30 @@ bool CtrPlatform_SoundTick(void)
     return sSoundTick;
 }
 
+/*
+ * No HOME Menu in a local wireless session, as the GBA link games' own 3DS
+ * releases have it: the link would go on without this system. A press is
+ * refused, and a sign shows that it was (CtrVideo_ShowNoHome).
+ */
+static void UpdateHomeAllowed(void)
+{
+    bool allowed = !LocalLink_InSession();
+
+    if (allowed != aptIsHomeAllowed())
+    {
+        aptSetHomeAllowed(allowed);
+        CtrLog_Write(CTR_LOG_BOOT, "HOME button %s", allowed ? "allowed" : "blocked (local wireless)");
+    }
+    if (!allowed && aptCheckHomePressRejected())
+        CtrVideo_ShowNoHome();
+}
+
 void CtrPlatform_EndFrame(void)
 {
     if (sWaiting)
         return;
     sWaiting = true;
+    UpdateHomeAllowed();
     uint64_t endStart = svcGetSystemTick();
     /* This frame's game work, for FrameShown (set again below). */
     sTiming.gameMs = (endStart - sWorkStart) * 1000.0f / SYSCLOCK_ARM11;
@@ -415,6 +449,7 @@ void CtrPlatform_Shutdown(void)
     CtrSettings_Shutdown();
     if (sHooks.shutdown)
         sHooks.shutdown();
+    LocalLink_Shutdown();
     CtrVideo_Shutdown();
     CtrAudio_Shutdown();
     CtrLog_Write(CTR_LOG_BOOT, "clean shutdown, platform frames=%llu", (unsigned long long)sFrames);

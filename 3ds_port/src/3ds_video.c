@@ -14,6 +14,7 @@
 #include "3ds_bottom.h"
 #include "ctr_battle_layout.h"
 #include "3ds_battle_hud.h"
+#include "3ds_local.h"
 #include "../compat/port_prof.h"
 
 /* A battle is on, transition and all (CtrVideo_InBattle, at the end). */
@@ -290,7 +291,10 @@ static int sSurfaceH = 256;
  * picture ends; below that, behind the box's margins, the scene's last line
  * is carried down (ScenePlaceFrom).
  */
-#define BATTLE_SCENE_BOTTOM (112 + (int)ceilf((CTR_BATTLE_BOX_TOP - (CTR_GAME_HEIGHT - 48)) / CTR_BATTLE_ZOOM))
+#define BATTLE_SCENE_BOX_BOTTOM (112 + (int)ceilf((CTR_BATTLE_BOX_TOP - (CTR_GAME_HEIGHT - 48)) / CTR_BATTLE_ZOOM))
+/* Or the whole picture, with no text box to go behind (BattleSceneBottom). */
+static int BattleSceneBottom(void);
+#define BATTLE_SCENE_BOTTOM BattleSceneBottom()
 static C3D_Tex sSceneTex;
 static C3D_RenderTarget *sScene;
 static bool sSceneFailed;
@@ -795,6 +799,17 @@ static unsigned sObjWinPass;
 /* The battle's BG0 drew something above its text box (DrawBattleText). */
 static bool sTextAbove;
 static uint32_t sObjMask[4];
+/*
+ * The Wireless Adapter's status indicator: link_rfu puts it in OAM entry 125
+ * itself, at the GBA screen's top right. In the 2D battle (RenderEye) it is
+ * left out of the scene and drawn over the finished picture
+ * (BattleIndicatorCompose): the lines above the scene's surface are filled
+ * from its top rows, repeated, and its top rows came out again there as a
+ * stray line. The 3D battle's surface has no sprites in it.
+ */
+#define WIRELESS_INDICATOR_OAM 125
+static bool sObjIndicatorPass, sIndicatorApartHere;
+static bool WirelessIndicatorApart(void);
 /* Fixed horizontal placement of every layer, on top of the depth parallax.
  * Zero for the 2D compositor, which reproduces the GBA frame as it is. */
 static float sLayerOrigin;
@@ -3275,6 +3290,10 @@ static const CentredFill sCentredFills[CTR_CENTRED_SCREENS] =
     [CTR_CENTRED_POKEDEX_CAUGHT] = {.layers = 1u << 3, .tile = true, .tileColumn = 0, .tileRow = 2},
     [CTR_CENTRED_PARTY] = {.section = true},
     [CTR_CENTRED_PARTY_WHOLE] = {.section = true},
+    /* The trade menu's two layers of stripes, which repeat across. */
+    [CTR_CENTRED_TRADE_MENU] = {.layers = (1u << 2) | (1u << 3), .wrap = true},
+    /* The trade itself on its black. */
+    [CTR_CENTRED_TRADE] = {0},
 };
 
 int CtrPokenavList_Bg(void);
@@ -4722,6 +4741,37 @@ static bool DrawLineBg(unsigned bg)
 
 static void DrawAffineBg(unsigned bg)
 {
+    /*
+     * The Berry Blender's bowl turns on an affine layer that wraps round: in
+     * the margins, where centred screens carry their affine maps on (below),
+     * copies of the bowl went round the screen's edges. Kept to the picture.
+     */
+    if (sCentred && sCentredScreen == CTR_CENTRED_BLENDER
+     && (sClipX0 < 0 || sClipY0 < 0 || sClipX1 > 240 || sClipY1 > 160))
+    {
+        int clipX0 = sClipX0, clipY0 = sClipY0, clipX1 = sClipX1, clipY1 = sClipY1;
+        bool scissored = sScissored;
+
+        if (sClipX0 < 0) sClipX0 = 0;
+        if (sClipY0 < 0) sClipY0 = 0;
+        if (sClipX1 > 240) sClipX1 = 240;
+        if (sClipY1 > 160) sClipY1 = 160;
+        if (sClipX0 < sClipX1 && sClipY0 < sClipY1)
+        {
+            C2D_Flush();
+            sScissored = true;
+            Scissor(sClipX0, sClipY0, sClipX1, sClipY1);
+            DrawAffineBg(bg);
+            C2D_Flush();
+        }
+        sClipX0 = clipX0;
+        sClipY0 = clipY0;
+        sClipX1 = clipX1;
+        sClipY1 = clipY1;
+        sScissored = scissored;
+        RestoreScissor();
+        return;
+    }
     unsigned control = Reg(8 + bg * 2), base = bg == 2 ? 0x20 : 0x30;
     float a = (int16_t)Reg(base) / 256.0f, b = (int16_t)Reg(base + 2) / 256.0f;
     float c = (int16_t)Reg(base + 4) / 256.0f, d = (int16_t)Reg(base + 6) / 256.0f;
@@ -5062,6 +5112,7 @@ static void DrawObjects(unsigned priority, bool effects)
         if (sObjFilter != OBJ_ALL && TransitionOam((unsigned)i) != (sObjFilter == OBJ_TRANSITION))
             continue;
         if (sObjMaskOn && !(sObjMask[i >> 5] & (1u << (i & 31)))) continue;
+        if (i == WIRELESS_INDICATOR_OAM && !sObjIndicatorPass && WirelessIndicatorApart()) continue;
         const uint16_t *obj = sMemory.oam + i * 4;
         unsigned attr0 = obj[0], attr1 = obj[1], attr2 = obj[2];
         bool affine = (attr0 & 0x100) != 0, color256 = (attr0 & 0x2000) != 0;
@@ -5656,10 +5707,19 @@ static unsigned sTransitionLayers;
  * pattern at priority 0 is; a window taking layers away is not reproduced.
  */
 #define OBJWIN_SIZE 128
+/* The link battle's VS letters, two 64x64 sprites at double size moving
+ * apart, are a window wider than that (they were cut off): 256 KB of VRAM
+ * then, for the second they last. */
+#define OBJWIN_SIZE_LARGE 256
 static C3D_Tex sObjWinTex;
 static C3D_RenderTarget *sObjWinTarget;
 static bool sObjWinWanted, sObjWinFailed;
 static uint32_t sObjWinUsedFrame, sObjWinFailFrame;
+/* The side the window's box needed last frame, and when a surface that
+ * large could not be made. */
+static int sObjWinNeed;
+static uint32_t sObjWinLargeFailFrame;
+static bool sObjWinLargeFailed;
 /* This frame's: its box in GBA pixels and the layers it adds. */
 static struct { bool ready; int x0, y0, x1, y1; unsigned layers; } sObjWin;
 /*
@@ -5687,16 +5747,23 @@ static void ObjWindowRelease(void)
 static void ObjWindowPrepare(void)
 {
     bool wanted = sObjWinWanted;
+    bool large = sObjWinNeed > OBJWIN_SIZE
+              && !(sObjWinLargeFailed && sStats.frames - sObjWinLargeFailFrame < LAYER_RETRY_FRAMES);
 
     sObjWinWanted = false;
+    if (!wanted) sObjWinNeed = 0;
     if (wanted) sObjWinUsedFrame = sStats.frames;
     else if (sObjWinTarget && (sTransitionRequested || sStats.frames - sObjWinUsedFrame > LAYER_IDLE_FRAMES))
+        ObjWindowRelease();
+    /* Too small for the window now on screen: made again, larger. */
+    if (wanted && sObjWinTarget && large && sObjWinTex.width < OBJWIN_SIZE_LARGE)
         ObjWindowRelease();
     if (!wanted || sObjWinTarget || (sObjWinFailed && sStats.frames - sObjWinFailFrame < LAYER_RETRY_FRAMES))
         return;
     /* RGBA8: the mask's count needs more than one bit of alpha. 64 KB of
      * VRAM; a Pokemon's 64x64 fits the half size too. */
-    for (unsigned size = OBJWIN_SIZE; size >= OBJWIN_SIZE / 2 && !sObjWinTarget; size /= 2)
+    for (unsigned size = large ? OBJWIN_SIZE_LARGE : OBJWIN_SIZE; size >= OBJWIN_SIZE / 2 && !sObjWinTarget;
+         size /= 2)
     {
         if (C3D_TexInitVRAM(&sObjWinTex, size, size, GPU_RGBA8)
             && (sObjWinTarget = C3D_RenderTargetCreateFromTex(&sObjWinTex, GPU_TEXFACE_2D, 0, -1)))
@@ -5704,6 +5771,13 @@ static void ObjWindowPrepare(void)
         ObjWindowRelease();
     }
     sObjWinFailed = sObjWinTarget == NULL;
+    if (large && (!sObjWinTarget || sObjWinTex.width < OBJWIN_SIZE_LARGE))
+    {
+        sObjWinLargeFailed = true;
+        sObjWinLargeFailFrame = sStats.frames;
+    }
+    else if (large)
+        sObjWinLargeFailed = false;
     if (sObjWinTarget)
     {
         /* Drawn at the scene's whole-number zoom: every texel a block. */
@@ -5767,8 +5841,16 @@ static void ObjWindowCompose(void)
     if (!sBattle && !sStage) return;
     if ((display & 0x9000) != 0x9000 || (display & 7) > 2 || !layers) return;
     if (!ObjWindowBounds(&x0, &y0, &x1, &y1)) return;
+    /* Only what can be on screen: the VS letters end sliding off it as they
+     * grow, a box far wider than any surface. */
+    if (x0 < VIEW_LEFT) x0 = VIEW_LEFT;
+    if (y0 < VIEW_TOP) y0 = VIEW_TOP;
+    if (x1 > VIEW_RIGHT) x1 = VIEW_RIGHT;
+    if (y1 > VIEW_BOTTOM) y1 = VIEW_BOTTOM;
+    if (x0 >= x1 || y0 >= y1) return;
     if (out & 31 & ~in) Error(12, "OBJ window hiding layers not supported");
     sObjWinWanted = true;
+    sObjWinNeed = x1 - x0 > y1 - y0 ? x1 - x0 : y1 - y0;
     if (!sObjWinTarget) return;
     size = (int)sObjWinTex.width;
     if (x1 - x0 > size || y1 - y0 > size)
@@ -6607,6 +6689,12 @@ static void SceneRows(C3D_Tex *tex, float u0, float u1, float row, float rows, f
 
 static void ScenePlaceFrom(C3D_RenderTarget *target, float shift, C3D_Tex *tex, int column, bool sky)
 {
+    /* No scenery to carry on above or below: the VS screen's boxes, composed
+     * down to the picture's end (BattleSceneBottom); the lines above them are
+     * composed apart (BattleSkyCompose). Repeated, their top edges came out
+     * again as stripes. */
+    if (BattleSceneBottom() != BATTLE_SCENE_BOX_BOTTOM)
+        sky = false;
     float ox = sScenePut.ox + shift, oy = sScenePut.oy, scale = sScenePut.scale;
     int width = sScenePut.width, height = sScenePut.height;
     float u0 = column / (float)tex->width, u1 = (column + width) / (float)tex->width;
@@ -6677,6 +6765,52 @@ static void BattleScenePlace(C3D_RenderTarget *target, float shift)
  */
 static void Compose(void);
 
+/* Whether this frame's battle draws the wireless indicator apart: in a
+ * session, while the adapter's sprite is on screen. */
+static bool WirelessIndicatorApart(void)
+{
+    static uint32_t frame = ~0u;
+    static bool apart;
+
+    if (frame != sStats.frames)
+    {
+        unsigned attr0 = sMemory.oam[WIRELESS_INDICATOR_OAM * 4];
+
+        frame = sStats.frames;
+        apart = sBattle && (attr0 & 0x300) != 0x200 && LocalLink_InSession();
+    }
+    return apart && sIndicatorApartHere;
+}
+
+/* The wireless indicator over the battle, at the frame's own view. */
+static void BattleIndicatorCompose(void)
+{
+    int clipX0 = sClipX0, clipY0 = sClipY0, clipX1 = sClipX1, clipY1 = sClipY1;
+    uint32_t mask[4];
+    bool maskOn = sObjMaskOn;
+
+    if (!WirelessIndicatorApart() || (Reg(0) & 128) || !(Reg(0) & 0x1000)) return;
+    memcpy(mask, sObjMask, sizeof(mask));
+    memset(sObjMask, 0, sizeof(sObjMask));
+    sObjMask[WIRELESS_INDICATOR_OAM >> 5] = 1u << (WIRELESS_INDICATOR_OAM & 31);
+    sObjMaskOn = true;
+    sObjIndicatorPass = true;
+    ClipToView();
+    C2D_Flush();
+    BlendForget();
+    for (int priority = 3; priority >= 0; --priority)
+        DrawObjects((unsigned)priority, false);
+    C2D_Flush();
+    BlendForget();
+    sObjIndicatorPass = false;
+    sObjMaskOn = maskOn;
+    memcpy(sObjMask, mask, sizeof(mask));
+    sClipX0 = clipX0;
+    sClipY0 = clipY0;
+    sClipX1 = clipX1;
+    sClipY1 = clipY1;
+}
+
 static void BattleSkyCompose(bool sprites)
 {
     int clipX0 = sClipX0, clipY0 = sClipY0, clipX1 = sClipX1, clipY1 = sClipY1;
@@ -6701,6 +6835,27 @@ static void BattleSkyCompose(bool sprites)
     sScissored = scissored;
     RestoreScissor();
     BlendForget();
+}
+
+/*
+ * Where the battle scene is composed down to. With the text box hidden - a
+ * link battle's VS screen, its windows showing only the players' boxes - the
+ * whole picture: carried down from the box's top, the boxes' sides ran on to
+ * the screen's bottom edge and their own bottom edge was never drawn.
+ */
+static int BattleSceneBottom(void)
+{
+    unsigned display = Reg(0), in = Reg(0x48), out = Reg(0x4a);
+    bool shown;
+
+    if (!(display & 0x100))
+        shown = false;
+    else if (!(display & 0xE000))
+        shown = true;
+    else
+        shown = ((display & 0x2000) && (in & 1)) || ((display & 0x4000) && (in & 0x100)) || (out & 1)
+             || ((display & 0x8000) && (out & 0x100));
+    return shown ? BATTLE_SCENE_BOX_BOTTOM : 160;
 }
 
 /*
@@ -6794,8 +6949,8 @@ bool CtrVideo_BottomInUse(void) { return sBottomInUse; }
 static bool BottomWhole(unsigned screen)
 {
     return screen == CTR_CENTRED_STORAGE || screen == CTR_CENTRED_SUMMARY || screen == CTR_CENTRED_BAG_WHOLE
-        || screen == CTR_CENTRED_PARTY_WHOLE || screen == CTR_CENTRED_SHOP
-        || screen == CTR_CENTRED_POKEDEX_CAUGHT;
+        || screen == CTR_CENTRED_PARTY_WHOLE || screen == CTR_CENTRED_SHOP || screen == CTR_CENTRED_TRADE_MENU
+        || screen == CTR_CENTRED_TRADE || screen == CTR_CENTRED_POKEDEX_CAUGHT;
 }
 
 /* The screens drawn on the bottom screen at all. */
@@ -7039,11 +7194,14 @@ static void RenderEye(C3D_RenderTarget *target, uint32_t clear, float parallax)
     sLayerShift = 0;
     BlendForget();
     ColourClear(sLogical, clear);
+    sIndicatorApartHere = scene;
     if (scene) RenderBattleScene(clear);
     C2D_SceneBegin(sLogical);
     Blend(5, false, false);
     StageUnderlay();
     if (scene) BattleSkyCompose(true);
+    if (scene) BattleIndicatorCompose();
+    sIndicatorApartHere = false;
     if (scene) HudDrawCrisp(HUD_SPRITE_DEPTH);
     /* After a scene composed on its own, only the text box is left. */
     if (scene) sLayerExclude = 63 & ~(1u | 32u | BattleBoxLayers());
@@ -9636,6 +9794,39 @@ static unsigned PoisonVeil(void)
     return size > 10 ? 150 : size * 15;
 }
 
+/*
+ * The HOME button refused in a local wireless session (3ds_platform.c): the
+ * system draws nothing, so the game shows it was pressed - a house crossed
+ * out, in the top screen's top right corner, for a second and a half.
+ */
+static uint32_t sNoHomeUntil;
+
+void CtrVideo_ShowNoHome(void)
+{
+    sNoHomeUntil = sStats.frames + 90;
+}
+
+static void DrawNoHome(C3D_RenderTarget *target)
+{
+    const float x = CTR_GAME_WIDTH - 34, y = 6, w = 28;
+    const u32 white = C2D_Color32(255, 255, 255, 255), red = C2D_Color32(230, 40, 40, 255);
+
+    C2D_Prepare();
+    C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
+    BlendForget();
+    C2D_SceneBegin(target);
+    C2D_ViewReset();
+    Blend(5, false, false);
+    C2D_DrawCircleSolid(x + w / 2, y + w / 2, 0, w / 2, C2D_Color32(0, 0, 0, 170));
+    /* The house: its roof and its walls, a door cut out of them. */
+    C2D_DrawTriangle(x + 6, y + 14, white, x + 14, y + 6, white, x + 22, y + 14, white, 0);
+    C2D_DrawRectSolid(x + 8, y + 14, 0, 12, 8, white);
+    C2D_DrawRectSolid(x + 12, y + 17, 0, 4, 5, C2D_Color32(0, 0, 0, 255));
+    /* Crossed out. */
+    C2D_DrawLine(x + 6, y + 6, red, x + 22, y + 22, red, 3, 0);
+    C2D_Flush();
+}
+
 static void DrawPoisonVeil(C3D_RenderTarget *target, unsigned alpha)
 {
     C2D_Prepare();
@@ -10238,6 +10429,11 @@ void CtrVideo_Present(void)
         sPlanes = 0;
         RenderEye(sTop, clear, sStats.stereo);
         RenderEye(sTopRight, clear, -(float)sStats.stereo);
+    }
+    if (sStats.frames < sNoHomeUntil && !bottom)
+    {
+        DrawNoHome(sTop);
+        if (stereo) DrawNoHome(sTopRight);
     }
     if (field && !bottom && !blank && CtrGame_FieldPoison() && PoisonVeil() != 0)
     {

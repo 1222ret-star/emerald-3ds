@@ -73,6 +73,9 @@ BACKEND_SRCS += src/3ds_battle_hud.c
 build/bridge/3ds_bottom_ui.o: FULLCFLAGS += -DCTR_APP_VERSION='"$(APP_VERSION)"'
 # The ENHANCEMENTS and CHEATS pages of OPTIONS (include/3ds_extras.h).
 BACKEND_SRCS += src/3ds_extras.c
+# Local wireless play: the emulated Wireless Adapter the game's link code
+# talks to (its radio is src/3ds_local.c).
+BACKEND_SRCS += src/3ds_rfu_adapter.c
 BACKEND_SRCS += src/3ds_encounter_tables.c
 # The frame profiler times the engine's own routines through linker wrappers.
 BACKEND_SRCS += src/3ds_prof_wrap.c
@@ -164,16 +167,26 @@ $(CTR_GBA_STAGE_OBJS): compat/ctr_gba_stage.h $(ROOT)/include/gba/defines.h
 # GBA screens shown centred, margins only from layers that wrap on the GBA
 # (compat/ctr_gba_centred.h).
 CTR_GBA_CENTRED_SRCS := region_map field_region_map main_menu naming_screen wallclock \
-	pokemon_summary_screen starter_choose shop
+	pokemon_summary_screen starter_choose shop link berry_blender pokemon_jump dodrio_berry_picking \
+	contest contest_util
 CTR_GBA_CENTRED_OBJS := $(patsubst %,build/root/src/%.o,$(CTR_GBA_CENTRED_SRCS))
 $(CTR_GBA_CENTRED_OBJS): FULLCFLAGS += -DCTR_GBA_STAGE -include $(abspath compat/ctr_gba_centred.h)
 $(CTR_GBA_CENTRED_OBJS): compat/ctr_gba_centred.h $(ROOT)/include/gba/defines.h
+# link.c: the communication error screen, whose text windows are as wide as
+# the screen (wider than its layer at 400 pixels: they wrapped and overlapped).
+# berry_blender.c: the Berry Blender, its bowl turned about the middle of the
+# screen (DISPLAY_WIDTH / 2), which at 400 pixels sent it round in circles.
+# pokemon_jump.c, dodrio_berry_picking.c: the wireless minigames, GBA screens
+# drawn in the top left corner of the wide one.
+# contest.c, contest_util.c: a contest and its results, the same; the
+# contest also slid its panels off by DISPLAY_WIDTH and DISPLAY_HEIGHT.
 # Which centred screen each of those is, for how its margins are filled.
 build/root/src/main_menu.o: FULLCFLAGS += -DCTR_CENTRED_MAIN_MENU
 build/root/src/naming_screen.o: FULLCFLAGS += -DCTR_CENTRED_NAMING
 build/root/src/wallclock.o: FULLCFLAGS += -DCTR_CENTRED_CLOCK
 build/root/src/starter_choose.o: FULLCFLAGS += -DCTR_CENTRED_STARTER
 build/root/src/shop.o: FULLCFLAGS += -DCTR_CENTRED_SHOP
+build/root/src/berry_blender.o: FULLCFLAGS += -DCTR_CENTRED_BLENDER
 # On the bottom screen, as the PC's boxes it is mostly opened from.
 build/root/src/pokemon_summary_screen.o: FULLCFLAGS += -DCTR_CENTRED_SUMMARY
 # The PokéNav: every screen of it laid out for the GBA screen, shown whole on
@@ -193,6 +206,11 @@ build/root/src/pokemon_storage_system.o: compat/ctr_gba_centred.h $(ROOT)/includ
 build/root/src/item_menu.o: FULLCFLAGS += -DCTR_GBA_STAGE -DCTR_CENTRED_BAG \
 	-include $(abspath compat/ctr_gba_centred.h)
 build/root/src/item_menu.o: compat/ctr_gba_centred.h $(ROOT)/include/gba/defines.h
+# A trade, its menu and the trade itself, laid out for the GBA screen and
+# shown over the whole bottom screen.
+build/root/src/trade.o: FULLCFLAGS += -DCTR_GBA_STAGE -DCTR_CENTRED_TRADE \
+	-include $(abspath compat/ctr_gba_centred.h)
+build/root/src/trade.o: compat/ctr_gba_centred.h $(ROOT)/include/gba/defines.h
 # The party menu as the game draws it, on the bottom screen: left of the
 # column from the field, over the whole screen from a battle, a contest or a
 # facility.

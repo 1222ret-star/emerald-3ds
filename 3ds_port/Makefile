@@ -47,6 +47,8 @@ EXESUFFIX := $(if $(filter Windows_NT,$(OS)),.exe,)
 SOURCES := src/main_3ds.c src/3ds_log.c src/3ds_platform.c src/3ds_input.c src/3ds_input_decode.c src/3ds_fs.c src/3ds_audio.c
 SOURCES += src/3ds_data.c src/3ds_pak.c src/3ds_settings.c src/3ds_prof.c src/3ds_gpumem.c src/3ds_scenario.c
 SOURCES += src/3ds_video.c src/3ds_video_decode.c src/3ds_bottom_screen.c
+# Local wireless play (include/3ds_local.h).
+SOURCES += src/3ds_local.c
 SOURCES += src/3ds_daynight.c
 SOURCES += src/3ds_clock_store.c
 SOURCES += src/3ds_encounters.c
@@ -192,6 +194,12 @@ ROMFS_DATA_OUTS := $(ROMFS_ASSET_OUTS) $(ROMFS_MAP_OUT) $(ROMFS_SCRIPT_OUTS) $(R
 romfs/engine/abi.bin: $(ROMFS_DATA_OUTS) $(SCRIPTS)/staging.py
 	"$(PYTHON)" $(SCRIPTS)/staging.py abi --romfs romfs
 
+# Local wireless play links only identical builds (src/3ds_local.c): a SHA-256
+# of the executable without its debug information and of the data's ABI.
+romfs/engine/build_id.bin: build/$(TARGET)_3dsx.elf romfs/engine/abi.bin scripts/gen_build_id.py
+	$(DEVKITARM)/bin/arm-none-eabi-objcopy --strip-debug $< build/$(TARGET)_id.elf
+	"$(PYTHON)" scripts/gen_build_id.py build/$(TARGET)_id.elf romfs/engine/abi.bin $@
+
 ifeq ($(EMBED_DATA),1)
 EMBED_MARKER := romfs/data.embedded
 romfs/data.embedded:
@@ -201,12 +209,12 @@ EMBED_MARKER :=
 $(shell rm -f romfs/data.embedded)
 endif
 
-$(TARGET).3dsx: build/$(TARGET)_3dsx.elf $(TARGET).smdh romfs/boot.txt $(ROMFS_DATA_OUTS) romfs/engine/abi.bin $(EMBED_MARKER)
+$(TARGET).3dsx: build/$(TARGET)_3dsx.elf $(TARGET).smdh romfs/boot.txt $(ROMFS_DATA_OUTS) romfs/engine/abi.bin romfs/engine/build_id.bin $(EMBED_MARKER)
 	$(DEVKITPRO)/tools/bin/3dsxtool $< $@ --smdh=$(TARGET).smdh --romfs=romfs
 
 # Release: the executable with engine files only. Its game data is the data
 # pack the player's builder generates.
-release: build/$(TARGET)_3dsx.elf $(TARGET).smdh romfs/boot.txt $(ROMFS_DATA_OUTS) romfs/engine/abi.bin
+release: build/$(TARGET)_3dsx.elf $(TARGET).smdh romfs/boot.txt $(ROMFS_DATA_OUTS) romfs/engine/abi.bin romfs/engine/build_id.bin
 	"$(PYTHON)" $(SCRIPTS)/staging.py engine --romfs romfs --out build/romfs_release
 	@mkdir -p dist
 	$(DEVKITPRO)/tools/bin/3dsxtool build/$(TARGET)_3dsx.elf dist/$(APP_FILE).3dsx \

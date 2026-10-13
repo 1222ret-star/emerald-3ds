@@ -201,10 +201,21 @@ enum
      * and of the people in it (shop.c): the top screen keeps the world.
      */
     CTR_CENTRED_SHOP,
+    /*
+     * A trade, over the whole bottom screen while the top keeps the room it
+     * started from (the Trade Center, the Union Room, the person met):
+     * the menu of both parties on its blue stripes, then the trade itself.
+     */
+    CTR_CENTRED_TRADE_MENU,
+    CTR_CENTRED_TRADE,
+    /* The Berry Blender: its bowl, an affine layer, kept to the picture. */
+    CTR_CENTRED_BLENDER,
     CTR_CENTRED_POKEDEX_CAUGHT,
     CTR_CENTRED_SCREENS
 };
 void CtrVideo_SetCentred(unsigned screen);
+/* The HOME button was pressed while it is not allowed: a sign for a moment. */
+void CtrVideo_ShowNoHome(void);
 /*
  * The window edges an HBlank DMA writes line by line (the PokéNav's glow
  * behind its chosen option, its condition graph): values holds WIN0H for each

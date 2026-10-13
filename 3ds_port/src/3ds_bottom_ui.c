@@ -141,6 +141,9 @@ bool8 CtrStorage_IsOpen(void);
 int CtrTitleScreen_RayquazaBg(void);
 void CtrStorage_Tap(s16 x, s16 y);
 void CtrSummary_Tap(s16 x, s16 y);
+/* trade.c: the trade menu is up (on the whole screen); it takes taps as the
+ * party menu does (CtrMenu_PostTap). */
+bool8 CtrTrade_IsOpen(void);
 /* item_menu.c: the bag's touches, in pixels of its picture. */
 enum { BAG_TOUCH_DOWN, BAG_TOUCH_MOVE, BAG_TOUCH_UP, BAG_TOUCH_CANCEL };
 void CtrBag_Touch(u8 phase, s16 x, s16 y);
@@ -1855,6 +1858,12 @@ static bool8 RunSmoothJob(void)
 static float sRedrawLabelMs;
 static uint64_t sRedrawStart;
 static bool8 sRefineLabels;
+/* This redraw has built some of a label. Each redraw builds at least one
+ * slice, however long its plates took: on an Old 3DS the move menu's took
+ * the whole 2 ms before its first label, every label stayed flat, and the
+ * menu was drawn again every frame for as long as it was open (12 ms a
+ * frame, 30 fps). */
+static bool8 sRedrawLabelWorked;
 /* Labels found built, and built or left flat, since the last report. */
 static u32 sLabelHits, sLabelMisses;
 #define REDRAW_LABEL_MS 2.0f
@@ -1924,8 +1933,10 @@ static void DrawSmoothStr(const Font *font, const u8 *str, int x, int y, int k, 
          * into a cache kept beyond the frame, which would keep it flat. */
         bool8 timed = sRedrawLabelMs > 0.0f && sBuildBudget == 0xFF && sDst == sCanvas;
 
+        bool8 late = timed && CtrPlatform_TickMs(CtrPlatform_Ticks() - sRedrawStart) >= sRedrawLabelMs;
+
         ++sLabelMisses;
-        if (timed && CtrPlatform_TickMs(CtrPlatform_Ticks() - sRedrawStart) >= sRedrawLabelMs)
+        if (late && sRedrawLabelWorked)
         {
             DrawFlatStr(font, str, x, y, k, fg, outline);
             sRefineLabels = TRUE;
@@ -1959,8 +1970,10 @@ static void DrawSmoothStr(const Font *font, const u8 *str, int x, int y, int k, 
             uint64_t sliceStart = sSliceStart;
             bool8 done;
 
+            /* Past the redraw's time, still this one slice of its own. */
             sSliceMs = sRedrawLabelMs;
-            sSliceStart = sRedrawStart;
+            sSliceStart = late ? CtrPlatform_Ticks() : sRedrawStart;
+            sRedrawLabelWorked = TRUE;
             done = RunSmoothJob();
             sSliceMs = slice;
             sSliceStart = sliceStart;
@@ -2930,7 +2943,10 @@ static void FastForward(void)
  */
 bool8 CtrBattleMenu_Active(void)
 {
-    return sRes.ready && !(gBattleTypeFlags & (BATTLE_TYPE_LINK | BATTLE_TYPE_RECORDED));
+    /* Link battles too (local wireless): the player's choices go through the
+     * same controller. Drawn on the top screen, the menu ran into the wide
+     * text box. Not for a recorded battle played back: nobody chooses. */
+    return sRes.ready && !(gBattleTypeFlags & BATTLE_TYPE_RECORDED);
 }
 
 void CtrBattleMenu_Begin(void)
@@ -7511,9 +7527,12 @@ static u8 ProcessTouch(u8 mode)
         {
             int x = sTouch.lastX - (W - 240) / 2, y = sTouch.lastY - (H - 160) / 2;
 
-            /* Or a summary opened from them, the same way. */
+            /* Or a summary opened from them, the same way. So does the
+             * trade menu. */
             if (!sTouch.dragged && CtrStorage_IsOpen())
                 CtrStorage_Tap(x, y);
+            else if (!sTouch.dragged && CtrTrade_IsOpen())
+                CtrMenu_PostTap(x, y);
             else if (!sTouch.dragged)
                 CtrSummary_Tap(x, y);
             return HIT_NONE;
@@ -8146,6 +8165,7 @@ void CtrBottom_Frame(void)
         sRedrawStart = start;
         sRedrawLabelMs = REDRAW_LABEL_MS;
         sRefineLabels = FALSE;
+        sRedrawLabelWorked = FALSE;
         Render(&sShown);
         sRedrawLabelMs = 0.0f;
         /* A label left flat: drawn again next frame, built a bit further. */
