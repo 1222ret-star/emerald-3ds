@@ -1104,6 +1104,35 @@ index 8d6ae75..582777c 100644
              rfu_REQ_stopMode();
              rfu_waitREQComplete();
  #endif
+diff --git a/src/start_menu.c b/src/start_menu.c
+index 638656a..e173c6c 100644
+--- a/src/start_menu.c
++++ b/src/start_menu.c
+@@ -1219,6 +1219,12 @@ static void VBlankCB_LinkBattleSave(void)
+     TransferPlttBuffer();
+ }
+ 
++#ifdef PLATFORM_3DS
++// The 3DS port: a screen laid out for the GBA's, shown centred on the wide
++// top screen (3ds_game_full.c). Its box sat in the top left part of it.
++void CtrCentred_SetVBlankCallback(IntrCallback callback);
++#endif
++
+ static bool32 InitSaveWindowAfterLinkBattle(u8 *state)
+ {
+     switch (*state)
+@@ -1246,7 +1252,11 @@ static bool32 InitSaveWindowAfterLinkBattle(u8 *state)
+     case 3:
+         ShowBg(0);
+         BlendPalettes(PALETTES_ALL, 16, RGB_BLACK);
++#ifdef PLATFORM_3DS
++        CtrCentred_SetVBlankCallback(VBlankCB_LinkBattleSave);
++#else
+         SetVBlankCallback(VBlankCB_LinkBattleSave);
++#endif
+         EnableInterrupts(1);
+         break;
+     case 4:
 diff --git a/src/stub.c b/src/stub.c
 index f464d2f..d4d8321 100644
 --- a/src/stub.c
@@ -1127,10 +1156,10 @@ index f464d2f..d4d8321 100644
  STUB_FUNC(void rfu_REQ_PARENT_resumeRetransmitAndChange())
  STUB_FUNC(void rfu_UNI_PARENT_getDRAC_ACK())
 diff --git a/src/trade.c b/src/trade.c
-index 4e57397..c6a758a 100644
+index 57c1bd6..1768762 100644
 --- a/src/trade.c
 +++ b/src/trade.c
-@@ -1448,6 +1448,93 @@ static void SetReadyToTrade(void)
+@@ -1458,6 +1458,93 @@ static void SetReadyToTrade(void)
      }
  }
  
@@ -1224,7 +1253,7 @@ index 4e57397..c6a758a 100644
  static void CB_ProcessMenuInput(void)
  {
      if (JOY_REPEAT(DPAD_UP))
-@@ -1459,7 +1546,7 @@ static void CB_ProcessMenuInput(void)
+@@ -1469,7 +1556,7 @@ static void CB_ProcessMenuInput(void)
      else if (JOY_REPEAT(DPAD_RIGHT))
          TradeMenuMoveCursor(&sTradeMenu->cursorPosition, 3);
  
@@ -1233,7 +1262,7 @@ index 4e57397..c6a758a 100644
      {
          PlaySE(SE_SELECT);
  
-@@ -1500,7 +1587,7 @@ static void RedrawChooseAPokemonWindow(void)
+@@ -1510,7 +1597,7 @@ static void RedrawChooseAPokemonWindow(void)
  
  static void CB_ProcessSelectedMonInput(void)
  {
@@ -1242,7 +1271,7 @@ index 4e57397..c6a758a 100644
      {
      case MENU_B_PRESSED:
          PlaySE(SE_SELECT);
-@@ -1540,7 +1627,7 @@ static void CB_ProcessSelectedMonInput(void)
+@@ -1550,7 +1637,7 @@ static void CB_ProcessSelectedMonInput(void)
  
  static void CB_ChooseMonAfterButtonPress(void)
  {
@@ -1251,7 +1280,7 @@ index 4e57397..c6a758a 100644
      {
          PlaySE(SE_SELECT);
          RedrawChooseAPokemonWindow();
-@@ -1625,7 +1712,7 @@ static bool32 CheckMonsBeforeTrade(void)
+@@ -1635,7 +1722,7 @@ static bool32 CheckMonsBeforeTrade(void)
  
  static void CB_ProcessConfirmTradeInput(void)
  {
@@ -1260,7 +1289,7 @@ index 4e57397..c6a758a 100644
      {
      case 0: // YES, Confirm selection
          if (!CheckMonsBeforeTrade())
-@@ -1660,7 +1747,7 @@ static void RestoreNicknamesCoveredByYesNo(void)
+@@ -1670,7 +1757,7 @@ static void RestoreNicknamesCoveredByYesNo(void)
  
  static void CB_ProcessCancelTradeInput(void)
  {
@@ -1269,7 +1298,7 @@ index 4e57397..c6a758a 100644
      {
      case 0: // YES, Cancel
          PrintTradeMessage(MSG_WAITING_FOR_FRIEND);
-@@ -1713,7 +1800,7 @@ static void CB_HandleTradeCanceled(void)
+@@ -1723,7 +1810,7 @@ static void CB_HandleTradeCanceled(void)
  {
      int i;
  
@@ -1278,7 +1307,7 @@ index 4e57397..c6a758a 100644
      {
          PlaySE(SE_SELECT);
          rbox_fill_rectangle(0);
-@@ -1781,7 +1868,7 @@ static void CB_WaitToStartRfuTrade(void)
+@@ -1791,7 +1878,7 @@ static void CB_WaitToStartRfuTrade(void)
  
  static void CB_PartnersMonWasInvalid(void)
  {
@@ -1287,7 +1316,7 @@ index 4e57397..c6a758a 100644
      {
          SetLinkData(LINKCMD_READY_CANCEL_TRADE, 0);
          sTradeMenu->callbackId = CB_IDLE;
-@@ -4842,9 +4929,18 @@ static void CB2_FreeTradeAnim(void)
+@@ -4852,9 +4939,18 @@ static void CB2_FreeTradeAnim(void)
      UpdatePaletteFade();
  }
  
