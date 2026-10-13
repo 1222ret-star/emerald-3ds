@@ -109,16 +109,22 @@ def cmd_engine(args) -> None:
     print("staging: engine RomFS -> %s" % args.out)
 
 
+# The ROM each language's tree is built from (its localize_*.py), by the
+# GAME_LANGUAGE its include/constants/global.h compiles.
+GAME_LANGUAGE_ROMS = {"LANGUAGE_ENGLISH": "BPEE", "LANGUAGE_SPANISH": "BPES",
+                      "LANGUAGE_FRENCH": "BPEF", "LANGUAGE_ITALIAN": "BPEI"}
+
+
 def cmd_pak(args) -> None:
     abi, _ = compute_abi(args.romfs)
     profile = None
     if args.game_config is not None:
         configuration = args.game_config.read_text(encoding="utf-8")
-        language = re.search(r"^\s*#\s*define\s+GAME_LANGUAGE\s+\(?\s*(LANGUAGE_(?:ENGLISH|SPANISH))\s*\)?\s*$",
+        language = re.search(r"^\s*#\s*define\s+GAME_LANGUAGE\s+\(?\s*(LANGUAGE_[A-Z]+)\s*\)?\s*$",
                              configuration, re.MULTILINE)
-        if language is None:
+        code = GAME_LANGUAGE_ROMS.get(language.group(1)) if language else None
+        if code is None:
             raise ValueError("Cannot determine the compiled game's supported ROM from its configuration")
-        code = "BPES" if language.group(1) == "LANGUAGE_SPANISH" else "BPEE"
         profile = bytes.fromhex(ROM_PROFILES[code])
     sha1 = pak.sha1_of(args.rom) if args.rom else profile or SUPPORTED_ROM_SHA1
     if profile is not None and sha1 != profile:

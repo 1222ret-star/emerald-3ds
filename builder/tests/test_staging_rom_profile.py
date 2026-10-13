@@ -12,7 +12,8 @@ spec.loader.exec_module(staging)
 
 class StagingRomProfileTests(unittest.TestCase):
     def test_pack_fingerprint_matches_compiled_language(self):
-        for language, code in (("ENGLISH", "BPEE"), ("SPANISH", "BPES")):
+        for language, code in (("ENGLISH", "BPEE"), ("SPANISH", "BPES"),
+                               ("FRENCH", "BPEF"), ("ITALIAN", "BPEI")):
             with self.subTest(language=language), tempfile.TemporaryDirectory() as temporary:
                 folder = Path(temporary)
                 romfs = folder / "romfs"
@@ -41,7 +42,7 @@ class StagingRomProfileTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "does not match"):
                     staging.main(arguments + ["--rom", str(folder / "wrong.gba")])
             self.assertFalse(destination.exists())
-            configuration.write_text("#define GAME_LANGUAGE (LANGUAGE_FRENCH)\n")
+            configuration.write_text("#define GAME_LANGUAGE (LANGUAGE_GERMAN)\n")
             with self.assertRaisesRegex(ValueError, "Cannot determine"):
                 staging.main(arguments)
             self.assertFalse(destination.exists())
