@@ -1,5 +1,4 @@
 import importlib.util
-import re
 import shutil
 import subprocess
 import tempfile
@@ -12,42 +11,45 @@ localization = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(localization)
 
 
+SPANISH = r'static const u8 sText_PkmnTeamGainedEXP[] = _("¡El resto del equipo ganó\npuntos de experiencia!\p");'
+
+
 class SpanishBattleTextTests(unittest.TestCase):
     def setUp(self):
-        names = ["sText_PkmnTeamGainedEXP", "sText_WildPkmnPrefix"]
-        names += ["sText_FoePkmnPrefix" + suffix for suffix in ("", "2", "3", "4")]
-        self.source = "\n".join('static const u8 ' + name + '[] = _("original");' for name in names)
+        # the prefixes as the Spanish ROM writes them: a leading space, after
+        # the name (0051-native-name-prefix-order)
+        names = ["sText_WildPkmnPrefix"] + ["sText_FoePkmnPrefix" + s for s in ("", "2", "3", "4")]
+        self.prefixes = "\n".join('static const u8 ' + name + '[] = _(" salvaje");' for name in names)
+        self.source = 'static const u8 sText_PkmnTeamGainedEXP[] = _("original");\n' + self.prefixes
 
-    def test_translation_and_separator(self):
+    def test_translation_leaves_the_prefixes(self):
         result = localization.localize_port_battle_text(self.source)
-        self.assertIn(r'_("¡El resto del equipo ganó\npuntos de experiencia!\p")', result)
-        prefixes = re.findall(r'sText_(?:Wild|Foe)PkmnPrefix\d?\[\] = _\("([^"]+)"\)', result)
-        self.assertEqual(len(prefixes), 5)
-        for prefix in prefixes:
-            self.assertTrue(prefix.endswith(" "))
-            self.assertFalse(prefix.startswith(" "))
-            self.assertIn(" LOTAD", prefix + "LOTAD")
+        self.assertIn(SPANISH, result)
+        self.assertIn(self.prefixes, result)
         self.assertEqual(localization.localize_port_battle_text(result), result)
 
     def test_missing_definition_is_rejected(self):
         with self.assertRaises(ValueError):
             localization.localize_port_battle_text("")
 
-    def test_french_conditional_preserves_french_and_localizes_fallback(self):
+    def test_language_conditional_keeps_the_others_and_localizes_the_default(self):
+        """The shape of src/battle_message.c: French and Italian branches,
+        the Italian one under a comment, English as the default."""
         original = 'static const u8 sText_PkmnTeamGainedEXP[] = _("original");'
-        french = r'static const u8 sText_PkmnTeamGainedEXP[] = _("Le reste de l’équipe gagne\ndes points d’expérience!\p");'
+        french = r'static const u8 sText_PkmnTeamGainedEXP[] = _("Le reste de votre équipe\ngagne des Points EXP.!\p");'
+        italian = r'static const u8 sText_PkmnTeamGainedEXP[] = _("Il resto della squadra\nriceve punti ESP.!\p");'
         conditional = (
-            "#if defined(PORT_BRIDGE) && GAME_LANGUAGE == LANGUAGE_FRENCH\n"
-            + french + "\n#else\n" + original + "\n#endif"
+            "#if defined(PORT_BRIDGE) && GAME_LANGUAGE == LANGUAGE_FRENCH\n" + french + "\n"
+            "#elif defined(PORT_BRIDGE) && GAME_LANGUAGE == LANGUAGE_ITALIAN\n"
+            "// Italian wording of the port's own message.\n" + italian + "\n"
+            "#else\n" + original + "\n#endif"
         )
         source = self.source.replace(original, conditional)
         result = localization.localize_port_battle_text(source)
         self.assertIn(french, result)
-        self.assertIn(
-            "#else\n"
-            + r'static const u8 sText_PkmnTeamGainedEXP[] = _("¡El resto del equipo ganó\npuntos de experiencia!\p");',
-            result,
-        )
+        self.assertIn(italian, result)
+        self.assertIn("#else\n" + SPANISH, result)
+        self.assertNotIn(original, result)
         self.assertEqual(localization.localize_port_battle_text(result), result)
 
     def test_duplicate_definitions_outside_conditional_are_rejected(self):
@@ -55,9 +57,17 @@ class SpanishBattleTextTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             localization.localize_port_battle_text(self.source + "\n" + duplicate)
 
+    @unittest.skipUnless((ROOT / "src/battle_message.c").exists(), "requires the patched source tree")
+    def test_the_tree_s_battle_message_is_accepted(self):
+        """The real source, as every language's tree starts from it."""
+        source = (ROOT / "src/battle_message.c").read_text(encoding="utf-8")
+        result = localization.localize_port_battle_text(source)
+        self.assertIn("#else\n" + SPANISH, result)
+        self.assertEqual(result.count("sText_PkmnTeamGainedEXP[] ="), source.count("sText_PkmnTeamGainedEXP[] ="))
+
     @unittest.skipUnless(shutil.which("cc"), "requires a host C compiler")
     def test_clock_accents_use_game_glyphs(self):
-        source = (ROOT / "3ds_port/src/3ds_bottom_ui.c").read_text()
+        source = (ROOT / "3ds_port/src/3ds_bottom_ui.c").read_text(encoding="utf-8")
         start = source.index("static const u8 *Ascii(")
         end = source.index("static const u8 *Number(", start)
         harness = '''
@@ -83,7 +93,7 @@ int main(void) {
             folder = Path(temporary)
             code = folder / "clock.c"
             binary = folder / "clock"
-            code.write_text(harness)
+            code.write_text(harness, encoding="utf-8")
             subprocess.run(["cc", "-std=c99", "-Wall", "-Wextra", "-Werror",
                             "-I", str(ROOT / "3ds_port/include"),
                             str(code), "-o", str(binary)], check=True)
