@@ -1,16 +1,15 @@
 # The interior lint (voxel_defect_scan.py on each room's pieces, printed by
 # gen_voxel_buildings.py --verify): faults accepted, each with its reason,
-# and the rooms finished. PLAN_INTERIORES_VOXEL_2026_10_13.md, A3.2.
+# and the rooms finished.
 #
-# The lint fails the build in every room (F5): a fault found is a failure
+# The lint fails the build in every room: a fault found is a failure
 # but one accepted here, which is listed in build/buildings/interior_lint.txt
 # with its reason and not counted. So is an entry here that finds no fault
 # any more (the piece put right, renamed or gone, or its kind misspelt):
-# remove it. A new room is held to the same from its first build - the
-# recipe, PLAN_INTERIORES_VOXEL_2026_10_13.md section 6.
+# remove it. A new room is held to the same from its first build.
 
-# Rooms reviewed on the console and approved (layout ids): the record of
-# step 5 of the recipe, counted by --verify ("finished on the console").
+# Rooms reviewed on the console and approved (layout ids), counted by
+# --verify ("finished on the console").
 finished = []
 
 [allow.brendan_1f_sink]

@@ -4012,7 +4012,7 @@ def interior_lint(models, rooms, out, complete=True):
     faults here, every piece's in out/interior_lint.txt. Returns the number
     of failures - faults the allowlist does not accept, and stale entries in
     it. Strict in every room: the finished ones, approved on the console,
-    and every other (the recipe's lint at 0, from a new room's first build)."""
+    and every other (held to no fault from a new room's first build)."""
     import voxel_defect_scan as vds     # (it imports this module)
     allowed, finished = lint_allowed()
     faults, linted = [], set()
