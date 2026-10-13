@@ -9,7 +9,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--cc', default='gcc')
     args = parser.parse_args()
-    bottom = (ROOT / 'src/3ds_bottom_ui.c').read_text()
+    bottom = (ROOT / 'src/3ds_bottom_ui.c').read_text(encoding='utf-8')
     source = r'''
 #include <assert.h>
 #include <stdbool.h>
@@ -51,7 +51,7 @@ typedef uint8_t u8; typedef uint16_t u16; typedef bool bool8;
 #define HIT_MAP 0
 #define LABEL_FG(x) (x)
 #define LABEL_SH(x) (x)
-#define CTR_TEXT(english, spanish, french) spanish
+#define CTR_TEXT(english, spanish, french, italian) spanish
 #define CTR_TIME_MORNING 0
 #define CTR_TIME_NIGHT 2
 #define TXT_WHITE 5
@@ -159,7 +159,7 @@ int main(void) {
 }
 '''
     with tempfile.TemporaryDirectory(prefix='bottom-map-', dir=ROOT / 'build') as tmp:
-        path=Path(tmp)/'test.c';path.write_text(source);exe=Path(tmp)/'test.exe'
+        path=Path(tmp)/'test.c';path.write_text(source,encoding='utf-8');exe=Path(tmp)/'test.exe'
         subprocess.run([args.cc,'-std=c99','-O2','-Wall','-Wextra','-Werror',str(path),'-o',str(exe)],check=True)
         subprocess.run([str(exe)],check=True)
 if __name__ == '__main__':

@@ -254,17 +254,17 @@ def main():
     parser.add_argument("--cc", default="cc")
     parser.add_argument("--sanitize", action="store_true")
     args = parser.parse_args()
-    pokedex = (args.tree / "src/pokedex.c").read_text()
-    bridge = args.bridge.read_text()
+    pokedex = (args.tree / "src/pokedex.c").read_text(encoding="utf-8")
+    bridge = args.bridge.read_text(encoding="utf-8")
     with tempfile.TemporaryDirectory() as temporary:
         folder = Path(temporary)
         if "bool8 CtrPokedex_IsCaughtMonPage(void)" not in pokedex:
             (folder / "src").mkdir()
             copied = folder / "src/pokedex.c"
-            copied.write_text(pokedex)
+            copied.write_text(pokedex, encoding="utf-8")
             subprocess.run(["git", "apply", "--check", str(PATCH)], cwd=folder, check=True)
             subprocess.run(["git", "apply", str(PATCH)], cwd=folder, check=True)
-            pokedex = copied.read_text()
+            pokedex = copied.read_text(encoding="utf-8")
         source = r'''
 #define PLATFORM_3DS 1
 #include <assert.h>
@@ -284,12 +284,12 @@ typedef void (*TaskFunc)(u8);
 #define CtrLog_Write(...) ((void)0)
 #define sFrames 0u
 enum { CTR_CENTRED_NONE, CTR_CENTRED_POKEDEX, CTR_CENTRED_PLAIN, CTR_CENTRED_POKEDEX_CAUGHT };
-static struct { IntrCallback vblankCallback; bool inBattle; } gMain;
+static struct { IntrCallback vblankCallback, callback2; bool inBattle; } gMain;
 static struct { bool active; } gPaletteFade;
 static struct { TaskFunc func; int16_t data[16]; bool active; } gTasks[16];
 static struct { struct { u8 priority, paletteNum; } oam; void (*callback)(void *); } gSprites[1];
 static IntrCallback gPokedexVBlankCB;
-static bool videoStage, videoBattle, videoTransition;
+static bool videoStage, videoStageFaded, videoBattle, videoTransition;
 static unsigned videoCentred, newEntryPrints, freedWindows, cries, battleVBlanks;
 static u16 newKeys;
 static const u32 monPalette[1];
@@ -301,6 +301,8 @@ static void UnrelatedTask(u8 taskId) { (void)taskId; }
 static void SpriteCB_SlideCaughtMonToCenter(void *sprite) { (void)sprite; }
 static void SetVBlankCallback(IntrCallback callback) { gMain.vblankCallback = callback; }
 static void CtrVideo_SetStage(bool active) { videoStage = active; }
+static void CtrVideo_SetStageFaded(bool faded) { videoStageFaded = faded; }
+static void CB2_OverworldBasic(void) {}
 static void CtrVideo_SetCentred(unsigned screen) { videoCentred = screen; }
 static void CtrVideo_SetBattle(bool active) { videoBattle = active; }
 static void CtrVideo_SetTransition(bool active) { videoTransition = active; }
@@ -387,7 +389,7 @@ static void CheckCaught(void) {
     assert(CtrPokedex_IsCaughtMonPage());
     assert(gMain.inBattle);
     assert(videoCentred == CTR_CENTRED_POKEDEX_CAUGHT);
-    assert(!videoStage && !videoBattle && !videoTransition);
+    assert(!videoStage && !videoStageFaded && !videoBattle && !videoTransition);
     assert(sCentred.count <= 1);
     if (sCentred.count) {
         assert(sCentred.callbacks[0] == VBlankCB_CaughtMonPage);
@@ -490,7 +492,7 @@ int main(void) {
 '''
         path = folder / "pokedex_capture.c"
         binary = folder / "pokedex_capture"
-        path.write_text(source)
+        path.write_text(source, encoding="utf-8")
         flags = ["-fsanitize=address,undefined", "-fno-sanitize-recover=all",
                  "-fno-omit-frame-pointer"] if args.sanitize else []
         subprocess.run([args.cc, "-std=c99", "-O1", "-Wall", "-Wextra", "-Werror", *flags,
@@ -498,8 +500,9 @@ int main(void) {
         subprocess.run([str(binary)], check=True)
         rendering = folder / "pokedex_rendering.c"
         renderer = folder / "pokedex_rendering"
-        rendering.write_text(rendering_source(args.video.read_text(),
-                                             (ROOT / "3ds_port/include/3ds_video.h").read_text()))
+        rendering.write_text(rendering_source(args.video.read_text(encoding="utf-8"),
+                                             (ROOT / "3ds_port/include/3ds_video.h").read_text(encoding="utf-8")),
+                             encoding="utf-8")
         subprocess.run([args.cc, "-std=c99", "-O1", "-Wall", "-Wextra", "-Werror", *flags,
                         str(rendering), "-o", str(renderer)], check=True)
         subprocess.run([str(renderer)], check=True)

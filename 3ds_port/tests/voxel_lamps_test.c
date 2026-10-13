@@ -2,6 +2,7 @@
 #include <math.h>
 #include <stdio.h>
 #include <string.h>
+#include "voxel_building.h"
 #include "voxel_sign.h"
 #include "voxel_regions.h"
 
@@ -45,6 +46,14 @@ const int16_t *VoxelRelief_Cell(const VoxelMapInstance *inst, int xpos, int zpos
 {
     (void)inst; (void)xpos; (void)zpos;
     return NULL;
+}
+
+/* No lamp stands on a bridge's deck. */
+bool VoxelBuildings_DeckAt(const VoxelMapInstance *inst, float worldX, float worldZ,
+                           unsigned elevation, float *lift)
+{
+    (void)inst; (void)worldX; (void)worldZ; (void)elevation; (void)lift;
+    return false;
 }
 
 float VoxelRelief_Base(const VoxelMapInstance *inst)

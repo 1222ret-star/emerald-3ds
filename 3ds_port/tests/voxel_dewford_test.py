@@ -71,7 +71,10 @@ def check_sign_fixture(tree):
     layout = cells.Layout(entry, cells.MapEvents())
     pair = cells.pair_for(layout.primary, layout.secondary)
     assert (11, 16) in layout.signs
-    assert layout.role_at(11, 16) == "wall"
+    # A post here (voxel_cells.is_signpost: drawn as one, walkable to its
+    # south), drawn by sign_record; the event board reads it the same.
+    assert layout.role_at(11, 16) == "signpost"
+    assert event_board_masks(pair, layout, 11, 16) == signs.sign_record(layout, pair, 11, 16)
     assert [layout.metatile(11, row) for row in (15, 16, 17)] == [0x208, 0x210, 0x124]
     records = signs.layout_records(layout_index, layout, pair)
     fixture = [record for record in records if record[1:3] == (11, 16)]
@@ -82,7 +85,8 @@ def check_sign_fixture(tree):
     assert ground == 0x124
     assert sum(row.bit_count() for row in rows) == 212
     assert sum(row.bit_count() for row in head) == 99
-    assert not any(head_mask(pair, rows, 0x208))
+    # the board's top, 0x208 north of it, read as its head
+    assert head_mask(pair, rows, 0x208) == head
     for xpos, ypos in ((3, 10), (4, 10)):
         assert event_board_masks(pair, layout, xpos, ypos) is None
     with patch.object(layout, "signs", layout.signs - {(11, 16)}):
@@ -100,7 +104,7 @@ def check_sign_fixture(tree):
         assert struct.unpack_from("<I", data, 4)[0] == len(records)
         subprocess.run([compiler, "-std=c99", "-O2", "-Wall", "-Wextra", "-Werror",
                         "-I" + str(PORT / "include"), "-I" + str(PORT / "src/voxel"),
-                        "-DVOXEL_HOST_FILES", '-DSIGN_MASK_PATH="' + str(binary) + '"',
+                        "-DVOXEL_HOST_FILES", '-DSIGN_MASK_PATH="' + binary.as_posix() + '"',
                         str(PORT / "tests/voxel_sign_test.c"), str(PORT / "src/voxel/voxel_sign.c"),
                         "-lm", "-o", str(executable)], check=True)
         subprocess.run([str(executable), str(binary), "--dewford"], check=True)
@@ -108,10 +112,10 @@ def check_sign_fixture(tree):
     return {(11, 15), (11, 16)}
 
 
-def check_binary(path, models, layouts, generator, night):
+def check_binary(path, models, layouts, generator):
     data = path.read_bytes()
     assert data[:4] == b"VXB8"
-    pages, count, page_models, placements, height_bytes, masks, vertices, variants, _ = (
+    pages, count, page_models, placements, height_bytes, masks, vertices, variants, decks = (
         struct.unpack_from("<HHHHHHIHH", data, 4))
     assert count == len(models)
     records_offset = 24 + pages * 8
@@ -120,7 +124,7 @@ def check_binary(path, models, layouts, generator, night):
     heights_offset = placements_offset + placements * 16
     vertex_offset = heights_offset + height_bytes + height_bytes % 2
     vertex_offset += height_bytes * 2 + masks * 32 + height_bytes + height_bytes % 2
-    vertex_offset += variants * 6
+    vertex_offset += variants * 6 + decks * 8
     vertex_offset = (vertex_offset + 3) & ~3
     assert vertex_offset + vertices * 24 <= len(data)
     town_index = next(index + 1 for index, entry in enumerate(layouts)
@@ -140,13 +144,14 @@ def check_binary(path, models, layouts, generator, night):
         page_width, page_height, texture_offset = struct.unpack_from("<HHI", data, 24 + page * 8)
         assert page_height & 0x8000
         glow_offset = texture_offset + page_width * (page_height & 0x7FFF) * 2
-        mask = night.building_mask(model.art, model.name)
+        # the glass as exported: moved with the drawing's compaction
         crop = model.art.getbbox() or (0, 0, 1, 1)
         for texture_y in range(crop[1], crop[3]):
             for texture_x in range(crop[0], crop[2]):
                 pixel_offset = generator.texel_offset(
                     origin_x + texture_x, origin_y + texture_y, page_width)
-                assert data[glow_offset + pixel_offset] == mask[texture_y * model.art.width + texture_x]
+                glass = model.glass.getpixel((texture_x, texture_y)) if model.glass else 0
+                assert data[glow_offset + pixel_offset] == glass
         found[model.name].add((xpos, ypos))
         width, height, _, first, vertex_count, height_start = struct.unpack_from(
             "<BBHIII", data, records_offset + model_index * 16)
@@ -226,7 +231,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="dewford-3d-") as temporary:
         binary = pathlib.Path(temporary) / "buildings.bin"
         generator.export(models, str(binary))
-        check_binary(binary, models, layouts, generator, night)
+        check_binary(binary, models, layouts, generator)
     if args.preview:
         args.preview.mkdir(parents=True, exist_ok=True)
         for model in models:

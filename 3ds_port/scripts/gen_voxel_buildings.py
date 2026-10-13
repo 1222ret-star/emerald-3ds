@@ -3436,10 +3436,12 @@ def export(models, path):
     # only the rows of a drawing some face samples go to the page: a solid's
     # grown bands (Mound.with_ring, own_bands) are mostly never read, and
     # the ring band of a thing without one is empty
-    # A drawing's window glass (voxel_night) moves with the faces reading it.
-    glass, as_drawn = {}, []
+    # A drawing's window glass (voxel_night) moves with the faces reading it:
+    # model.glass, an L image over the drawing as exported (None: no glass).
+    glass, as_drawn = 0, []
     for m in models:
         mask = voxel_night.building_mask(m.art, m.name)
+        m.glass = None
         kept = (m.art, m.mesh.tris, getattr(m, "live", None))
         before = (m.art.convert("RGBA"), list(m.mesh.tris))
         compact_rows(m)
@@ -3458,10 +3460,11 @@ def export(models, path):
                     m.live = kept[2]
                 moved = mask
                 as_drawn.append(m.name)
-            glass[m.name] = moved
+            m.glass = moved
+            glass += 1
     if glass:
         print("voxel buildings: window glass on %d drawing(s), %d kept as drawn%s"
-              % (len(glass), len(as_drawn), (": " + ", ".join(as_drawn)) if as_drawn else ""))
+              % (glass, len(as_drawn), (": " + ", ".join(as_drawn)) if as_drawn else ""))
     crops = {m.name: (m.art.getbbox() or (0, 0, 1, 1)) for m in models}
 
     # models: geometry once, uv in the model's own art pixels
@@ -3525,8 +3528,8 @@ def export(models, path):
             key = art_key[k] = ("m", gutter, img.size, img.tobytes())
             art_img[key] = img
             art_name.setdefault(key, name)
-            if name in glass:
-                mask = glass[name].crop(crops[name])
+            if models[k].glass is not None:
+                mask = models[k].glass.crop(crops[name])
                 if gutter:
                     mask = _guttered(mask)
                 art_glass[key] = ImageChops.lighter(art_glass[key], mask) if key in art_glass else mask
