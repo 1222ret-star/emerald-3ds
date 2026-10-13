@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Local wireless play between 3DS systems nearby, by @eathanpage (pull
+  request #76): the Union Room, the Direct Corner's Trade Center and
+  Colosseum, the Berry Blender, the wireless minigames, link contests and the
+  Battle Tower's link multi battle, two to four players, through an emulated
+  Wireless Adapter over 3DS local wireless. Only identical builds link (so
+  builds in different languages don't, for now); HOME is refused during a
+  session. Its patch is 0055-local-wireless.
+
 - Day/night, city lights and the berry clock, by @jesus0m (pull request
   #57), all off by default. The windows' glow and the lamps take memory
   only while they light: the masks share the voxel page arena and the lamps'

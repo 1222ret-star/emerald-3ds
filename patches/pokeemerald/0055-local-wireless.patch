@@ -1,5 +1,5 @@
 Pokémon Emerald 3Ds Dual Screen changes to pret/pokeemerald: local wireless play
-Applies after 0051-native-name-prefix-order.patch; apply with tools/bootstrap.py.
+Applies after 0054-pokedex-capture-layout.patch; apply with tools/bootstrap.py.
 
 diff --git a/data/event_scripts.s b/data/event_scripts.s
 index ba6f55c..4a2593c 100644

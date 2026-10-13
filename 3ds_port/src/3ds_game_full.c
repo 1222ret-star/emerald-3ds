@@ -211,7 +211,7 @@ static void SampleAudioStats(void)
  * frames keep whatever the last callback said, so a scene change does not
  * flash the next frame at the other scale.
  */
-#define CTR_STAGE_CALLBACKS 24
+#define CTR_STAGE_CALLBACKS 48
 typedef struct
 {
     IntrCallback callbacks[CTR_STAGE_CALLBACKS];
