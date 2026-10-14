@@ -57,7 +57,9 @@ bool VoxelRelief_IsSlope(const int16_t *grid);
 
 /* The 25 depths (pixels) the cell's points are moved south by: its heights
  * again, (u, h, v + h), the drawing seen at 45 degrees. NULL when the cell
- * is not lifted. */
+ * is not lifted; all zero on a level map (bit 15 of its width in the file),
+ * whose heights lift it straight up as a base does - Route 108's sea, leaning
+ * a level from Route 107's to Slateport's with no row moved south. */
 const int16_t *VoxelRelief_Depth(const VoxelMapInstance *inst, int x, int y);
 
 /* Height in tiles over the base at the centre of a cell (0 when not lifted). */

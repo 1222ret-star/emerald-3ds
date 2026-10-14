@@ -265,15 +265,19 @@ static bool sAtlasUploadPending;
  * buffer and copied into their page by the GPU (VoxelAtlas_AnimatedSlots). */
 #define VOXEL_ANIM_SLOTS 6u
 static VoxelAnimSlot *sAnimOut;
-static uint8_t sAnimDirty[VOXEL_ATLAS_PAGES][128];
+/* The tiles written since each atlas's last pass, by page: the current map's
+ * atlas and those of the maps beside it that share its primary tileset
+ * (AnimateTiles) each take them in their own time. */
+static uint8_t sAnimDirty[VOXEL_ATLAS_SLOTS][VOXEL_ATLAS_PAGES][128];
 /* The pass in progress: the page (+1, 0 for none) of this atlas, the tiles it
  * redraws for - taken from the dirty ones when it began, so what is written
  * meanwhile waits for the next pass - and how far down the ids it is. */
 static unsigned sAnimWorkPage, sAnimCursor;
 static VoxelAtlasSlot *sAnimWorkAtlas;
 static uint8_t sAnimWork[128];
-/* Where the next pass starts looking for a page with dirty tiles. */
-static unsigned sAnimNext;
+/* Where the next pass starts looking for an atlas, and a page of it, with
+ * dirty tiles. */
+static unsigned sAnimNext, sAnimNextAtlas;
 static bool sAnimPending;
 /* The building pages' texels drawn from animated tiles (Rustboro's fountain:
  * its jet, VoxelBuildings_AnimRun): the BG tiles written since they were
@@ -298,8 +302,9 @@ void CtrVoxel_NotifyTilesetAnimWrite(unsigned firstTile, unsigned tileCount)
     if (tileCount > 1024 - firstTile) tileCount = 1024 - firstTile;
     for (unsigned t = firstTile; t < firstTile + tileCount; ++t)
     {
-        for (unsigned page = 0; page < VOXEL_ATLAS_PAGES; ++page)
-            sAnimDirty[page][t >> 3] |= 1u << (t & 7);
+        for (unsigned a = 0; a < VOXEL_ATLAS_SLOTS; ++a)
+            for (unsigned page = 0; page < VOXEL_ATLAS_PAGES; ++page)
+                sAnimDirty[a][page][t >> 3] |= 1u << (t & 7);
         sBuildingAnimDirty[t >> 3] |= 1u << (t & 7);
     }
     sAnimPending = true;
@@ -5009,10 +5014,24 @@ static void UpdateNightLamps(void)
  * nothing but those 512 bytes a slot is flushed or copied: the page used to be
  * read back into a CPU copy, recomposed and written out whole, which was 6-7 ms
  * of a frame whenever it came round.
+ *
+ * The maps beside it in view are drawn from atlases of their own tileset pair
+ * (Route 107's Dewford pair beside Route 108's Slateport one): those that
+ * share its primary tileset take their turn too, for the metatiles drawn from
+ * primary tiles alone - the sea, the shore, the flowers. Only the current map
+ * had its pass, and the sea of the route just left stood still beside the
+ * moving sea of the new one.
  */
+static bool AnimShares(const VoxelAtlasSlot *atlas, const VoxelAtlasSlot *active)
+{
+    return atlas == active
+        || (atlas->valid && atlas->primaryTileset == active->primaryTileset && AtlasInView(atlas));
+}
+
 static void AnimateTiles(const VoxelMapInstance *inst)
 {
-    VoxelAtlasSlot *active;
+    VoxelAtlasSlot *active, *work;
+    VoxelMapInstance pair;
     unsigned pages, page, room, count;
 
     if (!sAnimPending || sAnimOut == NULL || sAtlasUploadPending || AtlasJobBusy())
@@ -5020,49 +5039,83 @@ static void AnimateTiles(const VoxelMapInstance *inst)
     active = FindAtlas(inst);
     if (active == NULL || !active->valid)
         return;
-    if (sAnimWorkPage != 0 && sAnimWorkAtlas != active)
+    if (sAnimWorkPage != 0 && (sAnimWorkAtlas == NULL || !AnimShares(sAnimWorkAtlas, active)))
         sAnimWorkPage = 0; /* the map changed pair mid-pass: its next write redraws */
-    pages = VoxelAtlas_PageCount(&active->map);
     if (sAnimWorkPage == 0)
     {
         bool any = false;
 
+        /* the atlases in turn, from the one after the last pass's */
         page = 0;
-        for (unsigned step = 0; step < pages && !any; ++step)
+        work = NULL;
+        for (unsigned k = 0; k < VOXEL_ATLAS_SLOTS && !any; ++k)
         {
-            unsigned p = (sAnimNext + step) % pages;
+            unsigned a = (sAnimNextAtlas + k) % VOXEL_ATLAS_SLOTS;
+            VoxelAtlasSlot *atlas = &sAtlases[a];
 
-            for (unsigned i = 0; i < sizeof(sAnimDirty[p]); ++i)
+            if (!AnimShares(atlas, active))
+                continue;
+            pages = VoxelAtlas_PageCount(&atlas->map);
+            for (unsigned step = 0; step < pages && !any; ++step)
             {
-                sAnimDirty[p][i] &= active->map.tileMask[p][i];
-                any = any || sAnimDirty[p][i] != 0;
+                unsigned p = (sAnimNext + step) % pages;
+
+                for (unsigned i = 0; i < sizeof(sAnimDirty[a][p]); ++i)
+                {
+                    sAnimDirty[a][p][i] &= atlas->map.tileMask[p][i];
+                    /* tiles 512 on: BG VRAM holds the current map's secondary */
+                    if (atlas != active && i >= 512u / 8u)
+                        sAnimDirty[a][p][i] = 0;
+                    any = any || sAnimDirty[a][p][i] != 0;
+                }
+                if (any)
+                {
+                    page = p;
+                    work = atlas;
+                    sAnimNextAtlas = (a + 1u) % VOXEL_ATLAS_SLOTS;
+                    sAnimNext = (p + 1u) % pages;
+                }
             }
-            if (any)
-                page = p;
         }
         if (!any)
         {
             sAnimPending = false;
             return;
         }
-        memcpy(sAnimWork, sAnimDirty[page], sizeof(sAnimWork));
-        memset(sAnimDirty[page], 0, sizeof(sAnimDirty[page]));
+        memcpy(sAnimWork, sAnimDirty[work - sAtlases][page], sizeof(sAnimWork));
+        memset(sAnimDirty[work - sAtlases][page], 0, sizeof(sAnimDirty[work - sAtlases][page]));
         sAnimWorkPage = page + 1u;
-        sAnimWorkAtlas = active;
+        sAnimWorkAtlas = work;
         sAnimCursor = 0;
-        sAnimNext = (page + 1u) % pages;
     }
+    work = sAnimWorkAtlas;
     page = sAnimWorkPage - 1u;
     room = CtrVideo_VoxelUploadsLeft() / 2u; /* a slot is two copies */
     if (room > VOXEL_ANIM_SLOTS)
         room = VOXEL_ANIM_SLOTS;
-    if (room == 0 || AtlasTex(active, page)->data == NULL)
+    if (AtlasTex(work, page)->data == NULL && work != active)
+    {
+        /* a page the map beside has given up: its pass with it */
+        sAnimWorkPage = 0;
+        sAnimWorkAtlas = NULL;
         return;
-    count = VoxelAtlas_AnimatedSlots(inst, &active->map, page, CtrVideo_GetBgVram(), sAnimWork,
-                                     &sAnimCursor, sAnimOut, room);
+    }
+    if (room == 0 || AtlasTex(work, page)->data == NULL)
+        return;
+    if (work == active)
+        count = VoxelAtlas_AnimatedSlots(inst, &work->map, page, CtrVideo_GetBgVram(), sAnimWork,
+                                         &sAnimCursor, sAnimOut, room);
+    else
+    {
+        memset(&pair, 0, sizeof(pair));
+        pair.primaryTileset = work->primaryTileset;
+        pair.secondaryTileset = work->secondaryTileset;
+        count = VoxelAtlas_SharedAnimatedSlots(&pair, &work->map, page, CtrVideo_GetBgVram(), sAnimWork,
+                                               &sAnimCursor, sAnimOut, room);
+    }
     if (count != 0)
     {
-        uint8_t *dest = (uint8_t *)AtlasTex(active, page)->data;
+        uint8_t *dest = (uint8_t *)AtlasTex(work, page)->data;
 
         GSPGPU_FlushDataCache(sAnimOut, count * sizeof(VoxelAnimSlot));
         for (unsigned i = 0; i < count; ++i)

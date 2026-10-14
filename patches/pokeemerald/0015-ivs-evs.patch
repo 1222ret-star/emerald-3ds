@@ -46,7 +46,7 @@ diff --git a/src/pokemon_summary_screen.c b/src/pokemon_summary_screen.c
 +// SKILLS page's stats into the Pokemon's IVs, then its EVs, then back.
 +enum { STATS_MODE_STATS, STATS_MODE_IVS, STATS_MODE_EVS, STATS_MODE_COUNT };
 +static const u8 sStatsLeftColumnLayoutIvEv[] = _("{DYNAMIC 0}\n{DYNAMIC 2}\n{DYNAMIC 3}");
-+#if GAME_LANGUAGE == LANGUAGE_SPANISH
++#if GAME_LANGUAGE == LANGUAGE_SPANISH || GAME_LANGUAGE == LANGUAGE_FRENCH || GAME_LANGUAGE == LANGUAGE_ITALIAN
 +static const u8 sText_SkillsIVs[] = _("IV  (0-31)");
 +static const u8 sText_SkillsEVs[] = _("EV  (0-255)");
 +#else

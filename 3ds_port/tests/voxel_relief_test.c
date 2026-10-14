@@ -13,7 +13,12 @@
  * argv[3] is Rusturf Tunnel's, a cave carved out of the rock by hand
  * (relief_fixes.json): its belt stands three courses, as high as the rock
  * at its edges (cell (0, 0)); the corridor (5, 4) is a level up from the
- * west room's floor (4, 8), which is the base and not lifted. */
+ * west room's floor (4, 8), which is the base and not lifted.
+ *
+ * argv[4] is Route 108's, the open sea that takes the level the world gives
+ * up between Route 107 and Slateport (gen_voxel_relief.SEA_RAMPS): a level
+ * map, its sea a level down at its west edge and on its base at its east one,
+ * lifted straight up - no point of it moved south. */
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
@@ -34,7 +39,7 @@ int main(int argc, char **argv)
     VoxelMapInstance inst = {0};
     const int16_t *g;
 
-    assert(argc == 4);
+    assert(argc == 5);
     inst.layoutId = atoi(argv[1]);
     assert(VoxelRelief_Init());
     g = VoxelRelief_Cell(&inst, 3, 7);
@@ -71,7 +76,32 @@ int main(int argc, char **argv)
     g = VoxelRelief_Cell(&inst, 5, 4);
     assert(g != NULL && !VoxelRelief_IsSlope(g) && g[0] == 16);
     assert(VoxelRelief_Cell(&inst, 4, 8) == NULL);
+    /* the sea that leans a level, with no depth */
+    inst.layoutId = atoi(argv[4]);
+    assert(!VoxelRelief_IsDrawn(&inst));
+    g = VoxelRelief_Cell(&inst, 0, 10);
+    assert(g != NULL && g[2 * VOXEL_RELIEF_SIDE] == -16);
+    assert(VoxelRelief_Depth(&inst, 0, 10) != NULL && VoxelRelief_CellShift(&inst, 0, 10) == 0.0f);
+    for (unsigned i = 0; i < VOXEL_RELIEF_SIDE * VOXEL_RELIEF_SIDE; ++i)
+        assert(VoxelRelief_Depth(&inst, 0, 10)[i] == 0);
+    sOnly = &inst;
+    {
+        float last = VoxelRelief_LiftAt(0.0f, 10.5f);
+
+        assert(fabsf(last + 1.0f) < 0.01f);
+        for (float x = 0.25f; x < 60.0f; x += 0.25f)
+        {
+            float lift = VoxelRelief_LiftAt(x, 10.5f);
+
+            assert(lift >= last && lift - last <= 1.0f / 16.0f + 0.001f);
+            assert(VoxelRelief_ShiftAt(x, 10.5f) == 0.0f);
+            last = lift;
+        }
+        assert(fabsf(last) < 1.0f / 16.0f + 0.001f);
+    }
+    sOnly = NULL;
     VoxelRelief_Shutdown();
-    puts("PASS relief: ledge lip, a drawn terrace and a carved cave's belt from the ROMFS file, searched in row order");
+    puts("PASS relief: ledge lip, a drawn terrace, a carved cave's belt and Route 108's leaning sea "
+         "from the ROMFS file, searched in row order");
     return 0;
 }

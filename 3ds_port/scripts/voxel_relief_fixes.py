@@ -71,6 +71,7 @@ MAGIC = b"VXL4"
 SIDE = 5
 DRAWN = 0x8000
 UNIT2 = 0x4000
+LEVEL = 0x8000          # of the width: heights with no depth, lifted straight up as a base is
 BELT_SHIFT = 10         # bits 10-13 of the height: the belt's courses
 BELT_MAX = 15
 HEIGHT_MASK = 0x03FF
@@ -82,7 +83,7 @@ NO_FACE = 0xFFFE
 # --- relief.bin, read and written without loss ---------------------------------
 
 def parse(blob):
-    """{"layouts": {index: {w, h, flags, base, belt, cells{(x, y): [25 px]}}},
+    """{"layouts": {index: {w, h, flags, base, belt, level, cells{(x, y): [25 px]}}},
     "variants": [(layout, metatile, rows[16])],
     "cuts": {(layout, x, y): [variant, foot, ground, wall, sides, flags]}}"""
     if blob[:4] != MAGIC:
@@ -98,8 +99,9 @@ def parse(blob):
         for k in range(n):
             x, y = blob[off + 27 * k], blob[off + 27 * k + 1]
             cells[(x, y)] = [v * unit for v in struct.unpack_from("<25b", blob, off + 27 * k + 2)]
-        layouts[lid] = {"w": w, "h": hh & HEIGHT_MASK, "flags": hh & (DRAWN | UNIT2),
-                        "base": base, "belt": (hh >> BELT_SHIFT) & BELT_MAX, "cells": cells}
+        layouts[lid] = {"w": w & HEIGHT_MASK, "h": hh & HEIGHT_MASK, "flags": hh & (DRAWN | UNIT2),
+                        "base": base, "belt": (hh >> BELT_SHIFT) & BELT_MAX,
+                        "level": bool(w & LEVEL), "cells": cells}
     variants, cuts = [], {}
     if blob[-4:] == b"CUTS":
         at = struct.unpack_from("<I", blob, len(blob) - 8)[0]
@@ -183,7 +185,7 @@ def pack(relief):
     idx, body = bytearray(), bytearray()
     for lid, t, flags, unit in tables:
         cells = sorted(t["cells"].items(), key=lambda kv: (kv[0][1], kv[0][0]))
-        idx += struct.pack("<HHHHIh", lid, len(cells), t["w"],
+        idx += struct.pack("<HHHHIh", lid, len(cells), t["w"] | (LEVEL if t.get("level") else 0),
                            t["h"] | flags | (t.get("belt", 0) << BELT_SHIFT),
                            offset + len(body), int(t["base"]))
         for (x, y), g in cells:

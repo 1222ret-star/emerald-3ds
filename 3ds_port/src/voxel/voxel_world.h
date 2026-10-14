@@ -97,6 +97,8 @@ int VoxelWorld_BorderMetatile(int worldX, int worldY);
 VoxelVisualShape VoxelWorld_ClassifyTile(int worldX, int worldY);
 
 void VoxelWorld_GetMapDimensions(int *width, int *height);
+/* Whether the map joins others at its edges, walked across with no warp. */
+bool VoxelWorld_MapIsConnected(void);
 void VoxelWorld_GetPlayerWorldCoords(float *worldX, float *worldZ);
 void VoxelWorld_GetLocation(int *mapGroup, int *mapNum);
 /* Small renderer-facing classification of the original field weather state. */

@@ -2212,9 +2212,10 @@ static void DrawColumnBackground(void)
 
 /*
  * The faint Poké Ball in the middle of the light green: 2px rim, 2px band,
- * the button's ring with nothing inside, the top half half a step lighter.
+ * the button's ring with nothing inside, the bottom half - the white one on a
+ * real ball - half a step lighter.
  * Symmetric about the pixel grid: distances from pixel centres, doubled so
- * they stay integers. 0 nothing, 1 the line colour, 2 the top half.
+ * they stay integers. 0 nothing, 1 the line colour, 2 the bottom half.
  */
 #define BALL_R CTR_SECTION_BALL_RADIUS
 static u8 sBall[2 * BALL_R * 2 * BALL_R];
@@ -2235,7 +2236,7 @@ static void BuildBall(void)
                 v = (d2 >= 4 * 13 * 13 || (d2 >= 4 * 7 * 7 && d2 < 4 * 9 * 9)) ? 1 : 0;
             else if (dy > -4 && dy < 4)
                 v = 1;
-            else if (dy < 0)
+            else if (dy > 0)
                 v = 2;
             sBall[y * 2 * BALL_R + x] = v;
         }
@@ -3316,12 +3317,16 @@ static void Snapshot(ViewState *s, u8 mode, u8 pressed)
             s->pickMapsec = sPickMapsec;
             s->pickX = sPickX;
             s->pickY = sPickY;
-            s->clockShown = !s->inBattle && CtrSettings_GetInt("show_clock", 0) == 1;
-            if (s->clockShown)
+            /* The hour is always on the bar above the map; the part of the day
+             * and the clock's speed only with the day/night clock or SHOW CLOCK
+             * on. Off, the clock is not running: the hour is the game's own. */
+            s->clockShown = CtrSettings_GetInt("day_night", 0) == 1 || CtrSettings_GetInt("show_clock", 0) == 1;
             {
-                unsigned seconds, rate;
+                unsigned seconds = 0, rate = 1;
 
                 s->clockValid = CtrDayNight_Time(&seconds, &rate);
+                if (!s->clockValid)
+                    s->clockValid = CtrGame_LocalTimeSeconds(&seconds);
                 if (s->clockValid)
                 {
                     s->clockMinute = seconds / 60;
@@ -3784,7 +3789,7 @@ static void DrawSummary(const ViewState *s)
 {
     static const char *const statNames[6] = {CTR_TEXT("HP", "PS", "PV", "PS"), CTR_TEXT("ATTACK", "ATAQUE", "ATTAQUE", "ATTACCO"), CTR_TEXT("DEFENSE", "DEFENSA", "DÉFENSE", "DIFESA"),
                                              CTR_TEXT("SP. ATK", "AT. ESP.", "ATQ. SP.", "ATT. SP."), CTR_TEXT("SP. DEF", "DEF. ESP.", "DÉF. SP.", "DIF. SP."),
-                                             CTR_TEXT("SPEED", "VELOC.", "VITESSE", "VELOCITA")};
+                                             CTR_TEXT("SPEED", "VELOC.", "VITESSE", "VELOCITÀ")};
     const MonView *m = &s->party[s->summary];
     u8 text[24];
 
@@ -3865,12 +3870,17 @@ static void DrawSummary(const ViewState *s)
  * (the plates' outline, a white line, a shade line on its top and left).
  * The map keeps its x; the frame hides its first and last columns, the 248px
  * picture's overflow the GBA's own frame hides too. Hoenn's 150 rows are
- * centred in the window. The area's name is on a plate below it.
+ * centred in the window. The clock is on a bar above it, the area's name on
+ * a plate below it.
  */
+#define CLOCK_X 5
+#define CLOCK_Y 5
+#define CLOCK_W 230
+#define CLOCK_H 15
 #define MAP_ORIGIN_X 0
-#define MAP_ORIGIN_Y 26
+#define MAP_ORIGIN_Y 36
 #define MAP_WIN_X0 8
-#define MAP_WIN_Y0 8
+#define MAP_WIN_Y0 28
 #define MAP_WIN_X1 232
 #define MAP_WIN_Y1 195
 #define NAME_X 5
@@ -3966,15 +3976,14 @@ static void BuildMapCache(void)
 static void DrawRegionName(const ViewState *s)
 {
     u8 name[32];
-    int height = s->clockShown ? 17 : NAME_H;
     bool8 picked = s->pickMapsec != MAPSEC_NONE;
     u8 mapsec = picked ? s->pickMapsec : s->mapsec;
 
     if (mapsec == MAPSEC_NONE)
         return;
     GetMapName(name, mapsec, 0);
-    DrawPlate(NAME_X, NAME_Y, NAME_W, height, picked ? &sLook.chosen : &sLook.plate, 0, FALSE);
-    DrawStrIn(s->clockShown ? &sSmall : &sNormal, name, NAME_X + 1, NAME_X + NAME_W - 1, NAME_Y + 1, NAME_Y + height - 2,
+    DrawPlate(NAME_X, NAME_Y, NAME_W, NAME_H, picked ? &sLook.chosen : &sLook.plate, 0, FALSE);
+    DrawStrIn(&sNormal, name, NAME_X + 1, NAME_X + NAME_W - 1, NAME_Y + 1, NAME_Y + NAME_H - 2,
               picked ? TXT_WHITE : TXT_DARK, picked ? sLook.chosenShadow : TXT_LIGHT);
 }
 
@@ -3985,11 +3994,11 @@ static void DrawMapClock(const ViewState *s)
         CTR_TEXT("EVENING", "TARDE", "SOIR", "SERA"), CTR_TEXT("NIGHT", "NOCHE", "NUIT", "NOTTE")
     };
     char time[8], speed[8];
-    int top = NAME_Y + 18, bottom = NAME_Y + NAME_H;
+    int top = CLOCK_Y, bottom = CLOCK_Y + CLOCK_H;
 
-    if (!s->clockShown)
+    if (s->inBattle)
         return;
-    DrawPlate(NAME_X, top, NAME_W, bottom - top, &sLook.plate, 0, FALSE);
+    DrawPlate(CLOCK_X, top, CLOCK_W, CLOCK_H, &sLook.plate, 0, FALSE);
     if (s->clockValid)
     {
         snprintf(time, sizeof(time), "%02u:%02u", s->clockMinute / 60u, s->clockMinute % 60u);
@@ -4000,13 +4009,15 @@ static void DrawMapClock(const ViewState *s)
         strcpy(time, "--:--");
         strcpy(speed, "--");
     }
-    DrawStrIn(&sSmall, Ascii(time), NAME_X + 4, NAME_X + 65, top, bottom, TXT_DARK, TXT_LIGHT);
+    DrawStrIn(&sSmall, Ascii(time), CLOCK_X + 4, CLOCK_X + 65, top, bottom, TXT_DARK, TXT_LIGHT);
+    if (!s->clockShown)
+        return;
     unsigned phase = s->clockPhase == CTR_TIME_NIGHT ? 3u
                    : s->clockPhase == CTR_TIME_MORNING ? 0u
                    : s->clockMinute >= 16u * 60u ? 2u : 1u;
     DrawStrIn(&sSmall, Ascii(s->clockValid ? phases[phase] : "--"),
-              NAME_X + 66, NAME_X + 168, top, bottom, TXT_DARK, TXT_LIGHT);
-    DrawStrIn(&sSmall, Ascii(speed), NAME_X + 169, NAME_X + NAME_W - 4, top, bottom, TXT_DARK, TXT_LIGHT);
+              CLOCK_X + 66, CLOCK_X + 168, top, bottom, TXT_DARK, TXT_LIGHT);
+    DrawStrIn(&sSmall, Ascii(speed), CLOCK_X + 169, CLOCK_X + CLOCK_W - 4, top, bottom, TXT_DARK, TXT_LIGHT);
 }
 
 /* The player's mark and a picked cell's cursor, inside the window. */
@@ -4621,7 +4632,7 @@ static void OptionNames(const u8 *names[OPTION_ROWS])
     const u8 *const table[OPTION_ROWS] = {
         gText_TextSpeed, gText_BattleScene, gText_BattleStyle, gText_Sound,
         gText_ButtonMode, gText_Frame, Ascii(CTR_TEXT("SHOW FPS", "MOSTRAR FPS", "AFFICH. FPS", "MOSTRA FPS")), Ascii("VOXEL 3D"),
-        Ascii(CTR_TEXT("3D ANGLE", "ANGULO 3D", "ANGLE 3D", "ANGOLO 3D")), Ascii(CTR_TEXT("3D ZOOM", "ZOOM 3D", "ZOOM 3D", "ZOOM 3D")),
+        Ascii(CTR_TEXT("3D ANGLE", "ÁNGULO 3D", "ANGLE 3D", "ANGOLO 3D")), Ascii(CTR_TEXT("3D ZOOM", "ZOOM 3D", "ZOOM 3D", "ZOOM 3D")),
         Ascii(CTR_TEXT("3D BLUR", "DESENFOQUE 3D", "FLOU 3D", "SFOC. 3D")), Ascii(CTR_TEXT("3D BATTLE", "COMBATE 3D", "COMBAT 3D", "BATTAGLIA 3D"))};
 
     memcpy(names, table, sizeof(table));
@@ -6295,10 +6306,10 @@ static bool8 DirtyRect(const ViewState *now, const ViewState *shown, Rect *r)
         probe.clockMinute = shown->clockMinute;
         if (memcmp(&probe, shown, sizeof(probe)) != 0)
             return FALSE;
-        r->x0 = NAME_X;
-        r->y0 = NAME_Y;
-        r->x1 = NAME_X + NAME_W;
-        r->y1 = NAME_Y + NAME_H;
+        r->x0 = CLOCK_X;
+        r->y0 = CLOCK_Y;
+        r->x1 = CLOCK_X + CLOCK_W;
+        r->y1 = CLOCK_Y + CLOCK_H;
         return TRUE;
     }
 
@@ -7892,7 +7903,6 @@ static bool8 MoveMapCursor(const ViewState *from, const ViewState *to)
                    NAME_H * sizeof(u16));
         ResolveFonts();
         DrawRegionName(to);
-        DrawMapClock(to);
         CtrBottom_BlitRect(sCanvas, NAME_X, NAME_Y, NAME_X + NAME_W, NAME_Y + NAME_H);
     }
     for (int k = 0; k < 2; ++k)

@@ -63,7 +63,7 @@ diff --git a/src/item_use.c b/src/item_use.c
  #include "item_use.h"
  #include "battle.h"
  #include "battle_pyramid.h"
-@@ -874,12 +877,42 @@
+@@ -874,12 +877,46 @@
      if (!IsSEPlaying())
      {
          VarSet(VAR_REPEL_STEP_COUNT, GetItemHoldEffectParam(gSpecialVar_ItemId));
@@ -83,6 +83,10 @@ diff --git a/src/item_use.c b/src/item_use.c
 +// Not in the Battle Pyramid, whose Repels are in a bag of its own.
 +#if defined(PORT_BRIDGE) && GAME_LANGUAGE == LANGUAGE_SPANISH
 +const u8 gText_UseAnotherRepel[] = _("¿Usar otro {STR_VAR_1}?");
++#elif defined(PORT_BRIDGE) && GAME_LANGUAGE == LANGUAGE_FRENCH
++const u8 gText_UseAnotherRepel[] = _("Utiliser un autre {STR_VAR_1}?");
++#elif defined(PORT_BRIDGE) && GAME_LANGUAGE == LANGUAGE_ITALIAN
++const u8 gText_UseAnotherRepel[] = _("Usare un altro {STR_VAR_1}?");
 +#else
 +const u8 gText_UseAnotherRepel[] = _("Use another {STR_VAR_1}?");
 +#endif

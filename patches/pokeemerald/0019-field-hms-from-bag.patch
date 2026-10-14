@@ -40,7 +40,7 @@ diff --git a/src/item_use.c b/src/item_use.c
  #endif
  #include "item_use.h"
  #include "battle.h"
-@@ -789,8 +792,78 @@
+@@ -789,8 +792,82 @@
      SetUpItemUseCallback(taskId);
  }
  
@@ -95,6 +95,10 @@ diff --git a/src/item_use.c b/src/item_use.c
 +
 +#if GAME_LANGUAGE == LANGUAGE_SPANISH
 +static const u8 sText_UseFieldHmNow[] = _("¿Usar {STR_VAR_1} ahora?");
++#elif GAME_LANGUAGE == LANGUAGE_FRENCH
++static const u8 sText_UseFieldHmNow[] = _("Utiliser {STR_VAR_1} maintenant?");
++#elif GAME_LANGUAGE == LANGUAGE_ITALIAN
++static const u8 sText_UseFieldHmNow[] = _("Usare {STR_VAR_1} ora?");
 +#else
 +static const u8 sText_UseFieldHmNow[] = _("Use {STR_VAR_1} now?");
 +#endif

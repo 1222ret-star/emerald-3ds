@@ -358,6 +358,7 @@ bool CtrAudio_StartWorker(void (*mix)(void))
 {
     s32 priority = 0x30;
     int core = 2;
+    bool newModel = false;
 
     if (sWorker != NULL)
         return true;
@@ -369,7 +370,10 @@ bool CtrAudio_StartWorker(void (*mix)(void))
     svcGetThreadPriority(&priority, CUR_THREAD_HANDLE);
     /* Above the game thread: it only ever waits on the mix it asked for. */
     priority = priority > 0x18 ? priority - 1 : priority;
-    sWorker = threadCreate(Worker, NULL, 32 * 1024, priority, core, false);
+    /* Core 2 is a New 3DS's alone. An Old 3DS refuses it, but Azahar
+     * emulating one takes it and crashes, so only a New 3DS asks. */
+    if (R_SUCCEEDED(APT_CheckNew3DS(&newModel)) && newModel)
+        sWorker = threadCreate(Worker, NULL, 32 * 1024, priority, core, false);
     if (sWorker == NULL && R_SUCCEEDED(APT_SetAppCpuTimeLimit(CTR_AUDIO_SYSCORE_PERCENT)))
     {
         core = 1;

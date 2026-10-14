@@ -51,7 +51,7 @@ uint16_t CtrBottom_FilterKeys(uint16_t held);
 #define CTR_SECTION_BALL_TOP CTR_SECTION_RGB(22, 28, 23)
 #define CTR_SECTION_BALL_RADIUS 64
 /* The Poké Ball, 2R x 2R from the section's centre minus R: 0 nothing, 1
- * the line colour, 2 the top half's. Ready after CtrBottom_Init. */
+ * the line colour, 2 the bottom (lighter) half's. Ready after CtrBottom_Init. */
 const uint8_t *CtrBottom_BallMask(void);
 
 #endif

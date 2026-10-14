@@ -4,7 +4,8 @@
  *
  * Layout (little endian):
  *   "VXL4", u16 layouts, u16 side (5)
- *   layouts x 14: u16 layout id, u16 cells, u16 width, u16 height (bit 15:
+ *   layouts x 14: u16 layout id, u16 cells, u16 width (bit 15: level, its
+ *                 heights lift it straight up with no depth), u16 height (bit 15:
  *                 drawn; bit 14: heights in units of 2 pixels; bits 10-13:
  *                 the belt's courses, see VoxelRelief_Belt), u32 offset,
  *                 s16 base (pixels: the level the whole map stands at)
@@ -22,7 +23,7 @@
  *   and last u32 the table's offset, "CUTS".
  *
  * A point's depth is its height ((u, h, v + h)), so the file does not carry
- * it. The heights are decoded to pixels at load: a drawn mountain can stand
+ * it; on a level map (bit 15 of its width) it has none. The heights are decoded to pixels at load: a drawn mountain can stand
  * taller than a signed byte of pixels.
  */
 #include <math.h>
@@ -55,6 +56,7 @@ typedef struct
     uint16_t layoutId, width, height, count;
     int16_t base;          /* pixels */
     bool drawn;            /* the relief is all of this map's terrain */
+    bool level;            /* heights with no depth: lifted straight up */
     uint8_t belt;          /* courses the border stands, as drawn (0: as ever) */
     const uint8_t *cells;  /* into sBlob: x, y and the stored heights */
     int16_t *heights;      /* GRID per cell, pixels */
@@ -165,7 +167,8 @@ bool VoxelRelief_Init(void)
 
         l->layoutId = (uint16_t)U16(row);
         l->base = (int16_t)U16(row + 12);
-        l->width = (uint16_t)U16(row + 4);
+        l->width = (uint16_t)(U16(row + 4) & 0x03FF);
+        l->level = (U16(row + 4) & 0x8000) != 0;
         unsigned unit = (U16(row + 6) & 0x4000) ? 2 : 1;
 
         l->height = (uint16_t)(U16(row + 6) & 0x03FF);
@@ -447,7 +450,13 @@ const int16_t *VoxelRelief_Cell(const VoxelMapInstance *inst, int x, int y)
 
 const int16_t *VoxelRelief_Depth(const VoxelMapInstance *inst, int x, int y)
 {
-    return VoxelRelief_Cell(inst, x, y);
+    static const int16_t kNone[GRID];
+    const ReliefLayout *l = LayoutOf(inst);
+    int k = Find(l, inst, x, y);
+
+    if (k < 0)
+        return NULL;
+    return l->level ? kNone : l->heights + (unsigned)k * GRID;
 }
 
 static int Find(const ReliefLayout *l, const VoxelMapInstance *inst, int x, int y)
@@ -575,7 +584,7 @@ static void Point(const ReliefLayout *l, unsigned i, unsigned j, int *h, int *d)
     inst.layoutId = l->layoutId;
     k = Find(l, &inst, (int)x, (int)y);
     *h = k >= 0 ? l->heights[(unsigned)k * GRID + b * VOXEL_RELIEF_SIDE + a] : 0;
-    *d = *h;
+    *d = l->level ? 0 : *h;
 }
 
 /* Each column of the drawing, walked down its rows, runs south through the

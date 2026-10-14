@@ -81,7 +81,7 @@ index 50b0c8e..9ee2c85 100644
  	specialvar VAR_RESULT, IsWirelessAdapterConnected
  	goto_if_eq VAR_RESULT, FALSE, CableClub_EventScript_UnionRoomAdapterNotConnected
  	message CableClub_Text_WelcomeUnionRoomEnter
-@@ -951,6 +960,42 @@ CableClub_EventScript_DontAskAboutLinking::
+@@ -951,6 +960,83 @@ CableClub_EventScript_DontAskAboutLinking::
  	release
  	return
  
@@ -108,6 +108,46 @@ index 50b0c8e..9ee2c85 100644
 +	msgbox CableClub_Text_LocalOtherBuild, MSGBOX_DEFAULT
 +	return
 +
++#if GAME_LANGUAGE == LANGUAGE_SPANISH
++CableClub_Text_LocalLooking:
++	.string "Buscando jugadores cercanos…$"
++
++CableClub_Text_LocalOtherBuild:
++	.string "El jugador cercano tiene otra\n"
++	.string "versión del juego.\p"
++	.string "Las dos consolas deben tener la\n"
++	.string "misma versión para jugar juntas.$"
++
++CableClub_Text_LocalFailed:
++	.string "No se pudo iniciar la conexión\n"
++	.string "inalámbrica. ¿Está activada?$"
++#elif GAME_LANGUAGE == LANGUAGE_FRENCH
++CableClub_Text_LocalLooking:
++	.string "Recherche de joueurs à proximité…$"
++
++CableClub_Text_LocalOtherBuild:
++	.string "Le joueur à proximité a une autre\n"
++	.string "version du jeu.\p"
++	.string "Les deux consoles doivent avoir la\n"
++	.string "même version pour jouer ensemble.$"
++
++CableClub_Text_LocalFailed:
++	.string "Impossible de lancer la connexion\n"
++	.string "sans fil. Est-elle activée?$"
++#elif GAME_LANGUAGE == LANGUAGE_ITALIAN
++CableClub_Text_LocalLooking:
++	.string "Ricerca di altri giocatori vicini…$"
++
++CableClub_Text_LocalOtherBuild:
++	.string "Il giocatore vicino ha una\n"
++	.string "versione diversa del gioco.\p"
++	.string "Per giocare insieme, le console\n"
++	.string "devono avere la stessa versione.$"
++
++CableClub_Text_LocalFailed:
++	.string "Impossibile avviare la connessione\n"
++	.string "wireless. È attiva?$"
++#else
 +CableClub_Text_LocalLooking:
 +	.string "Looking for other players nearby…$"
 +
@@ -120,11 +160,12 @@ index 50b0c8e..9ee2c85 100644
 +CableClub_Text_LocalFailed:
 +	.string "The wireless connection couldn't be\n"
 +	.string "started. Is wireless turned on?$"
++#endif
 +
  CableClub_EventScript_DirectCornerAttendant::
  	lock
  	faceplayer
-@@ -958,6 +1003,11 @@ CableClub_EventScript_DirectCornerAttendant::
+@@ -958,6 +1044,11 @@ CableClub_EventScript_DirectCornerAttendant::
  	goto_if_unset FLAG_SYS_POKEDEX_GET, CableClub_EventScript_WirelessClubAdjustements
  	specialvar VAR_RESULT, IsBadEggInParty
  	goto_if_eq VAR_RESULT, TRUE, CableClub_EventScript_AbortLinkPlayerHasBadEgg
@@ -136,7 +177,7 @@ index 50b0c8e..9ee2c85 100644
  	specialvar VAR_RESULT, IsWirelessAdapterConnected
  	goto_if_eq VAR_RESULT, FALSE, CableClub_EventScript_WelcomeToCableClub
  	message CableClub_Text_WelcomeWhichDirectCornerRoom
-@@ -1291,6 +1341,11 @@ MossdeepCity_GameCorner_1F_EventScript_MinigameInfoExit::
+@@ -1291,6 +1382,11 @@ MossdeepCity_GameCorner_1F_EventScript_MinigameInfoExit::
  MossdeepCity_GameCorner_1F_EventScript_OldMan2::
  	lock
  	faceplayer

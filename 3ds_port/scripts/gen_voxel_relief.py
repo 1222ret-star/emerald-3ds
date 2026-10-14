@@ -859,6 +859,20 @@ STEP_SEAMS = {
         "the wood and the beach they share",
 }
 STEP_SEAM_WEIGHT = 1
+# The level a step seam gives up, laid over a whole map of open sea as a
+# slope instead of standing at the seam as a wall of water a level tall (seen
+# from Route 107 and from Route 108 alike, and walked through on the crossing).
+# The map keeps its base, where the world placed it; its sea leans from the
+# level its neighbour on one side has at the seam to the level of the one on
+# the other side - a level over its sixty cells, a pixel every four, so every
+# seam it has meets and nothing between Dewford and Slateport steps. Its
+# heights have no depth (level, in relief.bin): they lift it straight up, as
+# the bases either side of it do. As far south as high, its west edge stood a
+# row north of Route 107's and the player jumped a row on the crossing.
+SEA_RAMPS = {
+    "LAYOUT_ROUTE108": "open sea between the Dewford side (a level under) and "
+                       "Slateport's (Route 107 / Route 108, the step seam above)",
+}
 # Groups the world places by voxel_terraces.py's count of their levels
 # (region_ties) instead of this file's solve, and why. Only these: every
 # group read anew moves the world (all of them at once put steps at
@@ -1173,6 +1187,85 @@ def world_levels():
     _WORLD["broken"] = broken
     _WORLD["regions"], _WORLD["base"] = regions, base
     return _WORLD
+
+
+def sea_ramps(relief, quiet=False):
+    """SEA_RAMPS over a parsed relief.bin (voxel_relief_fixes.parse), in
+    place: each map's sea leans from the level of its west (north) neighbour
+    at their seam to that of its east (south) one, every lattice point by its
+    distance across the map, with no depth (level). The levels are read off
+    the neighbours as the file has them - after the terraces, whose blocks
+    keep the world's seams - the commonest height along the seam, each of its
+    cells' edge points over the base. Returns the maps changed."""
+    size = {e["id"]: (e["width"], e["height"])
+            for e in json.load(open(os.path.join(vb.ROOT, "data", "layouts", "layouts.json"),
+                                    encoding="utf-8"))["layouts"] if e.get("id")}
+    links = map_links()
+    side = PER_CELL + 1
+    edge_points = {"left": [j * side for j in range(side)],
+                   "right": [j * side + side - 1 for j in range(side)],
+                   "up": list(range(side)),
+                   "down": [(side - 1) * side + i for i in range(side)]}
+
+    def edge_cell(lid, edge, i):
+        w, h = size[lid]
+        return {"down": (i, h - 1), "up": (i, 0), "right": (w - 1, i), "left": (0, i)}[edge]
+
+    def level_at(lid, direction):
+        """The commonest height of the neighbour `direction` of lid along
+        their seam, pixels in the world; None if there is none."""
+        found = collections.Counter()
+        for (a, b, d, off) in links:
+            if a != lid or d != direction:
+                continue
+            t = relief["layouts"].get(voxel_relief_fixes.layout_index(b))
+            base = t["base"] if t else 0
+            for (_, _, eb, ib) in _seam_cells(a, b, d, off, size):
+                g = t["cells"].get(edge_cell(b, eb, ib)) if t else None
+                for k in edge_points[eb]:
+                    found[base + (g[k] if g else 0)] += 1
+        return found.most_common(1)[0][0] if found else None
+
+    changed = []
+    for lid in sorted(SEA_RAMPS):
+        index = voxel_relief_fixes.layout_index(lid)
+        w, h = size[lid]
+        for (lo, hi, across) in (("left", "right", True), ("up", "down", False)):
+            start, end = level_at(lid, lo), level_at(lid, hi)
+            if start is not None and end is not None and start != end:
+                break
+        else:
+            continue
+        t = relief["layouts"].setdefault(index, {"w": w, "h": h, "flags": 0, "base": 0, "belt": 0,
+                                                 "cells": {}})
+        if t["flags"] & (voxel_relief_fixes.UNIT2 | voxel_relief_fixes.DRAWN):
+            raise ValueError("%s: a sea ramp over a drawn map's relief" % lid)
+        if t["cells"]:
+            # a ledge's berm would lose its depth with the map's
+            raise ValueError("%s: a sea ramp over a map with relief of its own" % lid)
+        t["level"] = True
+        span = float(w if across else h)
+        for y in range(h):
+            for x in range(w):
+                g = [0] * (side * side)
+                for j in range(side):
+                    for i in range(side):
+                        f = ((x + i / float(PER_CELL)) if across else (y + j / float(PER_CELL))) / span
+                        v = start + (end - start) * f - t["base"]
+                        g[j * side + i] += int(math.floor(v + 0.5))
+                if any(g):
+                    t["cells"][(x, y)] = g
+        changed.append(lid)
+        if not quiet:
+            print("sea ramp %-30s %+d px at its %s seam to %+d px at its %s one, on a base of %+d px"
+                  % (lid, start, lo, end, hi, t["base"]))
+    return changed
+
+
+def apply_sea_ramps(path, quiet=False):
+    relief = voxel_relief_fixes.parse(open(path, "rb").read())
+    if sea_ramps(relief, quiet):
+        open(path, "wb").write(voxel_relief_fixes.pack(relief))
 
 
 def drawn_canvas(name):
@@ -3908,7 +4001,9 @@ def export(layout_ids, path):
     a map read off its drawing (DRAWN): its relief is the whole of the terrain,
     and every blocked cell of rock is written, level or not. Bit 14 says its
     heights are in units of HEIGHT_UNIT pixels (a mountain stands taller than
-    a byte of pixels). A point's depth is its height, so it is not written."""
+    a byte of pixels). A point's depth is its height, so it is not written;
+    bit 15 of the width (set by sea_ramps) says it has none, the heights
+    lifting the map straight up as its base does."""
     layouts = json.load(open(os.path.join(vb.ROOT, "data", "layouts", "layouts.json"),
                              encoding="utf-8"))["layouts"]
     index = {e["id"]: i + 1 for i, e in enumerate(layouts)}
@@ -4063,6 +4158,8 @@ def main():
         # (voxel_terraces.py) over the solve, in the world it placed
         import voxel_terraces
         voxel_terraces.apply_file(args.output)
+        # the level a step seam gives up, as a slope across the open sea
+        apply_sea_ramps(args.output)
         # the hand corrections (assets/voxel/relief_fixes.json) over the drawing's
         if not os.environ.get("VOXEL_RELIEF_NO_FIXES"):
             voxel_relief_fixes.apply_file(args.output)

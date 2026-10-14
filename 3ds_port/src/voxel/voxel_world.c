@@ -720,6 +720,11 @@ bool VoxelWorld_Underground(void)
     return gMapHeader.mapType == MAP_TYPE_UNDERGROUND;
 }
 
+bool VoxelWorld_MapIsConnected(void)
+{
+    return gMapHeader.connections != NULL && gMapHeader.connections->count > 0;
+}
+
 /*
  * The fade the game has put on the background palettes, as one blend towards
  * a colour. The world's textures are baked from the tilesets' own palettes,

@@ -22,10 +22,14 @@ typedef uint8_t u8; typedef uint16_t u16; typedef bool bool8;
 #define W 320
 #define H 240
 #define CW 240
+#define CLOCK_X 5
+#define CLOCK_Y 5
+#define CLOCK_W 230
+#define CLOCK_H 15
 #define MAP_ORIGIN_X 8
-#define MAP_ORIGIN_Y 8
+#define MAP_ORIGIN_Y 28
 #define MAP_WIN_X0 4
-#define MAP_WIN_Y0 8
+#define MAP_WIN_Y0 28
 #define MAP_WIN_X1 236
 #define MAP_WIN_Y1 196
 #define NAME_X 5
@@ -121,10 +125,10 @@ static void CheckFooter(ViewState from,ViewState to) {
     sDst=sCanvas;memcpy(sCanvas,cache,sizeof(cache));DrawRegionMap(&from);
     sDst=expected;memcpy(expected,cache,sizeof(cache));DrawRegionMap(&to);
     assert(DirtyRect(&to,&from,&rect));
-    assert(rect.x0==NAME_X&&rect.y0==NAME_Y&&rect.x1==NAME_X+NAME_W&&rect.y1==NAME_Y+NAME_H);
+    assert(rect.x0==CLOCK_X&&rect.y0==CLOCK_Y&&rect.x1==CLOCK_X+CLOCK_W&&rect.y1==CLOCK_Y+CLOCK_H);
     for(int column=rect.x0;column<rect.x1;++column)for(int row=rect.y0;row<rect.y1;++row)
         sCanvas[column*H+H-1-row]=cache[column*H+H-1-row];
-    sDst=sCanvas;DrawRegionName(&to);DrawMapClock(&to);
+    sDst=sCanvas;DrawMapClock(&to);
     assert(!memcmp(expected,sCanvas,sizeof(expected)));
     to.enabled++;assert(!DirtyRect(&to,&from,&rect));
 }

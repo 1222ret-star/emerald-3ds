@@ -470,6 +470,22 @@ static void AnimatedTiles(void)
             }
             assert(seen == 3 && calls >= 2);
         }
+        /* The atlas of a map beside the current one, sharing its primary:
+         * the same three when they are drawn from primary tiles alone, and
+         * one with a secondary tile in it (BG VRAM holds another map's) left
+         * as it is - the current map's own pass still redraws it. */
+        {
+            static VoxelAnimSlot out[4];
+            unsigned cursor = 0;
+
+            assert(VoxelAtlas_SharedAnimatedSlots(&inst, &map, 0, live, dirty, &cursor, out, 4) == 3);
+            sMetatiles[66 * 8 + 5] = 600;
+            cursor = 0;
+            assert(VoxelAtlas_SharedAnimatedSlots(&inst, &map, 0, live, dirty, &cursor, out, 4) == 2);
+            cursor = 0;
+            assert(VoxelAtlas_AnimatedSlots(&inst, &map, 0, live, dirty, &cursor, out, 4) == 3);
+            sMetatiles[66 * 8 + 5] = 0;
+        }
         memset(dirty, 0, sizeof(dirty));
         assert(VoxelAtlas_RefreshAnimatedPageRows(&inst, &map, 0, sOneGo, live, dirty, &rows) == 0
             && rows == 0);
