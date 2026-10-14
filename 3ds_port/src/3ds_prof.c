@@ -333,7 +333,7 @@ static void Record(float workMs, float waitMs, uint64_t frame, float profilerMs)
     r.stereo = video->stereo > 255 ? 255 : (uint8_t)video->stereo;
     r.flat = video->flat;
     r.missed = missed > 255 ? 255 : (uint8_t)missed;
-    r.flags = (video->voxelFrame ? 1 : 0) | (CtrScenario_Playing() ? 2 : 0) | (CtrSettings_Speed() > 1 ? 4 : 0);
+    r.flags = (video->voxelFrame ? 1 : 0) | (CtrScenario_Playing() ? 2 : 0) | (CtrSettings_SpeedHalves() > 2 ? 4 : 0);
     r.t[T_READY] = Units(workMs);
     r.t[T_GAME] = Units(timing->gameMs);
     r.t[T_BOTTOM] = Units(timing->bottomMs);

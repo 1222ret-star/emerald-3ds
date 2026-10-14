@@ -54,6 +54,8 @@ int VoxelWorld_BorderMetatile(int x, int y)
     return pattern[((x - sMap.originX) & 1) + 2 * ((y - sMap.originY) & 1)];
 }
 
+bool VoxelWorld_BorderIsWater(int x, int y) { (void)x; (void)y; return false; }
+
 void VoxelWorld_GetPlayerWorldCoords(float *x, float *z) { *x = *z = 0; }
 
 unsigned VoxelRegions_RoleAt(unsigned layoutId, int x, int y)

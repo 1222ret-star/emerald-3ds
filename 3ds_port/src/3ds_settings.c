@@ -8,6 +8,7 @@
  * keys are ignored, so older and newer builds can share the file.
  */
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <3ds.h>
 #include "3ds_platform.h"
@@ -42,9 +43,10 @@ static bool sShowFps = false;
 /* Running without holding B (the bottom screen's RUN button; B then walks):
  * off unless turned on. */
 static bool sRunAlways = false;
-/* Fast-forward: game frames per shown frame (3ds_platform.c, FrameShown);
- * 1 is normal speed. */
-static const int sSpeeds[] = {1, 2, 3, 4};
+/* Fast-forward: game frames per shown frame (3ds_platform.c, FrameShown),
+ * in halves so 1.5x fits; 2 is normal speed. settings.txt writes it as
+ * speed=1, speed=1.5, speed=2 ... */
+static const int sSpeeds[] = {2, 3, 4, 6, 8};
 static int sSpeed = 0;
 
 /*
@@ -115,8 +117,8 @@ void CtrSettings_ApplyLine(const char *line)
         sShowFps = line[4] == '1';
     else if (strncmp(line, "run=", 4) == 0)
         sRunAlways = line[4] == '1';
-    else if (sscanf(line, "speed=%d", &value) == 1)
-        sSpeed = Find(sSpeeds, COUNT(sSpeeds), value, sSpeed);
+    else if (strncmp(line, "speed=", 6) == 0)
+        sSpeed = Find(sSpeeds, COUNT(sSpeeds), (int)(strtof(line + 6, NULL) * 2 + 0.5f), sSpeed);
     else
     {
         char key[sizeof(sExtra[0].key)];
@@ -140,9 +142,10 @@ void CtrSettings_Load(void)
     while (fgets(line, sizeof(line), file))
         CtrSettings_ApplyLine(line);
     fclose(file);
-    CtrLog_Write(CTR_LOG_FS, "settings: voxel=%d pitch=%d zoom=%d blur=%d battle=%d fps=%d run=%d speed=%d",
+    CtrLog_Write(CTR_LOG_FS, "settings: voxel=%d pitch=%d zoom=%d blur=%d battle=%d fps=%d run=%d speed=%d%s",
                  sVoxel ? 1 : 0, sPitches[sPitch], sZooms[sZoom], sBlurs[sBlur],
-                 sVoxelBattle ? 1 : 0, sShowFps ? 1 : 0, sRunAlways ? 1 : 0, sSpeeds[sSpeed]);
+                 sVoxelBattle ? 1 : 0, sShowFps ? 1 : 0, sRunAlways ? 1 : 0,
+                 sSpeeds[sSpeed] / 2, sSpeeds[sSpeed] & 1 ? ".5" : "");
 }
 
 /*
@@ -209,9 +212,9 @@ int CtrSettings_Text(char *text, unsigned size)
 {
     int used = snprintf(text, size,
              "voxel=%d\nvoxel_pitch=%d\nvoxel_zoom=%d\nvoxel_blur=%d\nvoxel_battle=%d\nfps=%d\nrun=%d\n"
-             "speed=%d\n",
+             "speed=%d%s\n",
              sVoxel ? 1 : 0, sPitches[sPitch], sZooms[sZoom], sBlurs[sBlur], sVoxelBattle ? 1 : 0,
-             sShowFps ? 1 : 0, sRunAlways ? 1 : 0, sSpeeds[sSpeed]);
+             sShowFps ? 1 : 0, sRunAlways ? 1 : 0, sSpeeds[sSpeed] / 2, sSpeeds[sSpeed] & 1 ? ".5" : "");
     for (int i = 0; i < sExtraCount && used >= 0 && used < (int)size; ++i)
         used += snprintf(text + used, size - used, "%s=%d\n", sExtra[i].key, sExtra[i].value);
     return used;
@@ -320,7 +323,7 @@ void CtrSettings_StepVoxelZoom(int direction)
     Step(&sZoom, COUNT(sZooms), direction);
 }
 
-int CtrSettings_Speed(void)
+int CtrSettings_SpeedHalves(void)
 {
     return sSpeeds[sSpeed];
 }
@@ -333,7 +336,7 @@ void CtrSettings_StepSpeed(int direction, bool wrap)
     if (!wrap && (next < 0 || next >= COUNT(sSpeeds)))
         return;
     Step(&sSpeed, COUNT(sSpeeds), direction);
-    CtrLog_Write(CTR_LOG_FS, "settings: speed=%d", sSpeeds[sSpeed]);
+    CtrLog_Write(CTR_LOG_FS, "settings: speed=%d%s", sSpeeds[sSpeed] / 2, sSpeeds[sSpeed] & 1 ? ".5" : "");
 }
 
 bool CtrSettings_VoxelBlur(void)

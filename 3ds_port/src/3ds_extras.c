@@ -167,7 +167,7 @@ static void GiveBack(void)
 }
 
 /*
- * Fast-forward's SPEED (1x to 4x; settings.txt speed=, ZR/ZL on a New 3DS):
+ * Fast-forward's SPEED (1x, 1.5x, 2x, 3x, 4x; settings.txt speed=, ZR/ZL on a New 3DS):
  * with the tabs, a cell of ENHANCEMENTS rather than a seventh row of
  * SETTINGS.
  */
@@ -178,11 +178,18 @@ static void SpeedStep(int direction)
 
 static const u8 *SpeedText(void)
 {
-    static u8 text[4];
+    static u8 text[6];
+    int halves = CtrSettings_SpeedHalves();
+    u8 *end = text;
 
-    text[0] = CHAR_0 + CtrSettings_Speed();
-    text[1] = CHAR_x;
-    text[2] = EOS;
+    *end++ = CHAR_0 + halves / 2;
+    if (halves & 1)
+    {
+        *end++ = CHAR_PERIOD;
+        *end++ = CHAR_5;
+    }
+    *end++ = CHAR_x;
+    *end = EOS;
     return text;
 }
 

@@ -781,6 +781,8 @@ void VoxelMesh_BeginWindow(int x0, int y0, int x1, int y1)
  * drawing, hanging from the edge to the ground beyond it, so the seam is a
  * low wall and never a gap onto the clear colour.
  */
+static bool BorderWaterLevel(int x, int y, float *level, float *shift);
+
 static void EmitSeamSkirt(VoxelBuilder *b, const VoxelMapInstance *inst, int x, int y)
 {
     static const int kDir[4][2] = { {0, -1}, {0, 1}, {-1, 0}, {1, 0} };
@@ -822,10 +824,14 @@ static void EmitSeamSkirt(VoxelBuilder *b, const VoxelMapInstance *inst, int x, 
             const int16_t *depth = VoxelRelief_Depth(inst, x, y);
             const unsigned last = VOXEL_RELIEF_SIDE - 1;
             float footH[VOXEL_RELIEF_SIDE], footZ[VOXEL_RELIEF_SIDE], along[VOXEL_RELIEF_SIDE];
-            float lowest = belt;
+            float lowest, level, shift;
 
             if (ring == NULL || VoxelRelief_Belt(ring) != 0)
                 continue;
+            /* a belt of water lies at its own level (BorderWaterLevel) */
+            if (BorderWaterLevel(nx, ny, &level, &shift))
+                belt += level;
+            lowest = belt;
             for (unsigned k = 0; k < VOXEL_RELIEF_SIDE; ++k)
             {
                 /* the north row, or the west or east column */
@@ -1534,6 +1540,37 @@ static bool BorderAt(int x, int y)
     return VoxelMesh_Classify(x, y) == VOXEL_SHAPE_VOID;
 }
 
+/*
+ * A belt of water (Slateport's sea, Lilycove's, every route's out at sea)
+ * is no wall: stood two courses up like a wood it was a step of sea standing
+ * over the map's own, a raised rim round the whole of the harbour. Water lies
+ * flush with the ground (ShapeHeight), and the belt's lies flush with the
+ * map's: at the level of the map's edge cell nearest it when that is water
+ * (a sea lowered under the land, Rustboro's, goes on at its own level), at
+ * the map's ground otherwise. Over instance 0's base, as the belt is built.
+ */
+static bool BorderWaterLevel(int x, int y, float *level, float *shift)
+{
+    const VoxelMapInstance *ring = VoxelWorld_Instance(0);
+    int ex, ey;
+
+    if (ring == NULL || ring->indoor || VoxelRelief_Belt(ring) != 0
+     || !VoxelWorld_BorderIsWater(x, y))
+        return false;
+    ex = x < ring->originX ? ring->originX
+       : x >= ring->originX + ring->width ? ring->originX + ring->width - 1 : x;
+    ey = y < ring->originY ? ring->originY
+       : y >= ring->originY + ring->height ? ring->originY + ring->height - 1 : y;
+    *level = 0.0f;
+    *shift = 0.0f;
+    if (VoxelMesh_Classify(ex, ey) == VOXEL_SHAPE_WATER)
+    {
+        *level = VoxelRelief_CellLift(ring, ex, ey);
+        *shift = VoxelRelief_CellShift(ring, ex, ey);
+    }
+    return true;
+}
+
 void VoxelMesh_EmitBorder(VoxelBuilder *builder, int x0, int y0, int x1, int y1)
 {
     float u0, v0, u1, v1;
@@ -1559,16 +1596,26 @@ void VoxelMesh_EmitBorder(VoxelBuilder *builder, int x0, int y0, int x1, int y1)
              * belt that reaches the whole way to the horizon is never seen,
              * and drawing it is most of the tiles in the window. */
             bool south, east, west;
+            float level, shift;
 
             if (!BorderAt(x, y))
                 continue;
+            if (BorderWaterLevel(x, y, &level, &shift))
+            {
+                /* flat, and no faces: the map's own edge closes any step */
+                if (MetatileUV(builder, VoxelWorld_BorderMetatile(x, y), &u0, &v0, &u1, &v1))
+                    VoxelMesh_Top(builder, wx, wz + shift, level, 0.0f,
+                                  u0, v0, u1, v1, SHADE_TOP);
+                continue;
+            }
             if (VoxelWorld_UsesTreeSprites(VoxelWorld_Instance(0))
              && VoxelTree_Part(VoxelWorld_Instance(0)->secondaryTileset,
                                VoxelWorld_BorderMetatile(x, y)) >= 0)
                 continue; /* flat trunks and tilted crowns are appended later */
-            south = !BorderAt(x, y + 1);
-            east = !BorderAt(x + 1, y);
-            west = !BorderAt(x - 1, y);
+            /* a standing cell beside a flat one of water shows its face too */
+            south = !BorderAt(x, y + 1) || BorderWaterLevel(x, y + 1, &level, &shift);
+            east = !BorderAt(x + 1, y) || BorderWaterLevel(x + 1, y, &level, &shift);
+            west = !BorderAt(x - 1, y) || BorderWaterLevel(x - 1, y, &level, &shift);
             /* Laid as drawn, a cell's top is its own drawing; stood where it
              * is tiled, the column reads the rows above it. */
             if (MetatileUV(builder, VoxelWorld_BorderMetatile(x, drawn ? y : y - (int)courses + 1),

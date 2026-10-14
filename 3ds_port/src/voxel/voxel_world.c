@@ -1018,6 +1018,15 @@ int VoxelWorld_BorderMetatile(int worldX, int worldY)
     return (int)(border[index] & MAPGRID_METATILE_ID_MASK);
 }
 
+bool VoxelWorld_BorderIsWater(int worldX, int worldY)
+{
+    int metatileId = VoxelWorld_BorderMetatile(worldX, worldY);
+
+    return metatileId >= 0 && !sInstances[0].indoor
+        && BehaviorShape(UNPACK_BEHAVIOR(GetMetatileAttribute(&sInstances[0], metatileId)))
+           == VOXEL_SHAPE_WATER;
+}
+
 static unsigned AddPayload(const void **payloads, unsigned count, unsigned max, const void *ptr)
 {
     if (ptr == NULL || count >= max)

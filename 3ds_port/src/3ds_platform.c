@@ -205,8 +205,10 @@ bool CtrPlatform_BeginFrame(void)
 }
 
 /*
- * Fast-forward (CtrSettings_Speed). Of every `speed` game frames only the last
- * is presented and waits for the display; the others run back to back. Only
+ * Fast-forward (CtrSettings_SpeedHalves). Each game frame earns two halves;
+ * a frame is presented and waits for the display once `speed` halves have
+ * been earned, the others run back to back: at 2x one frame in two is shown,
+ * at 1.5x two in three. Only
  * a presented frame ticks the sound engine (CtrPlatform_SoundTick), so music
  * and effects keep their speed while the game runs faster. A frame is also
  * presented as soon as one more hidden frame and the present would no longer
@@ -216,6 +218,8 @@ bool CtrPlatform_BeginFrame(void)
  */
 #define FRAME_MS (1000.0f / 60)
 static bool sSoundTick = true;
+static unsigned sEarned;
+/* Real-time pacing's hidden frame (PaceBehind): never two in a row. */
 static unsigned sHidden;
 static uint64_t sShownTick;
 static float sPresentMs = 4.0f;
@@ -280,10 +284,10 @@ static bool FrameShown(uint64_t now)
 {
     /* In a local wireless session everyone plays at the same speed: the link
      * code times out on a partner that runs slower. */
-    int speed = LocalLink_InSession() ? 1 : CtrSettings_Speed();
+    unsigned speed = LocalLink_InSession() ? 2 : CtrSettings_SpeedHalves();
     float since = sShownTick ? (now - sShownTick) * 1000.0f / SYSCLOCK_ARM11 : FRAME_MS;
 
-    if (sPace && speed <= 1)
+    if (sPace && speed <= 2)
     {
         bool behind = PaceBehind(now);
 
@@ -295,9 +299,15 @@ static bool FrameShown(uint64_t now)
         sHidden = 0;
         return true;
     }
-    if (speed <= 1 || ++sHidden >= (unsigned)speed || since + sTiming.gameMs + sPresentMs > FRAME_MS)
+    sEarned += 2;
+    if (speed <= 2 || since + sTiming.gameMs + sPresentMs > FRAME_MS)
     {
-        sHidden = 0;
+        sEarned = 0;
+        return true;
+    }
+    if (sEarned >= speed)
+    {
+        sEarned -= speed;
         return true;
     }
     return false;

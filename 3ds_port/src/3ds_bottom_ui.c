@@ -503,6 +503,8 @@ static struct
     Pal typePal[3];
     const u8 *categoryTiles;
     Pal categoryPal;
+    /* The SAVE view's party. */
+    Pal monIconPal[3];
     /* Region map. */
     u8 *mapTiles;
     u32 mapTileCount;
@@ -609,6 +611,8 @@ static void LoadResources(void)
         sRes.categoryTiles = GetMoveCategoryIconGfx(&pal);
         ToPals(&sRes.categoryPal, pal, 1);
     }
+    for (int i = 0; i < 3; ++i)
+        PalSymbol(gMonIconPaletteTable[i].data, &sRes.monIconPal[i], 1);
 
     sRes.mapTiles = UnlzFile("pokenav/region_map/map.8bpp.lz", &size);
     sRes.mapTileCount = size / 64;
@@ -659,6 +663,43 @@ static void LoadResources(void)
  */
 static bool8 sIconBudget;
 static u32 sIconClock;
+
+/* Mon icons, the first of their two 32x32 frames: the SAVE view's party. */
+static struct
+{
+    u16 key;
+    u32 age;
+    u8 tiles[512];
+} sMonIcons[PARTY_SIZE];
+
+static const u8 *MonIcon(u16 iconSpecies, bool8 deoxysForm)
+{
+    u16 key = iconSpecies | (deoxysForm ? 0x8000 : 0);
+    int victim = 0;
+    const u8 *src;
+
+    for (int i = 0; i < PARTY_SIZE; ++i)
+    {
+        if (sMonIcons[i].key == key && key != 0)
+        {
+            sMonIcons[i].age = ++sIconClock;
+            return sMonIcons[i].tiles;
+        }
+        if (sMonIcons[i].age < sMonIcons[victim].age)
+            victim = i;
+    }
+    if (iconSpecies >= SPECIES_EGG + 28 || iconSpecies == SPECIES_NONE || !sIconBudget)
+        return NULL;
+    sIconBudget = FALSE;
+    src = Port_ResolveAssetPointer(gMonIconTable[iconSpecies]);
+    if (!src)
+        return NULL;
+    /* Deoxys keeps its alternate form in the same file, 0x400 in. */
+    memcpy(sMonIcons[victim].tiles, src + (deoxysForm ? 0x400 : 0), 512);
+    sMonIcons[victim].key = key;
+    sMonIcons[victim].age = ++sIconClock;
+    return sMonIcons[victim].tiles;
+}
 
 /* Item icons: 24x24 with their own palette. */
 #define ITEM_ICON_SLOTS 24
@@ -2387,7 +2428,7 @@ typedef struct
     u16 id, dex, hours;
     u32 money;
     /* Save and options. */
-    u8 saveStep, canSave;
+    u8 saveStep, canSave, frame;
     u8 options[OPTION_ROWS];
     /* The OPTIONS page on show (CTR_EXTRAS_*) and the values of its extras,
      * in table order. */
@@ -2406,7 +2447,7 @@ typedef struct
     u8 safariBalls;
     u8 partyBalls[PARTY_SIZE];        /* PARTY_BALL_*, as the game's party indicator */
     struct ChooseMoveStruct moves4;
-    u8 text[96];
+    u8 text[256];
 } ViewState;
 
 /* Which of the game's bag is on show. */
@@ -2540,7 +2581,8 @@ static s8 sSummary = -1;
 #endif
 static u8 sPickMapsec = MAPSEC_NONE, sPickX, sPickY;
 static u8 sSaveStep;
-static u8 sSaveMessage[96];
+/* Room for the longest, gText_DifferentSaveFile (some 230 bytes). */
+static u8 sSaveMessage[256];
 
 enum { SAVE_ASK, SAVE_OVERWRITE, SAVE_DONE };
 
@@ -3164,6 +3206,28 @@ static void SnapshotCard(ViewState *s)
             s->badges |= 1 << i;
 }
 
+/* The save view's file: the card's figures, where the player is, the
+ * party's icons and the window frame the player chose. */
+static void SnapshotSave(ViewState *s)
+{
+    SnapshotCard(s);
+    s->mapsec = gMapHeader.regionMapSectionId;
+    s->frame = gSaveBlock2Ptr->optionsWindowFrameType;
+    for (int i = 0; i < PARTY_SIZE && i < gPlayerPartyCount; ++i)
+    {
+        struct Pokemon *mon = &gPlayerParty[i];
+        u16 species = GetMonData(mon, MON_DATA_SPECIES);
+        MonView *view = &s->party[i];
+
+        if (species == SPECIES_NONE)
+            continue;
+        view->species = species;
+        view->isEgg = GetMonData(mon, MON_DATA_IS_EGG);
+        view->iconSpecies = view->isEgg ? SPECIES_EGG : GetIconSpecies(species, GetMonData(mon, MON_DATA_PERSONALITY));
+        view->deoxys = species == SPECIES_DEOXYS;
+    }
+}
+
 /* The party ball states, as battle_interface.c's party indicator has them. */
 enum { PARTY_BALL_OK, PARTY_BALL_STATUS, PARTY_BALL_FAINT, PARTY_BALL_EMPTY };
 
@@ -3342,6 +3406,7 @@ static void Snapshot(ViewState *s, u8 mode, u8 pressed)
             SnapshotCard(s);
             break;
         case SCR_SAVE:
+            SnapshotSave(s);
             s->saveStep = sSaveStep;
             s->canSave = FieldIdle();
             CopyText(s->text, sizeof(s->text), sSaveMessage);
@@ -3397,6 +3462,9 @@ static void Snapshot(ViewState *s, u8 mode, u8 pressed)
 static bool8 Prefetch(const ViewState *s)
 {
     sIconBudget = TRUE;
+    for (int i = 0; i < PARTY_SIZE && sIconBudget; ++i)
+        if (s->party[i].species)
+            MonIcon(s->party[i].iconSpecies, s->party[i].deoxys);
     if (sIconBudget && s->summary >= 0 && s->heldItem)
         ItemIcon(s->heldItem);
     if (sIconBudget && s->registered != ITEM_NONE && s->mode < MODE_BATTLE_INFO)
@@ -4267,19 +4335,6 @@ static void DrawTrainerCard(const ViewState *s)
 /* Drawing: save, options, PokéNav                                          */
 /* ------------------------------------------------------------------------ */
 
-static void DrawSave(const ViewState *s)
-{
-    DrawBox(BOX_MESSAGE, 0, 40, 30, 8);
-    DrawStr(&sNormal, s->text, 18, 52, TXT_WHITE, TXT_DARK);
-    if (s->saveStep == SAVE_DONE)
-    {
-        DrawLabelButton(64, 136, 14, 5, Ascii(CTR_TEXT("OK", "VALE", "OK", "OK")), s->pressed == HIT_OK, TRUE, HIT_OK);
-        return;
-    }
-    DrawLabelButton(8, 136, 13, 6, gText_Yes, s->pressed == HIT_YES, s->canSave, HIT_YES);
-    DrawLabelButton(128, 136, 13, 6, gText_No, s->pressed == HIT_NO, TRUE, HIT_NO);
-}
-
 static const u8 *OptionValue(int row, u8 value)
 {
     static u8 frame[16];
@@ -4332,6 +4387,159 @@ static void DrawWindowFrame(u8 type, int x, int y, int wt, int ht, u16 fill)
                 continue;
             DrawTile(tiles + (row * 3 + col) * 32, x + tx * 8, y + ty * 8, pal.c, FALSE, FALSE);
         }
+}
+
+/*
+ * SAVE: the question in the window frame the player chose (OPTIONS), the
+ * file as one big plate of the column's look - the trainer's picture in a
+ * tinted socket, name, ID, where the player is, the Pokédex, the time, the
+ * badges and the party's icons - and the answers as plates below.
+ */
+#define SAVE_MSG_X 8
+#define SAVE_MSG_Y 8
+#define SAVE_FILE_Y 51
+#define SAVE_PIC_X 18
+#define SAVE_PIC_Y 59
+#define SAVE_PIC_W 72
+#define SAVE_PIC_H 76
+#define SAVE_INFO_X0 98
+#define SAVE_INFO_X1 224
+#define SAVE_PARTY_Y 151
+#define SAVE_BUTTON_Y 201
+#define SAVE_BUTTON_H 34
+
+static int StrLines(const u8 *str)
+{
+    int lines = 1;
+
+    for (u16 g; (g = NextGlyph(&str)) != 0xFFFF;)
+        if (g == 0xFFFE)
+            ++lines;
+    return lines;
+}
+
+/* A label plate: the column's plate, green when it is the answer the game
+ * expects, grey while it cannot be chosen. */
+static void DrawSavePlate(int x, int w, const u8 *label, bool8 chosen, bool8 pressed, bool8 enabled, u8 id)
+{
+    const PlateLook *look = !enabled ? &sLook.off : chosen ? &sLook.chosen : &sLook.plate;
+    u16 fg = !enabled ? sLook.offText : chosen ? TXT_WHITE : TXT_DARK;
+    u16 sh = !enabled ? sLook.offShadow : chosen ? sLook.chosenShadow : TXT_LIGHT;
+
+    DrawPlate(x, SAVE_BUTTON_Y, w, SAVE_BUTTON_H, look, 0, pressed && enabled);
+    DrawStrCentered(&sNormal, label, x + w / 2, SAVE_BUTTON_Y + 9 + (pressed && enabled), fg, sh);
+    if (enabled)
+        AddHit(x, SAVE_BUTTON_Y, w, SAVE_BUTTON_H, id);
+}
+
+static void DrawSaveFile(const ViewState *s)
+{
+    u8 text[32];
+    const PlateLook *p = &sLook.plate;
+    int px = SAVE_PIC_X, py = SAVE_PIC_Y, pw = SAVE_PIC_W, ph = SAVE_PIC_H, x0 = SAVE_INFO_X0, x1 = SAVE_INFO_X1;
+    int floorY = py + ph - 14, feetX = px + pw / 2, feetY = py + ph - 16;
+
+    DrawPlate(8, SAVE_FILE_Y, 224, 138, p, 0, FALSE);
+
+    /* The picture's socket, its floor and the trainer's shadow on it. */
+    FillRect(px + 1, py, pw - 2, ph, p->u);
+    FillRect(px, py + 1, pw, ph - 2, p->u);
+    FillRect(px + 1, py + 1, pw - 2, ph - 2, p->t);
+    FillRect(px + 1, floorY, pw - 2, 13, sLook.section[SECTION_BALL]);
+    FillRect(px + 1, floorY, pw - 2, 1, p->u);
+    for (int y = -3; y <= 3; ++y)
+        for (int x = -22; x <= 22; ++x)
+            if (49 * x * x + 1936 * y * y < 23716)
+                Put(feetX + x, feetY + y, p->u);
+    if (sRes.trainerPic[s->gender])
+        DrawSprite(sRes.trainerPic[s->gender], 8, 8, px + 4, py + 2, sRes.trainerPicPal[s->gender].c);
+
+    /* Name and ID, a rule, then where, the Pokédex and the time. */
+    DrawStr(&sNormal, s->name, x0, 58, TXT_DARK, TXT_LIGHT);
+    StringCopy(StringCopy(text, gText_TrainerCardIDNo), Number(s->id, 5, STR_CONV_MODE_LEADING_ZEROS));
+    DrawStrRight(&sNormal, text, x1, 58, TXT_DARK, TXT_LIGHT);
+    FillRect(x0, 74, x1 - x0, 1, p->s);
+    if (s->mapsec != MAPSEC_NONE)
+    {
+        GetMapName(text, s->mapsec, 0);
+        DrawStr(&sNormal, text, x0, 76, TXT_BLUE, TXT_LBLUE);
+    }
+    if (s->hasDex)
+    {
+        DrawStr(&sNormal, gText_TrainerCardPokedex, x0, 92, TXT_DARK, TXT_LIGHT);
+        DrawStrRight(&sNormal, Number(s->dex, 3, STR_CONV_MODE_LEFT_ALIGN), x1, 92, TXT_DARK, TXT_LIGHT);
+    }
+    DrawStr(&sNormal, gText_TrainerCardTime, x0, 108, TXT_DARK, TXT_LIGHT);
+    {
+        int colon = StrWidth(&sNormal, gText_Colon2), x = x1 - (colon + 12);
+
+        DrawStrRight(&sNormal, Number(s->hours, 3, STR_CONV_MODE_LEFT_ALIGN), x, 108, TXT_DARK, TXT_LIGHT);
+        DrawStr(&sNormal, gText_Colon2, x, 108, TXT_DARK, TXT_LIGHT);
+        DrawStr(&sNormal, Number(s->minutes, 2, STR_CONV_MODE_LEADING_ZEROS), x + colon, 108, TXT_DARK, TXT_LIGHT);
+    }
+
+    /* The badges: won ones as the card has them, the rest as sockets. */
+    if (sRes.badgeTiles)
+    {
+        Pal socket;
+
+        for (int i = 0; i < 16; ++i)
+            socket.c[i] = p->s;
+        for (int i = 0; i < NUM_BADGES; ++i)
+        {
+            const u16 *pal = (s->badges & (1 << i)) ? sRes.badgePal.c : socket.c;
+            int x = x0 - 2 + i * 16, y = 124;
+
+            DrawTile(sRes.badgeTiles + (2 * i) * 32, x, y, pal, FALSE, FALSE);
+            DrawTile(sRes.badgeTiles + (2 * i + 1) * 32, x + 8, y, pal, FALSE, FALSE);
+            DrawTile(sRes.badgeTiles + (2 * i + 16) * 32, x, y + 8, pal, FALSE, FALSE);
+            DrawTile(sRes.badgeTiles + (2 * i + 17) * 32, x + 8, y + 8, pal, FALSE, FALSE);
+        }
+    }
+
+    /* The party, under a rule: each icon on a little floor; an empty place
+     * is a dot. */
+    FillRect(16, SAVE_PARTY_Y - 5, 208, 1, p->s);
+    for (int i = 0; i < PARTY_SIZE; ++i)
+    {
+        const MonView *mon = &s->party[i];
+        int x = 18 + i * 34, y = SAVE_PARTY_Y;
+
+        FillRect(x + 3, y + 26, 26, 3, p->t);
+        if (mon->species)
+        {
+            const u8 *tiles = MonIcon(mon->iconSpecies, mon->deoxys);
+            u8 pal = gMonIconPaletteIndices[mon->iconSpecies];
+
+            if (tiles && pal < 3)
+                DrawSprite(tiles, 4, 4, x, y - 2, sRes.monIconPal[pal].c);
+        }
+        else
+        {
+            for (int dy = -5; dy <= 5; ++dy)
+                for (int dx = -5; dx <= 5; ++dx)
+                    if (dx * dx + dy * dy <= 25)
+                        Put(x + 16 + dx, y + 15 + dy, p->s);
+        }
+    }
+}
+
+static void DrawSave(const ViewState *s)
+{
+    int lines = StrLines(s->text), ht = lines * 2 > 4 ? lines * 2 : 4;
+
+    DrawSaveFile(s);
+    if (s->saveStep == SAVE_DONE)
+        DrawSavePlate(64, 112, Ascii(CTR_TEXT("OK", "VALE", "OK", "OK")), TRUE, s->pressed == HIT_OK, TRUE, HIT_OK);
+    else
+    {
+        DrawSavePlate(10, 106, gText_Yes, TRUE, s->pressed == HIT_YES, s->canSave, HIT_YES);
+        DrawSavePlate(124, 106, gText_No, FALSE, s->pressed == HIT_NO, TRUE, HIT_NO);
+    }
+    /* The question last: a long one (another file's warning) covers the
+     * file rather than being cut. */
+    DrawWindowFrame(s->frame, SAVE_MSG_X, SAVE_MSG_Y, CW / 8 - 2, ht, TXT_WHITE);
+    DrawStr(&sNormal, s->text, SAVE_MSG_X + 4, SAVE_MSG_Y + 1 + (ht * 8 - 2 - lines * 16) / 2, TXT_DARK, TXT_LIGHT);
 }
 
 /*
