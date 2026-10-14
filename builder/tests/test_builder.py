@@ -134,6 +134,14 @@ class RomTests(unittest.TestCase):
                 romlib.load_rom(self._write(tmp, bytes(data)))
             self.assertIn(romlib.SPANISH_SHA1, str(ctx.exception))
 
+    def test_modified_french_emerald_is_rejected(self):
+        data = bytearray(b"\xff" * romlib.ROM_SIZE)
+        data[0xA0:0xB0] = b"POKEMON EMERBPEF"
+        with tempfile.TemporaryDirectory() as tmp:
+            with self.assertRaises(BuilderError) as ctx:
+                romlib.load_rom(self._write(tmp, bytes(data)))
+            self.assertIn(romlib.FRENCH_SHA1, str(ctx.exception))
+
     def test_each_region_requires_its_exact_hash_even_when_trimmed_or_zipped(self):
         # Synthetic fixtures substitute the known clean hash, not the validation.
         for code in ("BPEE", "BPES", "BPEF"):
