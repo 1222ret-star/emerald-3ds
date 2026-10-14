@@ -2297,7 +2297,7 @@ diff --git a/src/wild_encounter.c b/src/wild_encounter.c
      VisibleRemove(v);
      BattleSetup_StartWildBattle();
  }
-@@ -891,41 +1141,124 @@ static void VisibleMove(struct VisibleWild *v, s16 px, s16 py, bool8 surfing)
+@@ -891,41 +1141,151 @@ static void VisibleMove(struct VisibleWild *v, s16 px, s16 py, bool8 surfing)
          v->idle = 30;
          return;
      }
@@ -2325,6 +2325,31 @@ diff --git a/src/wild_encounter.c b/src/wild_encounter.c
 +    sVisibleShifted = TRUE;
 +}
 +
++/*
++ * On each new map, whatever decides if wild Pokemon are met there at all,
++ * random or visible: a console's port.log then tells a map without them
++ * from a setting, a repel or a lock that keeps them away.
++ */
++static void WildLogMap(void)
++{
++    static u8 sGroup = 0xFF, sNum = 0xFF;
++    u16 headerId;
++
++    if (gSaveBlock1Ptr->location.mapGroup == sGroup && gSaveBlock1Ptr->location.mapNum == sNum)
++        return;
++    sGroup = gSaveBlock1Ptr->location.mapGroup;
++    sNum = gSaveBlock1Ptr->location.mapNum;
++    headerId = GetCurrentMapWildMonHeaderId();
++    CtrLog_Write(CTR_LOG_GAME, "wild: map %d/%d header %d (land %d water %d) rate %lu%% disabled %d "
++                 "repel %u lead lv %d visible %lu (replaces random %d)",
++                 sGroup, sNum, headerId == HEADER_NONE ? -1 : headerId,
++                 headerId != HEADER_NONE && GetLandMonsInfo(headerId) != NULL,
++                 headerId != HEADER_NONE && gWildMonHeaders[headerId].waterMonsInfo != NULL,
++                 (unsigned long)EncounterRatePercent(), sWildEncountersDisabled, VarGet(VAR_REPEL_STEP_COUNT),
++                 (int)GetMonData(&gPlayerParty[0], MON_DATA_LEVEL), (unsigned long)VISIBLE_MOST(),
++                 VISIBLE_REPLACES_RANDOM());
++}
++
  void VisibleWild_Update(void)
  {
      struct ObjectEvent *player;
@@ -2335,6 +2360,8 @@ diff --git a/src/wild_encounter.c b/src/wild_encounter.c
 +    bool8 surfing, idle, settled;
  
 -    if (!VISIBLE_MOST() || gMain.callback2 != CB2_Overworld)
++    if (gMain.callback2 == CB2_Overworld)
++        WildLogMap();
 +    most = VISIBLE_MOST();
 +    if (most == 0)
      {
@@ -2424,18 +2451,18 @@ diff --git a/src/wild_encounter.c b/src/wild_encounter.c
      idle = !ArePlayerFieldControlsLocked() && !ScriptContext_IsEnabled()
          && gPlayerAvatar.tileTransitionState == T_NOT_MOVING;
 +    settled = FollowerMon_PalettesSettled();
-+
+ 
 +    /* Fewer wanted now (the setting lowered): the extra ones vanish. */
 +    for (i = VW_MAX; i-- > 0 && VisibleCount() > most;)
 +        if (sVisible[i].active && !sVisible[i].vanishing)
 +            VisibleVanish(&sVisible[i]);
- 
++
 +    if (sVisibleRetry)
 +        sVisibleRetry--;
      for (i = 0; i < VW_MAX; i++)
      {
          struct VisibleWild *v = &sVisible[i];
-@@ -937,7 +1270,31 @@ void VisibleWild_Update(void)
+@@ -937,7 +1297,31 @@ void VisibleWild_Update(void)
              VisibleRemove(v);
              continue;
          }
@@ -2468,7 +2495,7 @@ diff --git a/src/wild_encounter.c b/src/wild_encounter.c
          {
              bool8 touched = v->idle == 0xFFFF
                  || (v->x == player->currentCoords.x && v->y == player->currentCoords.y && !v->progress);
-@@ -962,7 +1319,23 @@ void VisibleWild_Update(void)
+@@ -962,7 +1346,23 @@ void VisibleWild_Update(void)
      }
  
      percent = EncounterRatePercent();
@@ -2493,7 +2520,7 @@ diff --git a/src/wild_encounter.c b/src/wild_encounter.c
          return;
      if (sVisibleSpawnTimer)
      {
-@@ -972,14 +1345,8 @@ void VisibleWild_Update(void)
+@@ -972,14 +1372,8 @@ void VisibleWild_Update(void)
      /* One more every two seconds at the NORMAL encounter rate (1/2: every
       * four, 2X: every second), up to the setting's number. */
      sVisibleSpawnTimer = 120 * 100 / percent;
@@ -2510,7 +2537,7 @@ diff --git a/src/wild_encounter.c b/src/wild_encounter.c
  }
  #endif
  
-@@ -1048,7 +1415,7 @@ bool8 StandardWildEncounter(u16 curMetatileBehavior, u16 prevMetatileBehavior)
+@@ -1048,7 +1442,7 @@ bool8 StandardWildEncounter(u16 curMetatileBehavior, u16 prevMetatileBehavior)
              else
              {
  #ifdef PLATFORM_3DS
@@ -2519,7 +2546,7 @@ diff --git a/src/wild_encounter.c b/src/wild_encounter.c
                      return FALSE;
  #endif
                  if (DoMassOutbreakEncounterTest() == TRUE && SetUpMassOutbreakEncounter(WILD_CHECK_REPEL | WILD_CHECK_KEEN_EYE) == TRUE)
-@@ -1091,7 +1458,7 @@ bool8 StandardWildEncounter(u16 curMetatileBehavior, u16 prevMetatileBehavior)
+@@ -1091,7 +1485,7 @@ bool8 StandardWildEncounter(u16 curMetatileBehavior, u16 prevMetatileBehavior)
              else // try a regular surfing encounter
              {
  #ifdef PLATFORM_3DS
