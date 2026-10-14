@@ -45,6 +45,8 @@ typedef struct
 {
     bool valid;
     u16 tileNum, paletteNum;
+    /* The ext palette it was drawn with (sprite.c), 0xFF for paletteNum. */
+    u8 extPalette;
     u8 shape, size;
     bool flipX, flipY, color256;
     int width, height;
@@ -451,6 +453,7 @@ static bool RefreshSlot(unsigned index, const struct Sprite *sprite, const struc
     bool flipY = sprite->oam.affineMode == ST_OAM_AFFINE_OFF
               && (sprite->oam.matrixNum & 0x10) != 0;
     u32 sourceBytes, paletteBytes;
+    u8 extPalette = color256 ? 0xFF : GetSpriteExtPalette(sprite);
     bool changed;
 
     PictureSize(sprite, obj, &w, &h);
@@ -459,8 +462,12 @@ static bool RefreshSlot(unsigned index, const struct Sprite *sprite, const struc
 
     sourceBytes = GatherSource(sprite, w, h, color256, source);
     paletteBytes = color256 ? 256 * 2 : 16 * 2;
-    /* OBJ palettes are the second half of PLTT; 8bpp uses it as one bank. */
-    memcpy(palette, PLTT + 0x200 + (color256 ? 0 : sprite->oam.paletteNum * 32), paletteBytes);
+    /* OBJ palettes are the second half of PLTT; 8bpp uses it as one bank.
+     * One given an ext palette shows that, as the 2D compositor does. */
+    if (extPalette != 0xFF)
+        memcpy(palette, CtrVideo_ExtPalette(extPalette), paletteBytes);
+    else
+        memcpy(palette, PLTT + 0x200 + (color256 ? 0 : sprite->oam.paletteNum * 32), paletteBytes);
 
     changed = !slot->valid
            || slot->width != w || slot->height != h
@@ -468,6 +475,7 @@ static bool RefreshSlot(unsigned index, const struct Sprite *sprite, const struc
            || slot->flipX != flipX || slot->flipY != flipY
            || slot->tileNum != sprite->oam.tileNum
            || slot->paletteNum != sprite->oam.paletteNum
+           || slot->extPalette != extPalette
            || slot->sourceBytes != sourceBytes
            || memcmp(slot->source, source, sourceBytes) != 0
            || memcmp(slot->palette, palette, paletteBytes) != 0;
@@ -482,6 +490,7 @@ static bool RefreshSlot(unsigned index, const struct Sprite *sprite, const struc
     slot->flipY = flipY;
     slot->tileNum = sprite->oam.tileNum;
     slot->paletteNum = sprite->oam.paletteNum;
+    slot->extPalette = extPalette;
     slot->shape = sprite->oam.shape;
     slot->size = sprite->oam.size;
     slot->sourceBytes = sourceBytes;

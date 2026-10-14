@@ -12,6 +12,11 @@ file live there:
   RomFS; a release never does, and the player's builder produces it as
   emerald3ds.pak from their own ROM.
 
+A third kind, optional data, is neither: files the port can do without that
+come from elsewhere than the ROM, today the follower sprites
+(builder/emerald3ds_builder/followers.py). They go into a pack and the loose
+development data, never into a release's RomFS, the recipe or the ABI.
+
 Commands:
 
     staging.py abi      --romfs DIR               write DIR/engine/abi.bin
@@ -53,11 +58,18 @@ ENGINE_PATTERNS = [
     "bottom/battle.bin",
     "battle/hud.bin",
 ]
+OPTIONAL_PATTERNS = [
+    "followers/*",
+]
 SUPPORTED_ROM_SHA1 = bytes.fromhex("f3ae088181bf583e55daf962a92bb46f4f1d07b7")
 
 
 def is_engine(rel: str) -> bool:
     return any(fnmatch.fnmatchcase(rel, p) for p in ENGINE_PATTERNS)
+
+
+def is_optional(rel: str) -> bool:
+    return any(fnmatch.fnmatchcase(rel, p) for p in OPTIONAL_PATTERNS)
 
 
 def walk(romfs: Path):
@@ -67,7 +79,11 @@ def walk(romfs: Path):
 
 
 def data_files(romfs: Path):
-    return [(rel, path) for rel, path in walk(romfs) if not is_engine(rel)]
+    return [(rel, path) for rel, path in walk(romfs) if not is_engine(rel) and not is_optional(rel)]
+
+
+def optional_files(romfs: Path):
+    return [(rel, path) for rel, path in walk(romfs) if is_optional(rel)]
 
 
 def engine_files(romfs: Path):
@@ -129,7 +145,7 @@ def cmd_pak(args) -> None:
     sha1 = pak.sha1_of(args.rom) if args.rom else profile or SUPPORTED_ROM_SHA1
     if profile is not None and sha1 != profile:
         raise ValueError("The supplied ROM does not match the compiled game's language")
-    files = ((rel, path.read_bytes()) for rel, path in data_files(args.romfs))
+    files = ((rel, path.read_bytes()) for rel, path in data_files(args.romfs) + optional_files(args.romfs))
     info = pak.write_pak(args.out, files, abi, sha1)
     with pak.PakReader(args.out) as reader:
         reader.verify()
@@ -140,7 +156,7 @@ def cmd_pak(args) -> None:
 def cmd_devdata(args) -> None:
     abi, _ = compute_abi(args.romfs)
     count = 0
-    for rel, path in data_files(args.romfs):
+    for rel, path in data_files(args.romfs) + optional_files(args.romfs):
         dst = args.out / rel
         if dst.exists() and dst.stat().st_size == path.stat().st_size \
                 and dst.read_bytes() == path.read_bytes():
@@ -154,7 +170,7 @@ def cmd_devdata(args) -> None:
 
 def cmd_list(args) -> None:
     for rel, _ in walk(args.romfs):
-        print("%-6s %s" % ("engine" if is_engine(rel) else "data", rel))
+        print("%-8s %s" % ("engine" if is_engine(rel) else "optional" if is_optional(rel) else "data", rel))
 
 
 def main(argv=None) -> None:

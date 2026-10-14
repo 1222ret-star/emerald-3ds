@@ -45,6 +45,9 @@ typedef uint8_t u8; typedef uint16_t u16; typedef bool bool8;
 #define MODE_OFF 0
 #define MODE_FIELD 1
 #define MODE_BATTLE_INFO 10
+#define MODE_BATTLE_ACTION 11
+#define HIT_QUICK_BALL 60
+#define ITEM_NONE 0
 #define BAG_VIEW_WHOLE 2
 #define CACHE_MAP 0
 #define BOX_MENU 0
@@ -59,13 +62,13 @@ typedef uint8_t u8; typedef uint16_t u16; typedef bool bool8;
 #define TXT_LIGHT 7
 typedef struct { u8 screen,mode,inBattle,bagView,mapsec,cursorX,cursorY,gender,pickMapsec,pickX,pickY,pressed,enabled;
     u8 clockShown,clockValid,clockRate,clockPhase,blink,cursor,options[OPTION_ROWS]; u16 clockMinute;
-    u8 optPage,optSub,optFocus,focus,extras[OPTION_ROWS]; } ViewState;
+    u8 optPage,optSub,optFocus,focus,extras[OPTION_ROWS],safari; u16 quickBall,quickBallCount; } ViewState;
 typedef struct {int x0,y0,x1,y1;} Rect;
 static bool RectAddPlate(Rect *rect,int hit) {(void)rect;(void)hit;return false;}
 static bool RectAddHit(Rect *rect,int hit) {(void)rect;(void)hit;return false;}
 static int BattleCursorHit(const ViewState *state,int cursor) {(void)state;return cursor;}
 static u16 sCanvas[W*H], cache[W*H], fb[W*H], expected[W*H], *sCache[1]={cache}, *sDst;
-static int sOX, sAnimCount, sNormal, sSmall, sAnim[1], blits;
+static int sOX, sNormal, sSmall, blits;
 static struct {int chosen,plate,chosenShadow;} sLook = {2,3,4};
 static int clipX0=0,clipY0=0,clipX1=W,clipY1=H;
 static void ClipToMapWindow(int saved[4]) {
@@ -77,7 +80,6 @@ static struct { const u8 *playerIcon[2], *cursorTiles; struct {u16 c[16];} playe
 static bool CtrVideo_BottomInUse(void) {return false;}
 static bool CtrVideo_BottomWhole(void) {return false;}
 static void ResolveFonts(void) {}
-static void IconRect(const int *a,int*x,int*y,int*z,int*w) {(void)a;*x=*y=*z=*w=0;}
 static void Fill(int x,int y,int w,int h,u16 color) {
     for(int i=x;i<x+w;++i) for(int j=y;j<y+h;++j)
         if(i>=clipX0&&i<clipX1&&j>=clipY0&&j<clipY1) sDst[i*H+H-1-j]=color;
@@ -104,7 +106,6 @@ static void CtrBottom_BlitRect(const u16 *p,int x0,int y0,int x1,int y1) {
     for name in ('static void RectInit(', 'static void RectAdd(', 'static bool8 OptionsAreaOnly(',
                  'static void DrawRegionName(', 'static void DrawMapClock(', 'static void DrawMapMarks(', 'static void DrawRegionMap(',
                  'static bool8 MapCursorOnlyMoved(', 'static void MarkRect(',
-                 'static bool8 RectsMeet(int ax0, int ay0, int ax1, int ay1, int bx0, int by0, int bx1, int by1)\n{',
                  'static bool8 MoveMapCursor(', 'static bool8 DirtyRect('):
         source += function(bottom, name)
     source += r'''

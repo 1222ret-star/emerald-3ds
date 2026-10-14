@@ -132,6 +132,9 @@ VoxelVisualShape VoxelMesh_Classify(int x, int y);
 /* UVs of a tile's own metatile in the bound atlas; false if it has none. */
 bool VoxelMesh_TileUV(VoxelBuilder *b, int x, int y,
                       float *u0, float *v0, float *u1, float *v1);
+/* UVs of a metatile id in the bound atlas; false if it has none. */
+bool VoxelMesh_MetatileUV(VoxelBuilder *b, int metatileId,
+                          float *u0, float *v0, float *u1, float *v1);
 
 /*
  * Emits one instance's ground over the world-tile rectangle [x0,x1) x

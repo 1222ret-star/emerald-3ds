@@ -493,9 +493,6 @@ static struct
     u32 partyTileCount;
     u16 partyRaw[16 * 11];
     Pal partyPal[11];
-    u8 *slotMain, *slotMainNoHp, *slotWide, *slotWideNoHp, *slotWideEmpty;
-    u8 *ballTiles;
-    Pal ballPal;
     /* Battle text box frames, and their darkened copies. */
     u8 *boxTiles;
     u32 boxTileCount;
@@ -506,9 +503,6 @@ static struct
     Pal typePal[3];
     const u8 *categoryTiles;
     Pal categoryPal;
-    u8 *statusTiles;
-    Pal statusPal;
-    Pal monIconPal[3];
     /* Region map. */
     u8 *mapTiles;
     u32 mapTileCount;
@@ -527,8 +521,6 @@ static struct
     u8 *badgeTiles;
     u8 *trainerPic[2];
     Pal trainerPicPal[2];
-    u8 *bagTiles[2];
-    Pal bagPal;
 } sRes;
 
 static void LoadItemIcon(Icon *icon, const void *tiles, const void *pal)
@@ -551,25 +543,11 @@ static void LoadGenderResources(void)
     {
         u16 pic = gFacilityClassToPicIndex[gender == FEMALE ? FACILITY_CLASS_MAY : FACILITY_CLASS_BRENDAN];
         u16 *pal = Unlz(gTrainerFrontPicPaletteTable[pic].data, NULL);
-        u32 size = 0;
-        u8 *all = Unlz(gender == FEMALE ? gBagFemaleTiles : gBagMaleTiles, &size);
 
         sRes.trainerPic[gender] = Unlz(gTrainerFrontPicTable[pic].data, NULL);
         if (pal)
         {
             ToPals(&sRes.trainerPicPal[gender], pal, 1);
-            free(pal);
-        }
-        /* Only the first of the six frames, the closed bag, is shown. */
-        if (all && size >= 64 * 32 && (sRes.bagTiles[gender] = malloc(64 * 32)) != NULL)
-            memcpy(sRes.bagTiles[gender], all, 64 * 32);
-        free(all);
-    }
-    {
-        u16 *pal = Unlz(gBagPalette, NULL);
-        if (pal)
-        {
-            ToPals(&sRes.bagPal, pal, 1);
             free(pal);
         }
     }
@@ -587,7 +565,7 @@ static void LoadResources(void)
         "trainer_card/green.gbapal", "trainer_card/bronze.gbapal", "trainer_card/copper.gbapal",
         "trainer_card/silver.gbapal", "trainer_card/gold.gbapal",
     };
-    u32 size;
+    u32 size = 0;   /* UnlzFile leaves it alone when it fails */
 
     PalSymbol(GetOverworldTextboxPalettePtr(), &sRes.text, 1);
     InitLook();
@@ -604,13 +582,6 @@ static void LoadResources(void)
         }
         ToPals(sRes.partyPal, sRes.partyRaw, 11);
     }
-    sRes.slotMain = ReadRomfs("party_menu/slot_main.bin", NULL);
-    sRes.slotMainNoHp = ReadRomfs("party_menu/slot_main_no_hp.bin", NULL);
-    sRes.slotWide = ReadRomfs("party_menu/slot_wide.bin", NULL);
-    sRes.slotWideNoHp = ReadRomfs("party_menu/slot_wide_no_hp.bin", NULL);
-    sRes.slotWideEmpty = ReadRomfs("party_menu/slot_wide_empty.bin", NULL);
-    sRes.ballTiles = UnlzFile("party_menu/pokeball_small.4bpp.lz", NULL);
-    PalFile("party_menu/pokeball.gbapal.lz", &sRes.ballPal, 1, TRUE);
 
     sRes.boxTiles = UnlzFile("battle_interface/textbox.4bpp.lz", &size);
     sRes.boxTileCount = size / 32;
@@ -638,10 +609,6 @@ static void LoadResources(void)
         sRes.categoryTiles = GetMoveCategoryIconGfx(&pal);
         ToPals(&sRes.categoryPal, pal, 1);
     }
-    sRes.statusTiles = UnlzFile("interface/status_icons.4bpp.lz", NULL);
-    PalFile("interface/status_icons.gbapal.lz", &sRes.statusPal, 1, TRUE);
-    for (int i = 0; i < 3; ++i)
-        PalSymbol(gMonIconPaletteTable[i].data, &sRes.monIconPal[i], 1);
 
     sRes.mapTiles = UnlzFile("pokenav/region_map/map.8bpp.lz", &size);
     sRes.mapTileCount = size / 64;
@@ -680,8 +647,7 @@ static void LoadResources(void)
 
     for (int i = 0; i < CACHE_BATTLE; ++i)
         sCache[i] = malloc(sizeof(sCanvas));
-    sRes.ready = sRes.partyTiles && sRes.boxTiles && sRes.slotMain && sRes.slotWide && sRes.slotWideEmpty
-              && sCache[CACHE_MENU] && sCache[CACHE_WIDE];
+    sRes.ready = sRes.partyTiles && sRes.boxTiles && sCache[CACHE_MENU] && sCache[CACHE_WIDE];
     if (!sRes.ready)
         CtrLog_Write(CTR_LOG_ERROR, "bottom: party menu or text box graphics missing, screen stays off");
 }
@@ -693,44 +659,6 @@ static void LoadResources(void)
  */
 static bool8 sIconBudget;
 static u32 sIconClock;
-
-/* Mon icons: two 32x32 frames each, a few species at a time. */
-#define MON_ICON_SLOTS 12
-static struct
-{
-    u16 key;
-    u32 age;
-    u8 tiles[1024];
-} sMonIcons[MON_ICON_SLOTS];
-
-static const u8 *MonIcon(u16 iconSpecies, bool8 deoxysForm)
-{
-    u16 key = iconSpecies | (deoxysForm ? 0x8000 : 0);
-    int victim = 0;
-    const u8 *src;
-
-    for (int i = 0; i < MON_ICON_SLOTS; ++i)
-    {
-        if (sMonIcons[i].key == key && key != 0)
-        {
-            sMonIcons[i].age = ++sIconClock;
-            return sMonIcons[i].tiles;
-        }
-        if (sMonIcons[i].age < sMonIcons[victim].age)
-            victim = i;
-    }
-    if (iconSpecies >= SPECIES_EGG + 28 || iconSpecies == SPECIES_NONE || !sIconBudget)
-        return NULL;
-    sIconBudget = FALSE;
-    src = Port_ResolveAssetPointer(gMonIconTable[iconSpecies]);
-    if (!src)
-        return NULL;
-    /* Deoxys keeps its alternate form in the same file, 0x400 in. */
-    memcpy(sMonIcons[victim].tiles, src + (deoxysForm ? 0x400 : 0), 1024);
-    sMonIcons[victim].key = key;
-    sMonIcons[victim].age = ++sIconClock;
-    return sMonIcons[victim].tiles;
-}
 
 /* Item icons: 24x24 with their own palette. */
 #define ITEM_ICON_SLOTS 24
@@ -2602,7 +2530,7 @@ static u8 sFocus = FOCUS_NONE, sInside, sOptFocus;
 static bool8 sSwallow;
 static u32 sFrames;
 
-static u8 sAnimFrame;
+static bool8 RectsMeet(int ax0, int ay0, int ax1, int ay1, int bx0, int by0, int bx1, int by1);
 
 /* Per screen state, kept while another screen is shown. */
 #if 0 /* the old party menu's */
@@ -2685,73 +2613,6 @@ static void DrawLabelButtonFont(const Font *font, int x, int y, int wt, int ht, 
 static void DrawLabelButton(int x, int y, int wt, int ht, const u8 *label, bool8 on, bool8 enabled, u8 id)
 {
     DrawLabelButtonFont(&sNormal, x, y, wt, ht, label, on, enabled, id);
-}
-
-/* ------------------------------------------------------------------------ */
-/* Animated icons                                                           */
-/* ------------------------------------------------------------------------ */
-
-typedef struct { s16 x, y; u16 iconSpecies; u8 deoxys, still; } AnimIcon;
-static AnimIcon sAnim[8];
-static u8 sAnimCount;
-/* What was under each animated icon, to redraw its frames in place. */
-static u16 sUnder[8][32 * 32];
-
-static void IconRect(const AnimIcon *icon, int *x0, int *y0, int *x1, int *y1)
-{
-    *x0 = icon->x < 0 ? 0 : icon->x;
-    *y0 = icon->y < 0 ? 0 : icon->y;
-    *x1 = icon->x + 32 > W ? W : icon->x + 32;
-    *y1 = icon->y + 32 > H ? H : icon->y + 32;
-}
-
-/* Icons store screen coordinates: draw them untranslated. */
-static void DrawIconFrame(const AnimIcon *icon)
-{
-    const u8 *tiles = MonIcon(icon->iconSpecies, icon->deoxys);
-    u8 pal = gMonIconPaletteIndices[icon->iconSpecies];
-    int ox = sOX;
-
-    sOX = 0;
-    if (tiles && pal < 3)
-        DrawSprite(tiles + (icon->still ? 0 : sAnimFrame) * 512, 4, 4, icon->x, icon->y, sRes.monIconPal[pal].c);
-    sOX = ox;
-}
-
-static bool8 RectsMeet(int ax0, int ay0, int ax1, int ay1, int bx0, int by0, int bx1, int by1);
-
-/* In a clipped redraw an icon outside the clip is left as it is, with what
- * was under it kept from the last time it was drawn. */
-static void DrawAnimIcons(void)
-{
-    for (int i = 0; i < sAnimCount; ++i)
-    {
-        int x0, y0, x1, y1;
-
-        IconRect(&sAnim[i], &x0, &y0, &x1, &y1);
-        if (!ClipIsFull() && !RectsMeet(x0, y0, x1, y1, sClipX0, sClipY0, sClipX1, sClipY1))
-            continue;
-        for (int x = x0; x < x1; ++x)
-            memcpy(sUnder[i] + (x - x0) * 32, sCanvas + x * H + (H - y1), (y1 - y0) * sizeof(u16));
-        DrawIconFrame(&sAnim[i]);
-    }
-}
-
-/* Icon frames only: restore each icon's rectangle and redraw it. */
-static void AnimateIcons(void)
-{
-    for (int i = 0; i < sAnimCount; ++i)
-    {
-        int x0, y0, x1, y1;
-
-        IconRect(&sAnim[i], &x0, &y0, &x1, &y1);
-        if (sAnim[i].still || x0 >= x1 || y0 >= y1)
-            continue;
-        for (int x = x0; x < x1; ++x)
-            memcpy(sCanvas + x * H + (H - y1), sUnder[i] + (x - x0) * 32, (y1 - y0) * sizeof(u16));
-        DrawIconFrame(&sAnim[i]);
-        CtrBottom_BlitRect(sCanvas, x0, y0, x1, y1);
-    }
 }
 
 /* ------------------------------------------------------------------------ */
@@ -3531,9 +3392,6 @@ static void Snapshot(ViewState *s, u8 mode, u8 pressed)
 static bool8 Prefetch(const ViewState *s)
 {
     sIconBudget = TRUE;
-    for (int i = 0; i < PARTY_SIZE && sIconBudget; ++i)
-        if (s->party[i].species)
-            MonIcon(s->party[i].iconSpecies, s->party[i].deoxys);
     if (sIconBudget && s->summary >= 0 && s->heldItem)
         ItemIcon(s->heldItem);
     if (sIconBudget && s->registered != ITEM_NONE && s->mode < MODE_BATTLE_INFO)
@@ -5324,6 +5182,18 @@ static void DrawFightPlate(const ViewState *s, bool8 wide)
                FightBody, s, wide);
 }
 
+/* The quick ball plate's name and count, its contents starting at oy. */
+static void QuickBallLabels(u16 ball, u16 count, int oy)
+{
+    int x = 236, w = 78;
+    Rgb dark = PLATE_DARK(sHueBall), shadow = PLATE_SHADOW(sHueBall);
+    const u8 *name = GetItemName(ball), *times = Times(count);
+
+    DrawSmoothStr(&sSmall, name, x + w / 2 - SmoothInkWidth(&sSmall, name, 4) / 2, oy + 6, 4, sWhite, dark, NULL);
+    DrawSmoothStr(&sNormal, times, x + w / 2 - SmoothInkWidth(&sNormal, times, 4) / 2, oy + ACT_H - 16, 4,
+                  sCream, dark, &shadow);
+}
+
 static void QuickBallBody(const ViewState *s, int unused)
 {
     int x = 236, w = 78;
@@ -5331,16 +5201,12 @@ static void QuickBallBody(const ViewState *s, int unused)
     (void)unused;
     u8 state = PlateState(s, HIT_QUICK_BALL, s->cursor == 4);
     int oy = DrawBattlePlate(BTA_BALL, x, ACT_Y, w, ACT_H, sHueBall, state, s->blink, HIT_QUICK_BALL);
-    Rgb dark = PLATE_DARK(sHueBall), shadow = PLATE_SHADOW(sHueBall);
-    const u8 *name = GetItemName(s->quickBall), *count = Times(s->quickBallCount);
 
     if (PlateOutsideClip(x, ACT_Y, w, ACT_H))
         return;
     DrawItemIconShadow(s->quickBall, x + 27, oy + ACT_H / 2 - 11);
     DrawItemIcon(s->quickBall, x + 26, oy + ACT_H / 2 - 13);
-    DrawSmoothStr(&sSmall, name, x + w / 2 - SmoothInkWidth(&sSmall, name, 4) / 2, oy + 6, 4, sWhite, dark, NULL);
-    DrawSmoothStr(&sNormal, count, x + w / 2 - SmoothInkWidth(&sNormal, count, 4) / 2, oy + ACT_H - 16, 4,
-                  sCream, dark, &shadow);
+    QuickBallLabels(s->quickBall, s->quickBallCount, oy);
     /* The cycle arrows: translucent, the plate shows through. */
     for (int row = 0; row < 13; ++row)
     {
@@ -5727,6 +5593,99 @@ static bool8 IdleSlice(unsigned *starved, float *slice)
     return TRUE;
 }
 
+/* The Poke Balls pocket slot of the first stack of `ball`, or the capacity. */
+static u32 FirstBallStack(u16 ball)
+{
+    u32 i = 0;
+
+    while (i < gBagPockets[BALLS_POCKET].capacity && gBagPockets[BALLS_POCKET].itemSlots[i].itemId != ball)
+        ++i;
+    return i;
+}
+
+/* The ball a press of the plate's arrow would choose: the next one in the
+ * Poke Balls pocket that the bag holds, either way round, from the first
+ * stack of the current one, as CtrBattle_QuickBallCycle walks it (every ball
+ * counts once, at its first stack). ITEM_NONE if none is. */
+static u16 NeighbourBall(u16 current, s8 direction)
+{
+    u32 capacity = gBagPockets[BALLS_POCKET].capacity, at = FirstBallStack(current);
+
+    if (at == capacity)
+        return ITEM_NONE;
+    for (u32 step = 1; step < capacity; ++step)
+    {
+        u32 slot = (at + (direction > 0 ? step : capacity - step)) % capacity;
+        u16 ball = gBagPockets[BALLS_POCKET].itemSlots[slot].itemId;
+
+        if (ball >= FIRST_BALL && ball <= LAST_BALL && FirstBallStack(ball) == slot && CheckBagHasItem(ball, 1))
+            return ball;
+    }
+    return ITEM_NONE;
+}
+
+/* The ball WarmQuickBalls made ready the neighbours of (ITEM_NONE: none). */
+static u16 sQuickWarmBall = ITEM_NONE;
+
+/*
+ * While the action menu waits, the plates of the balls either arrow would
+ * bring are made ready: their icons (one a frame) and their name and count,
+ * with the slice an idle frame leaves. A new ball is then its plate drawn
+ * from what is ready, not built in the frame it is chosen. Once all of it
+ * is, nothing more is asked until another ball is chosen.
+ */
+static void WarmQuickBalls(const ViewState *s)
+{
+    static unsigned starved;
+    static u16 count, balls[2], counts[2];
+    static bool8 ready;
+    int ox = sOX, hits = sHitCount, clip[4] = {sClipX0, sClipY0, sClipX1, sClipY1};
+    bool8 icons = TRUE;
+    float slice;
+
+    if (s->mode != MODE_BATTLE_ACTION || s->safari || s->quickBall == ITEM_NONE || sBuildBudget != 0xFF)
+        return;
+    if (sQuickWarmBall != s->quickBall || count != s->quickBallCount)
+    {
+        sQuickWarmBall = s->quickBall;
+        count = s->quickBallCount;
+        for (int i = 0; i < 2; ++i)
+        {
+            balls[i] = NeighbourBall(sQuickWarmBall, i == 0 ? 1 : -1);
+            counts[i] = balls[i] != ITEM_NONE ? CountTotalItemQuantityInBag(balls[i]) : 0;
+        }
+        ready = FALSE;
+    }
+    if (ready)
+        return;
+    sIconBudget = TRUE;
+    for (int i = 0; i < 2; ++i)
+        if (balls[i] != ITEM_NONE && ItemIcon(balls[i]) < 0 && !sIconBudget)
+            icons = FALSE;
+    sIconBudget = FALSE;
+    if (!IdleSlice(&starved, &slice))
+        return;
+    ResolveFonts();
+    sOX = 0;
+    sClipX0 = sClipY0 = sClipX1 = sClipY1 = 0;
+    sBuildBudget = 1;
+    sSliceStart = CtrPlatform_Ticks();
+    sSliceMs = slice;
+    for (int i = 0; i < 2 && sBuildBudget == 1; ++i)
+        if (balls[i] != ITEM_NONE)
+            QuickBallLabels(balls[i], counts[i], ACT_Y);
+    /* Nothing was left to build, and the icons were in before this frame. */
+    ready = sBuildBudget == 1 && icons;
+    sSliceMs = 0.0f;
+    sBuildBudget = 0xFF;
+    sOX = ox;
+    sHitCount = hits;
+    sClipX0 = clip[0];
+    sClipY0 = clip[1];
+    sClipX1 = clip[2];
+    sClipY1 = clip[3];
+}
+
 /*
  * The trainer card's cache, made ahead in strips (CardCacheSteps) on frames
  * the field leaves the bottom screen idle, with the slice IdleSlice gives.
@@ -6051,7 +6010,7 @@ static bool8 MapCacheable(const ViewState *s)
 /* The screen on show, kept for when the battle that opens now is over. */
 static void MapCacheTake(void)
 {
-    if (!sMapShotOk || !MapCacheable(&sShown) || sAnimCount != 0 || sRefineLabels || sForceRedraw)
+    if (!sMapShotOk || !MapCacheable(&sShown) || sRefineLabels || sForceRedraw)
         return;
     sMapCache.state = sShown;
     memcpy(sMapCache.canvas, sCanvas, sizeof(sCanvas));
@@ -6097,7 +6056,6 @@ static void Render(const ViewState *s)
         memcpy(sCanvas, sMapCache.canvas, sizeof(sCanvas));
         memcpy(sHits, sMapCache.hits, sizeof(sHits));
         sHitCount = sMapCache.hitCount;
-        sAnimCount = 0;
         sDst = sCanvas;
         sOX = 0;
         if (!sIntro.defer)
@@ -6107,7 +6065,6 @@ static void Render(const ViewState *s)
 #endif
     }
     sHitCount = 0;
-    sAnimCount = 0;
     sDst = sCanvas;
     sOX = 0;
 
@@ -6166,7 +6123,6 @@ static void Render(const ViewState *s)
             memset(sCanvas, 0, sizeof(sCanvas));
     }
     phase[3] = CtrPlatform_Ticks();
-    DrawAnimIcons();
     phase[4] = CtrPlatform_Ticks();
     /* Left of the column is the PokéNav's while the compositor draws it, and
      * the whole screen the boxes'. */
@@ -6182,7 +6138,7 @@ static void Render(const ViewState *s)
     }
     phase[5] = CtrPlatform_Ticks();
     if (ClipIsFull())
-        sMapShotOk = cacheable && sAnimCount == 0 && !sRefineLabels && sIconsIn;
+        sMapShotOk = cacheable && !sRefineLabels && sIconsIn;
     /* Whole redraws and partial ones alike (a page of the options is one):
      * the backdrop's copy (with the card's cache finished in it), and the
      * present split into its copy to the screen and its cache flush. */
@@ -6252,7 +6208,12 @@ static bool8 RectAddHit(Rect *r, u8 id)
     {
         u8 row = (id - HIT_OPTION) % HIT_OPTION_BACK;
 
-        return RectAddHitOf(r, HIT_OPTION + row) && RectAddHitOf(r, HIT_OPTION + HIT_OPTION_BACK + row);
+        /* An action cell has no back half: its one hit is enough, or the
+         * whole options area is redrawn for its ring's blink. */
+        bool8 forward = RectAddHitOf(r, HIT_OPTION + row);
+        bool8 backward = RectAddHitOf(r, HIT_OPTION + HIT_OPTION_BACK + row);
+
+        return forward || backward;
     }
     return RectAddHitOf(r, id);
 }
@@ -6350,6 +6311,13 @@ static bool8 DirtyRect(const ViewState *now, const ViewState *shown, Rect *r)
     {
         probe.cursor = shown->cursor;
         probe.blink = shown->blink;
+        /* Another ball chosen: its plate alone (both draw one, of one size). */
+        if (now->mode == MODE_BATTLE_ACTION && !now->safari && now->quickBall != ITEM_NONE
+         && shown->quickBall != ITEM_NONE)
+        {
+            probe.quickBall = shown->quickBall;
+            probe.quickBallCount = shown->quickBallCount;
+        }
     }
     if (now->mode == MODE_FIELD)
         for (int i = 0; i < OPTION_ROWS; ++i)
@@ -6377,6 +6345,9 @@ static bool8 DirtyRect(const ViewState *now, const ViewState *shown, Rect *r)
             return FALSE;
         if ((now->cursor != shown->cursor || now->blink != shown->blink)
          && !(RectAddPlate(r, BattleCursorHit(now, now->cursor)) && RectAddPlate(r, BattleCursorHit(now, shown->cursor))))
+            return FALSE;
+        if ((now->quickBall != shown->quickBall || now->quickBallCount != shown->quickBallCount)
+         && !RectAddPlate(r, HIT_QUICK_BALL))
             return FALSE;
         return r->x0 < r->x1 && r->y0 < r->y1;
     }
@@ -6427,21 +6398,6 @@ static void RenderPart(const ViewState *s, int x0, int y0, int x1, int y1)
     if (y1 > H) y1 = H;
     if (x0 >= x1 || y0 >= y1)
         return;
-    /* An icon the part touches is redrawn whole: the part grows to hold it. */
-    for (int pass = 0; pass < 2; ++pass)
-        for (int i = 0; i < sAnimCount; ++i)
-        {
-            int ix0, iy0, ix1, iy1;
-
-            IconRect(&sAnim[i], &ix0, &iy0, &ix1, &iy1);
-            if (RectsMeet(ix0, iy0, ix1, iy1, x0, y0, x1, y1))
-            {
-                if (ix0 < x0) x0 = ix0;
-                if (iy0 < y0) y0 = iy0;
-                if (ix1 > x1) x1 = ix1;
-                if (iy1 > y1) y1 = iy1;
-            }
-        }
     sClipX0 = x0;
     sClipY0 = y0;
     sClipX1 = x1;
@@ -6795,7 +6751,7 @@ static u16 NavStep(bool8 *done)
 
 static void RunNav(u8 mode)
 {
-    bool8 ready, done;
+    bool8 ready, done = FALSE;
     u16 keys;
 
     if (sNav.kind == NAV_NONE)
@@ -6805,7 +6761,9 @@ static void RunNav(u8 mode)
         sNav.kind = NAV_NONE;
         return;
     }
-    if (CtrInput_Get()->held & CTR_KEY_GAME)
+    /* As in RunPlan: not the keys the column holds back, such as the A that
+     * chose another screen from it and started this NAV_LEAVE. */
+    if (CtrBottom_FilterKeys(CtrInput_Get()->held) & CTR_KEY_GAME)
     {
         sNav.kind = NAV_NONE;
         return;
@@ -6819,6 +6777,13 @@ static void RunNav(u8 mode)
     /* A single press also answers what waits inside a task: a call's text. */
     CtrPokenav_Screen(&ready);
     keys = ready || sNav.kind == NAV_PRESS ? NavStep(&done) : 0;
+    /* Finished with no final key (a ribbon view, a party or map move with
+     * no finish): over now, not left to steer for 240 frames. */
+    if (done && !keys)
+    {
+        sNav.kind = NAV_NONE;
+        return;
+    }
     if (!keys)
     {
         /* Waiting for the PokéNav to take input, or a move to end. */
@@ -6856,7 +6821,9 @@ static void NavTap(int x, int y)
     case POKENAV_CONDITION_SEARCH_MENU:
     case POKENAV_MAIN_MENU_CURSOR_ON_MATCH_CALL:
     case POKENAV_MAIN_MENU_CURSOR_ON_RIBBONS:
-        count = CtrPokenavMenu_Options(&cursor);
+        /* No menu substruct yet (or any more): Rows would read through NULL. */
+        if ((count = CtrPokenavMenu_Options(&cursor)) <= 0)
+            break;
         CtrPokenavMenu_Rows(&yStart, &deltaY);
         row = (y - yStart + deltaY / 2 + deltaY) / deltaY - 1;
         if (x >= 112 && row >= 0 && row < count)
@@ -7165,6 +7132,10 @@ static void ActivateOption(u8 id)
 
         if (extra)
         {
+            /* An action (no values, no stepper) has no left arrow and no
+             * back half to touch: LEFT must not run it. */
+            if (back && !extra->count && !extra->step)
+                return;
             if (extra->step)
                 extra->step(back ? -1 : 1);
             else
@@ -7904,17 +7875,6 @@ static bool8 MoveMapCursor(const ViewState *from, const ViewState *to)
         return FALSE;
     MarkRect(from->cursorX, from->cursorY, &r[0][0], &r[0][1], &r[0][2], &r[0][3]);
     MarkRect(to->cursorX, to->cursorY, &r[1][0], &r[1][1], &r[1][2], &r[1][3]);
-    /* An animated icon keeps what lies under it (DrawAnimIcons): over the
-     * mark it would put an old picture back. */
-    for (int i = 0; i < sAnimCount; ++i)
-    {
-        int x0, y0, x1, y1;
-
-        IconRect(&sAnim[i], &x0, &y0, &x1, &y1);
-        for (int k = 0; k < 2; ++k)
-            if (RectsMeet(x0, y0, x1, y1, r[k][0], r[k][1], r[k][2], r[k][3]))
-                return FALSE;
-    }
     /* The old square as the map cache has it (the canvas is its layout). */
     for (int x = r[0][0]; x < r[0][2]; ++x)
         memcpy(sCanvas + x * H + (H - r[0][3]), sCache[CACHE_MAP] + x * H + (H - r[0][3]),
@@ -7940,13 +7900,41 @@ static bool8 MoveMapCursor(const ViewState *from, const ViewState *to)
     return TRUE;
 }
 
+/*
+ * A part redrawn builds the labels it lacks within the time a whole redraw
+ * has (sRedrawLabelMs); one left flat has that part drawn again next frame,
+ * not the whole screen. Built in one go, a new quick ball's name and count
+ * were a spike; left to the whole redraw's refining, each new ball was ~15
+ * whole redraws (4-6 ms each in Azahar, a drop on an Old 3DS).
+ */
+static bool8 sRefinePart;
+static Rect sRefineRect;
+
+static void TimedRenderPart(const ViewState *s, Rect r)
+{
+    if (sRefinePart)
+        RectAdd(&r, sRefineRect.x0, sRefineRect.y0, sRefineRect.x1, sRefineRect.y1);
+    sRefinePart = FALSE;
+    sRedrawStart = CtrPlatform_Ticks();
+    sRedrawLabelMs = REDRAW_LABEL_MS;
+    sRefineLabels = FALSE;
+    sRedrawLabelWorked = FALSE;
+    RenderPart(s, r.x0, r.y0, r.x1, r.y1);
+    sRedrawLabelMs = 0.0f;
+    if (sRefineLabels)
+    {
+        sRefinePart = TRUE;
+        sRefineRect = r;
+    }
+}
+
 static bool8 PartialRedraw(const ViewState *now)
 {
     Rect r;
 
     if (DirtyRect(now, &sShown, &r))
     {
-        RenderPart(now, r.x0, r.y0, r.x1, r.y1);
+        TimedRenderPart(now, r);
         return TRUE;
     }
     return FALSE;
@@ -8037,9 +8025,9 @@ static void BottomProfile(u32 frame, u8 mode, const uint64_t ticks[3], unsigned 
     if (total < 2.0f || (last && frame - last < 120)) return;
     last = frame;
     CtrLog_Write(CTR_LOG_VIDEO,
-                 "bottom slice mode=%u kind=%u total=%.2f control=%.2f snapshot=%.2f draw=%.2f ms "
+                 "bottom slice frame=%lu mode=%u kind=%u total=%.2f control=%.2f snapshot=%.2f draw=%.2f ms "
                  "labels hit=%lu missed=%lu",
-                 mode, kind, total, CtrPlatform_TickMs(ticks[1] - ticks[0]),
+                 (unsigned long)frame, mode, kind, total, CtrPlatform_TickMs(ticks[1] - ticks[0]),
                  CtrPlatform_TickMs(ticks[2] - ticks[1]), CtrPlatform_TickMs(end - ticks[2]),
                  (unsigned long)sLabelHits, (unsigned long)sLabelMisses);
     sLabelHits = sLabelMisses = 0;
@@ -8064,6 +8052,9 @@ void CtrBottom_Frame(void)
 
     sFrames = frames;
     mode = CurrentMode();
+    /* Away from the action menu its labels may give way: looked at again. */
+    if (mode != MODE_BATTLE_ACTION)
+        sQuickWarmBall = ITEM_NONE;
     if (mode < MODE_BATTLE_INFO && sCompAny)
     {
         /* The plate pictures are only for a battle. */
@@ -8151,6 +8142,17 @@ void CtrBottom_Frame(void)
         BottomProfile(frames, mode, ticks, 3);
         return;
     }
+    /* A part left with a flat label: that part again, the label further on. */
+    if (sRefinePart && !sForceRedraw && !CtrVideo_BottomInUse() && !CtrVideo_BottomWhole()
+     && memcmp(&sState, &sShown, sizeof(sState)) == 0)
+    {
+        Rect r;
+
+        RectInit(&r);
+        TimedRenderPart(&sShown, r);
+        BottomProfile(frames, mode, ticks, 3);
+        return;
+    }
     if (sForceRedraw || memcmp(&sState, &sShown, sizeof(sState)) != 0)
     {
         uint64_t start = CtrPlatform_Ticks();
@@ -8161,7 +8163,7 @@ void CtrBottom_Frame(void)
             CtrLog_Write(CTR_LOG_VIDEO, "bottom screen: mode %u", sState.mode);
         sShown = sState;
         sForceRedraw = FALSE;
-        sAnimFrame = (frames >> 4) & 1;
+        sRefinePart = FALSE;
         sRedrawStart = start;
         sRedrawLabelMs = REDRAW_LABEL_MS;
         sRefineLabels = FALSE;
@@ -8187,13 +8189,10 @@ void CtrBottom_Frame(void)
         BottomProfile(frames, mode, ticks, 2);
         return;
     }
-    if (sAnimCount && (u8)((frames >> 4) & 1) != sAnimFrame)
-    {
-        sAnimFrame = (frames >> 4) & 1;
-        AnimateIcons();
-    }
     if (mode == MODE_BATTLE_INFO)
         WarmBattleMenus();
+    else if (mode == MODE_BATTLE_ACTION)
+        WarmQuickBalls(&sShown);
     else if (!WarmCardCache(mode))
         WarmOptionCells(mode);
     BottomProfile(frames, mode, ticks, 0);

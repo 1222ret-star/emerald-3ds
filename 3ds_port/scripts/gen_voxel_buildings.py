@@ -323,10 +323,141 @@ def seam_art(layout, spec, art, height, ground, ground_px):
     return out, open_s, open_n
 
 
-def pick_side(art, height):
+def close_gaps(art, drawn, gap):
+    """Give back the object's pixels that the ground test took inside it: a
+    shaded band of a hedge has texels of the lawn's own colours, and a
+    column broken by them is read as two runs (a step down its side). A
+    pixel goes back when its column is the object's within `gap` rows above
+    and below it."""
+    W, H = art.size
+    px, dp = art.load(), drawn.load()
+    holes = []
+    for u in range(W):
+        for v in range(H):
+            if px[u, v][3] >= 128 or dp[u, v][3] < 128:
+                continue
+            up = any(px[u, v - k][3] >= 128 for k in range(1, gap + 1) if v - k >= 0)
+            down = any(px[u, v + k][3] >= 128 for k in range(1, gap + 1) if v + k < H)
+            if up and down:
+                holes.append((u, v))
+    for (u, v) in holes:
+        px[u, v] = dp[u, v]
+
+
+def trim_outline(art, colour, reach=2):
+    """Take off what lies past an object's own dark outline: a hedge's shadow
+    on the lawn, a pixel column against the house beside it and a row or two
+    under its front, drawn in green the ground test does not know. Per row
+    and per column, up to `reach` pixels beyond the outermost outline pixel,
+    where the drawing ends there."""
+    W, H = art.size
+    px = art.load()
+    out = set()
+
+    def line(points):
+        # each drawn run of the line on its own (a row crosses both arms)
+        k = 0
+        while k < len(points):
+            if px[points[k]][3] < 128:
+                k += 1
+                continue
+            run = []
+            while k < len(points) and px[points[k]][3] >= 128:
+                run.append(points[k])
+                k += 1
+            marks = [i for i, p in enumerate(run) if px[p][:3] == colour]
+            if not marks:
+                continue
+            for tail in (run[marks[-1] + 1:], run[:marks[0]]):
+                if 0 < len(tail) <= reach:
+                    out.update(tail)
+
+    for v in range(H):
+        line([(u, v) for u in range(W)])
+    for u in range(W):
+        line([(u, v) for v in range(H)])
+    for p in out:
+        px[p] = (0, 0, 0, 0)
+
+
+def join_corners(layout, spec, art):
+    """An arm's inner corner drawn as the straight arm (`clean`), the run
+    turning into it from the side (`joins`: the corner's metatile -> -1 for
+    a run coming from the west, 1 from the east): that run goes on into the
+    gap the straight piece leaves along the arm's side (no slit between
+    them), and its top over the arm's outline - the straight piece has the
+    outline down its whole side - for its plain rows, not the light edge
+    above its front."""
+    x, y, w, h = spec["rect"]
+    relief = spec["relief"]
+    owned = spec.get("owned") or {(i, j) for i in range(w) for j in range(h)}
+    px = art.load()
+    for (i, j) in owned:
+        side = relief["joins"].get(layout.metatile(x + i, y + j))
+        if side is None or not 0 <= i + side < w:
+            continue
+        # the run's column against the arm, in the cell beside it
+        edge = (i + side) * 16 + (15 if side < 0 else 0)
+        end = 0
+        while end < 16 and px[edge, j * 16 + end][3] >= 128:
+            end += 1
+        for r in range(end):
+            for k in range(1, 4):
+                u, v = edge - side * k, j * 16 + r
+                if px[u, v][3] < 128 or r < end - relief["height"] - 1:
+                    px[u, v] = px[edge, v]
+
+
+def fill_behind(layout, spec, art, drawn):
+    """A run of an object (a hedge) that goes on behind a building: its
+    columns reach the last row of a cell whose south neighbour is no part of
+    it and no ground - a roof drawn over the rest - with fewer rows than a
+    finished front. The run is drawn on under the roof as the object draws
+    it in the open (`under`: the metatile under that one where nothing hides
+    it), so it is read as one hedge round the house, its line and corners
+    the drawn ones, its front against the house's back wall. The cell south
+    stays the building's: only the model's drawing reaches into it."""
+    x, y, w, h = spec["rect"]
+    relief = spec["relief"]
+    owned = spec.get("owned") or {(i, j) for i in range(w) for j in range(h)}
+    tiles, under = relief["tiles"], relief.get("under", {})
+    swap = relief.get("clean") or {}
+    ground = layout.ground_tiles(spec["ground"])
+    ground_px = layout.ground_pixels(spec["ground"])
+    px = art.load()
+    for (i, j) in sorted(owned):
+        if (i, j + 1) in owned or j + 1 >= h or y + j + 1 >= layout.h:
+            continue
+        south = layout.metatile(x + i, y + j + 1)
+        if south in tiles or south in set(spec["ground"]):
+            continue
+        m = layout.metatile(x + i, y + j)
+        below = under.get(swap.get(m, m))
+        if below is None:
+            continue
+        v = j * 16 + 15
+        cut = False
+        for u in range(i * 16, i * 16 + 16):
+            n = 0
+            while v - n >= 0 and px[u, v - n][3] >= 128:
+                n += 1
+            # an end the object finishes itself has its whole front drawn
+            if 0 < n < relief["height"]:
+                cut = True
+        if not cut:
+            continue
+        for img, gpx in ((art, ground_px), (drawn, None)):
+            cell = layout.building_art(x + i, y + j + 1, 1, 1, ground, ground_px=gpx,
+                                       swap={south: below})
+            img.paste(cell, (i * 16, (j + 1) * 16), cell)
+
+
+def pick_side(art, height, longest=False):
     """An 8-column tile of the object's own drawn front, for the faces the
     drawing never shows: the longest stretch of columns whose runs end on the
-    same row with a full front."""
+    same row with a full front. With `longest`, the middle of the widest such
+    stretch: a lowest one may be a narrow end, its 8 columns taking in its
+    outline and the gap beside it (a bar and a slit on every side face)."""
     W, Hh = art.size
     px = art.load()
     ends = []
@@ -339,6 +470,24 @@ def pick_side(art, height):
         full = end is not None and end >= height and all(
             px[u, v][3] >= 128 for v in range(end - height, end))
         ends.append(end if full else None)
+    if longest:
+        best = None
+        u = 0
+        while u < W:
+            k = u
+            while k < W and ends[u] is not None and ends[k] == ends[u]:
+                k += 1
+            if ends[u] is not None and (best is None or k - u > best[1] - best[0]):
+                best = (u, k)
+            u = max(k, u + 1)
+        if best is not None and best[1] - best[0] >= 8:
+            # clear of the stretch's end columns (its outline, the light
+            # edge beside it): a hedge one cell wide has only a few between
+            a, b = best[0] + 2, best[1] - 2
+            width = min(8, b - a)
+            u = (a + b - width) // 2
+            e = ends[u]
+            return vb.Tile(u, e - height, u + width, e)
     for width in (8, 6, 4):
         best = None
         for u in range(W - width + 1):
@@ -1563,6 +1712,21 @@ def table_parts(pc, obj, plan, hem, foot, back, top_tile, voff):
     return parts
 
 
+def decal_cells(art, cells, origin, v_offset):
+    """The cells of a piece whose floor copy (`v_offset` rows down its art)
+    paints something, and the box of what it paints in each, in the cell's
+    pixels (vb.Decal boxes)."""
+    x0, y0 = origin
+    out, boxes = [], {}
+    for (cx, cy) in cells:
+        i, j = cx - x0, cy - y0
+        box = art.crop((i * 16, j * 16 + v_offset, i * 16 + 16, j * 16 + v_offset + 16)).getbbox()
+        if box:
+            out.append((i, j))
+            boxes[(i, j)] = box
+    return out, boxes
+
+
 def interior_specs(spec):
     """Expand an `interior` spec: a room cut into pieces, one model each.
 
@@ -2052,20 +2216,18 @@ def interior_specs(spec):
             # draw in the room, the wall's in its own proof
             hidden_fill = frozenset((x - x0 * 16, y - y0 * 16) for (x, y) in fill
                                     if y - y0 * 16 < cut)
-        # only the cells with a mark: a quad over nothing but floor would sample
-        # outside the drawing once the export crops it to what is opaque
-        local = [(cx - x0, cy - y0) for (cx, cy) in cells
-                 if art.crop(((cx - x0) * 16, (cy - y0) * 16 + h * 16,
-                              (cx - x0) * 16 + 16, (cy - y0) * 16 + h * 16 + 16)).getbbox()]
+        # only the cells with a mark, each quad only over its marks: the
+        # export keeps the texels a face reads, and clear ones read for
+        # nothing take room on the page
+        local, local_box = decal_cells(art, cells, (x0, y0), h * 16)
         if local:
-            parts.append(vb.Decal(pc["name"] + "_floor", local, h * 16))
-        hidden = [(cx - x0, cy - y0) for (cx, cy) in cells
-                  if art.crop(((cx - x0) * 16, (cy - y0) * 16 + uo,
-                               (cx - x0) * 16 + 16, (cy - y0) * 16 + uo + 16)).getbbox()]
+            parts.append(vb.Decal(pc["name"] + "_floor", local, h * 16, boxes=local_box))
+        hidden, hidden_box = decal_cells(art, cells, (x0, y0), uo)
         if hidden:
             # "~behind": at 45 degrees the piece stands over it; the room's
             # check, with every piece in place, judges it
-            parts.append(vb.Decal(pc["name"] + "_under~behind", hidden, uo, lift=0.25))
+            parts.append(vb.Decal(pc["name"] + "_under~behind", hidden, uo, lift=0.25,
+                                  boxes=hidden_box))
         out.append({"name": "%s_%s" % (spec["name"], pc["name"]), "layout": room["layout"],
                     "rect": (x0, y0, w, h), "ground": room["ground"], "art": art,
                     "parts": (lambda ps: (lambda: ps))(parts),
@@ -2280,7 +2442,20 @@ def build_models(only=None):
             art = layout.building_art(x, y, w, h, layout.ground_tiles(spec["ground"]), cells=owned,
                                       ground_px=layout.ground_pixels(spec["ground"])
                                       if owned or spec.get("ground_px") else None,
-                                      upper=spec.get("relief", {}).get("upper", False))
+                                      upper=spec.get("relief", {}).get("upper", False),
+                                      swap=spec.get("relief", {}).get("clean"))
+            relief = spec.get("relief", {})
+            if relief.get("close") or relief.get("under"):
+                drawn = layout.building_art(x, y, w, h, layout.ground_tiles(spec["ground"]),
+                                            cells=owned, swap=relief.get("clean"))
+                if relief.get("under"):
+                    fill_behind(layout, spec, art, drawn)
+                if relief.get("joins"):
+                    join_corners(layout, spec, art)
+                if relief.get("close"):
+                    close_gaps(art, drawn, relief["close"])
+            if relief.get("outline"):
+                trim_outline(art, relief["outline"])
         if "ground_rgb" in spec:
             # colours the object never has: the ground painted in its own
             # cells wherever it is (a curb's paving and lawn beside it, which
@@ -2297,7 +2472,7 @@ def build_models(only=None):
         if "relief" in spec:
             height = spec["relief"]["height"]
             relief = spec["relief"]
-            side = pick_side(art, height)
+            side = pick_side(art, height, longest=relief.get("side_longest", False))
             art, open_s, open_n = seam_art(layout, spec, art, height,
                                            layout.ground_tiles(spec["ground"]),
                                            layout.ground_pixels(spec["ground"]))
@@ -3478,6 +3653,87 @@ def compact_islands(model):
     model.art = out
 
 
+def page_images(models, used, crops):
+    """The images of a page's models, each its art cropped to `crops`:
+    {model index: key}, {key: image}, {key: glass}, {key: name} - models
+    drawn alike share one image, its glass the brightest of their masks
+    (model.glass, cropped and guttered as the art), its name the first's."""
+    art_key, art_img, art_glass, art_name = {}, {}, {}, {}
+    for k in used:
+        model = models[k]
+        img = model.art.crop(crops[model.name])
+        gutter = int(bool(model.spec.get("gutter")))
+        if gutter:
+            img = _guttered(img)
+        key = art_key[k] = ("m", gutter, img.size, img.tobytes())
+        art_img[key] = img
+        art_name.setdefault(key, model.name)
+        if getattr(model, "glass", None) is not None:
+            mask = model.glass.crop(crops[model.name])
+            if gutter:
+                mask = _guttered(mask)
+            art_glass[key] = ImageChops.lighter(art_glass[key], mask) if key in art_glass else mask
+    return art_key, art_img, art_glass, art_name
+
+
+def pages_crops(models, used, crops, opaque, patches, name):
+    """The crops of a page's models: what their faces read (read_crop) if
+    the page takes them; if not, the models whose reads past their opaque
+    box take the most texels keep that box instead, one by one, largest
+    first, until it does. Returns the crops and the models narrowed."""
+    page = {models[k].name: crops[models[k].name] for k in used}
+
+    def fits():
+        art_key, art_img, _, _ = page_images(models, used, page)
+        images = list(art_img.items()) + [(("p", key), img) for key, img in patches.items()]
+        try:
+            (tw, rows), _ = pack_atlas(images)
+        except SystemExit:
+            return False
+        return tw * rows <= MAX_TEXTURE[0] * MAX_TEXTURE[1]
+
+    def area(b):
+        return (b[2] - b[0]) * (b[3] - b[1])
+
+    narrowed = []
+    if not fits():
+        growth = sorted(((area(page[n]) - area(opaque[n]), n) for n in page
+                         if page[n] != opaque[n]), reverse=True)
+        for _, n in growth:
+            page[n] = opaque[n]
+            narrowed.append(n)
+            if fits():
+                break
+    return page, narrowed
+
+
+def read_box(uv):
+    """The texels a face with these uv corners can read, as a box (u0, v0,
+    u1, v1) - sampled_texels' span, not clipped to any texture."""
+    eps = 1e-4
+    us, vs = [p[0] for p in uv], [p[1] for p in uv]
+    lo_u = int(math.floor(min(us) + eps))
+    lo_v = int(math.floor(min(vs) + eps))
+    hi_u = max(lo_u, int(math.ceil(max(us) - eps)) - 1)
+    hi_v = max(lo_v, int(math.ceil(max(vs) - eps)) - 1)
+    return lo_u, lo_v, hi_u + 1, hi_v + 1
+
+
+def read_crop(model):
+    """What of a model's texture goes to its page: its opaque texels and
+    every texel a face reads - clear ones too, past the drawing's edge as
+    well (clear there: what the proofs read). Cropped to what is opaque
+    alone, a face reading clear texels beyond it (a floor decal's cell, a
+    card's margin) read the next image packed on the page instead: the
+    desks' tops in a strip on the laboratory's floor."""
+    boxes = [m for m in [model.art.getbbox()] if m]
+    boxes += [read_box([(p[3], p[4]) for p in tri]) for (tri, _, _) in model.mesh.tris]
+    if not boxes:
+        return (0, 0, 1, 1)
+    return (min(b[0] for b in boxes), min(b[1] for b in boxes),
+            max(b[2] for b in boxes), max(b[3] for b in boxes))
+
+
 def export(models, path):
     """Write buildings.bin (VXB8).
 
@@ -3574,7 +3830,8 @@ def export(models, path):
     if glass:
         print("voxel buildings: window glass on %d drawing(s), %d kept as drawn%s"
               % (glass, len(as_drawn), (": " + ", ".join(as_drawn)) if as_drawn else ""))
-    crops = {m.name: (m.art.getbbox() or (0, 0, 1, 1)) for m in models}
+    crops = {m.name: read_crop(m) for m in models}
+    opaque = {m.name: (m.art.getbbox() or (0, 0, 1, 1)) for m in models}
 
     # models: geometry once, uv in the model's own art pixels
     records, verts, heights, quarters = [], [], bytearray(), bytearray()
@@ -3625,23 +3882,17 @@ def export(models, path):
         for r in recs:
             for (i, j, img) in r[5]:
                 patches.setdefault(img.tobytes(), img)
+        # each model's texture as its faces read it; where the page has no
+        # room for that, the models whose reads past their drawing take
+        # most fall back to the drawing's opaque box, largest first, and
+        # say so (pages_crops)
+        page_crops, narrowed = pages_crops(models, used, crops, opaque, patches, recs[0][6])
+        for name in narrowed:
+            print("  page of %s: %s reads past its drawing (%s); no room on the page"
+                  % (recs[0][6], name, crops[name]))
         # models drawn alike (a bridge's cells, built apart) share one image,
-        # and its glass: the brightest of their masks
-        art_key, art_img, art_glass, art_name = {}, {}, {}, {}
-        for k in used:
-            name = models[k].name
-            img = models[k].art.crop(crops[name])
-            gutter = int(bool(models[k].spec.get("gutter")))
-            if gutter:
-                img = _guttered(img)
-            key = art_key[k] = ("m", gutter, img.size, img.tobytes())
-            art_img[key] = img
-            art_name.setdefault(key, name)
-            if models[k].glass is not None:
-                mask = models[k].glass.crop(crops[name])
-                if gutter:
-                    mask = _guttered(mask)
-                art_glass[key] = ImageChops.lighter(art_glass[key], mask) if key in art_glass else mask
+        # and its glass
+        art_key, art_img, art_glass, art_name = page_images(models, used, page_crops)
         images = list(art_img.items())
         images += [(("p", key), img) for key, img in patches.items()]
         (tw, rows), spots = pack_atlas(images)
@@ -3674,8 +3925,8 @@ def export(models, path):
         live = []
         for k in used:
             ox, oy = spots[art_key[k]]
-            ox += art_key[k][1] - crops[models[k].name][0]
-            oy += art_key[k][1] - crops[models[k].name][1]
+            ox += art_key[k][1] - page_crops[models[k].name][0]
+            oy += art_key[k][1] - page_crops[models[k].name][1]
             pm_of[k] = len(page_models)
             page_models.append((k, page, ox, oy))
             live += [(ox + u, oy + v) + tuple(rest) for (u, v, *rest) in getattr(models[k], "live", ())]

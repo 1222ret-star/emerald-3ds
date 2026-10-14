@@ -192,7 +192,6 @@ static void GpuStartEarly(void)
 static bool GpuFinishEarly(void)
 {
     if (!sGpuEarly) return false;
-    (void)sGpuEarlyStart;
     if (sFrameQueue->lastEntry == sFrameQueue->numEntries)
     {
         gxCmdQueueStop(sFrameQueue);
@@ -356,6 +355,17 @@ typedef struct
 } Tile;
 static uint32_t sTileSerial;
 
+/*
+ * Tiles are cached by palette: 0-15 the BG banks, 16-31 the OBJ banks, 32 and
+ * 33 the BG and OBJ palettes as one 256-colour bank, and from PAL_EXT the OBJ
+ * banks past the GBA's sixteen (CtrVideo_LatchExtPalettes), whose colours
+ * follow the GBA's 512 here.
+ */
+#define PAL_BG256 32
+#define PAL_OBJ256 33
+#define PAL_EXT 34
+#define PAL_IDS (PAL_EXT + CTR_EXT_PALETTES)
+
 static uint32_t sOamAnchored[4];
 static int16_t sOamAnchor[128];
 
@@ -471,6 +481,57 @@ void CtrVideo_MarkFogOam(unsigned first, unsigned end)
         sFogOam[i >> 5] |= 1u << (i & 31);
 }
 
+/*
+ * The ext palettes (CtrVideo_LatchExtPalettes): their faded colours as the
+ * game last handed them over, which are in use, and the one each OAM entry
+ * is drawn with, plus one (0: attr2's own).
+ */
+static uint16_t sExtPltt[CTR_EXT_PALETTES * 16];
+static unsigned sExtInUse;
+static uint8_t sOamExt[128];
+static bool sOamExtMarked;
+
+void CtrVideo_LatchExtPalettes(const uint16_t *colors, unsigned inUse)
+{
+    sExtInUse = inUse & ((1u << CTR_EXT_PALETTES) - 1);
+    if (sExtInUse)
+        memcpy(sExtPltt, colors, sizeof(sExtPltt));
+}
+
+const uint16_t *CtrVideo_ExtPalette(unsigned index)
+{
+    return sExtPltt + (index % CTR_EXT_PALETTES) * 16;
+}
+
+void CtrVideo_ClearExtPaletteOam(void)
+{
+    if (!sOamExtMarked) return;
+    memset(sOamExt, 0, sizeof(sOamExt));
+    sOamExtMarked = false;
+}
+
+void CtrVideo_MarkExtPaletteOam(unsigned first, unsigned end, unsigned index)
+{
+    if (index >= CTR_EXT_PALETTES) return;
+    if (end > 128) end = 128;
+    for (unsigned i = first; i < end; ++i)
+        sOamExt[i] = (uint8_t)(index + 1);
+    sOamExtMarked = sOamExtMarked || first < end;
+}
+
+/* The palette bank OAM entry i is drawn with (GetTileSlot): attr2's, or the
+ * ext palette it is marked with while that one is in use - a mark outlives a
+ * scene that stops building OAM, the palettes do not. A 256-colour sprite has
+ * the one bank. */
+static unsigned ObjBank(unsigned i, unsigned attr2)
+{
+    unsigned ext = sOamExt[i];
+
+    if (ext && (sExtInUse >> (ext - 1)) & 1)
+        return PAL_EXT + ext - 1;
+    return 16u + (attr2 >> 12);
+}
+
 /* A battle transition's sprite: on the screen, and not the weather's. */
 static bool TransitionOam(unsigned i)
 {
@@ -514,8 +575,8 @@ static C3D_RenderTarget *sLogical, *sTop, *sTopRight;
 static bool sStereo;
 static Tile sTiles[CACHE_COUNT];
 static uint16_t sHash[HASH_COUNT];
-static uint16_t sPalette[512];
-static uint16_t sTexturePalette[512];
+static uint16_t sPalette[512 + CTR_EXT_PALETTES * 16];
+static uint16_t sTexturePalette[512 + CTR_EXT_PALETTES * 16];
 /* Background colours shown transparent, a bit per colour of each BG
  * palette (KeySectionColours). */
 static uint16_t sKeyed[16];
@@ -525,8 +586,8 @@ static uint8_t sMorton[64];
 static uint8_t sMortonPair[32];
 static bool sMortonPairs;
 static C2D_ImageTint sTint;
-static uint32_t sPaletteVersion[34];
-static uint32_t sPaletteChanges[34][8];
+static uint32_t sPaletteVersion[PAL_IDS];
+static uint32_t sPaletteChanges[PAL_IDS][8];
 static unsigned sUsed;
 
 /*
@@ -578,8 +639,9 @@ static __attribute__((noinline, cold)) void UnannouncedBlock(unsigned b)
     if (sUnannouncedLogged < 200)
     {
         ++sUnannouncedLogged;
-        CtrLog_Write(CTR_LOG_VIDEO, "CONTRACT unannounced vram block=%u (%05x) cb2=%08lx frame=%lu",
-                     b, b * VRAM_BLOCK, (unsigned long)CtrProf_Scene(), (unsigned long)sStats.frames);
+        CtrLog_Write(CTR_LOG_VIDEO, "CONTRACT unannounced vram block=%u (%05x) cb2=%08lx frame=%lu total=%lu",
+                     b, b * VRAM_BLOCK, (unsigned long)CtrProf_Scene(), (unsigned long)sStats.frames,
+                     (unsigned long)sUnannouncedBlocks);
     }
 }
 
@@ -685,12 +747,6 @@ static void VramSyncRange(unsigned address, unsigned bytes)
         SyncBlock(b);
 }
 
-/* Once a frame, before anything reads VRAM: nothing to do now that blocks are
- * compared when asked about (SyncBlock); kept as the frame's VRAM point. */
-static void TrackVram(void)
-{
-}
-
 /* Whether VRAM [address, address + bytes) changed after token t. */
 static bool VramChangedAfter(unsigned address, unsigned bytes, uint32_t t)
 {
@@ -751,6 +807,7 @@ static uint64_t sBgTicks, sObjTicks;
  * 3DS (sVoxelStereo, set at start-up; -DCTR_VOXEL_STEREO=1 or =0 forces
  * AUTO either way). ON and OFF decide outright. 3D DEPTH scales the slider.
  */
+#if CTR_VOXEL_ENABLED
 static bool sVoxelStereo;
 
 static bool VoxelStereoWanted(void)
@@ -769,6 +826,7 @@ static float VoxelStereoSlider(float slider)
     if (depth < 0 || depth >= (int)(sizeof(depths) / sizeof(depths[0]))) depth = 3;
     return slider * depths[depth];
 }
+#endif
 
 /* Displacement per depth unit for the eye being composed, and the resulting
  * displacement of the layer being drawn, both in whole screen pixels. */
@@ -1051,7 +1109,7 @@ static void UpdatePalette(void)
 
         if (memcmp(sPalette + bank * 16, source + bank * 16, 32))
         {
-            unsigned group = bank < 16 ? 32 : 33;
+            unsigned group = bank < 16 ? PAL_BG256 : PAL_OBJ256;
             if (bank < 16 ? !bgChanged : !objChanged)
                 memset(sPaletteChanges[group], 0, sizeof(sPaletteChanges[group]));
             memset(sPaletteChanges[bank], 0, sizeof(sPaletteChanges[bank]));
@@ -1072,10 +1130,27 @@ static void UpdatePalette(void)
     }
     if (bgChanged)
     {
-        ++sPaletteVersion[32];
+        ++sPaletteVersion[PAL_BG256];
         sBgPaletteStamp = sStats.frames + 1;
     }
-    if (objChanged) ++sPaletteVersion[33];
+    if (objChanged) ++sPaletteVersion[PAL_OBJ256];
+    /* The ext banks in use: no 256-colour bank holds them. */
+    for (unsigned live = sExtInUse, ext = 0; live; live >>= 1, ++ext)
+    {
+        unsigned bank = PAL_EXT + ext, base = 512 + ext * 16;
+        const uint16_t *source = sExtPltt + ext * 16;
+
+        if (!(live & 1) || !memcmp(sPalette + base, source, 32)) continue;
+        memset(sPaletteChanges[bank], 0, sizeof(sPaletteChanges[bank]));
+        for (unsigned index = 0; index < 16; ++index)
+        {
+            if (sPalette[base + index] == source[index]) continue;
+            sPalette[base + index] = source[index];
+            sTexturePalette[base + index] = CtrVideo_RGBA5551(source[index]);
+            sPaletteChanges[bank][0] |= 1u << index;
+        }
+        ++sPaletteVersion[bank];
+    }
 }
 
 /*
@@ -1112,9 +1187,9 @@ static void KeySectionColours(void)
          * it: its tiles are rebuilt, and the layers that hold them walked. */
         memset(sPaletteChanges[bank], 0, sizeof(sPaletteChanges[bank]));
         sPaletteChanges[bank][0] = changed;
-        memset(sPaletteChanges[32], 0xff, sizeof(sPaletteChanges[32]));
+        memset(sPaletteChanges[PAL_BG256], 0xff, sizeof(sPaletteChanges[PAL_BG256]));
         ++sPaletteVersion[bank];
-        ++sPaletteVersion[32];
+        ++sPaletteVersion[PAL_BG256];
         sBgPaletteStamp = sStats.frames + 1;
     }
 }
@@ -1150,7 +1225,9 @@ static bool TilePaletteChanged(const Tile *tile, unsigned paletteId)
     /* The last change mask is sufficient only for the next version. Tiles
      * returning after multiple palette changes are conservatively rebuilt. */
     if (tile->paletteVersion + 1 != version) return true;
-    for (unsigned i = 0; i < (paletteId < 32 ? 1u : 8u); ++i)
+    bool color256 = paletteId == PAL_BG256 || paletteId == PAL_OBJ256;
+
+    for (unsigned i = 0; i < (color256 ? 8u : 1u); ++i)
         if (tile->colors[i] & sPaletteChanges[paletteId][i]) return true;
     return false;
 }
@@ -1168,8 +1245,8 @@ static int GetTileSlot(unsigned address, unsigned bank, bool color256)
         Error(1, "tile outside logical VRAM");
         address = 0;
     }
-    unsigned paletteId = color256 ? 32 + (bank >= 16) : bank;
-    uint32_t key = (address / 32) * 34 + paletteId + 1;
+    unsigned paletteId = color256 ? PAL_BG256 + (bank >= 16) : bank;
+    uint32_t key = (address / 32) * PAL_IDS + paletteId + 1;
     unsigned hash = (key * 2654435761u) & (HASH_COUNT - 1);
     while (sHash[hash] && sTiles[sHash[hash] - 1].key != key)
         hash = (hash + 1) & (HASH_COUNT - 1);
@@ -1200,7 +1277,8 @@ static int GetTileSlot(unsigned address, unsigned bank, bool color256)
             else if (palette) ++sDecodePalette;
             else ++sDecodeBytes;
             memcpy(tile->bytes, sMemory.vram + address, bytes);
-            unsigned paletteBase = color256 ? (bank >= 16 ? 256 : 0) : bank * 16;
+            unsigned paletteBase = color256 ? (bank >= 16 ? 256 : 0)
+                                 : bank >= PAL_EXT ? 512 + (bank - PAL_EXT) * 16 : bank * 16;
             uint16_t *dest = (uint16_t *)sAtlas.data + slot * 64;
             uint16_t before[64];
 
@@ -1590,6 +1668,11 @@ static void DrawTextSpanAt(unsigned bg, int left, int right, int top, int bottom
     if (empty)
         return;
 #endif
+    /* The key below records this frame's token for the tilemap, so its
+     * blocks are compared now (the contract above): Read16 does not, and a
+     * map changed and changed back unseen would keep a stale "empty". */
+    if (cached)
+        VramSyncRange(map, 0x800u << ((size & 1) + ((size >> 1) & 1)));
     batch = TileWalkBegin();
 
     ViewBase();
@@ -1882,7 +1965,9 @@ static void MeasureStill(unsigned bg)
     unsigned scrollX = Reg(0x10 + bg * 4) & 511, scrollY = Reg(0x12 + bg * 4) & 511;
     unsigned beyond = 0, inside = 0;
 
-    if (sPictureFrame[bg] && sStats.frames - sPictureFrame[bg] < 8) return;
+    /* Signed: on an even frame the stamp (frames | 1) is one ahead, and the
+     * unsigned difference wrapped, measuring again on every call. */
+    if (sPictureFrame[bg] && (int32_t)(sStats.frames - sPictureFrame[bg]) < 8) return;
     sPictureFrame[bg] = sStats.frames | 1;
     for (unsigned y = 0; y < 20 && !(size & 1); ++y)
     {
@@ -3602,6 +3687,14 @@ static bool sLayerFailLogged;
  */
 static bool sStageWithoutPlanes;
 static bool sPlaneShrinkAsked;
+/* The overworld's ask for VRAM (CtrVideo_RequestPlaneRelease), for the frame
+ * being prepared: the battle's surfaces, the voxel world's stereo surface,
+ * the layer textures and the OBJ window of a screen that is gone give theirs
+ * back too (LayersPrepare, ScenePrepare, SlotsPrepare, StereoSurfaceManage,
+ * ObjWindowPrepare). Held after a battle in 3D, or back from the Fly map or
+ * a menu, they kept the field's atlas out, and the field was drawn in 2D
+ * until they went idle (LAYER_IDLE_FRAMES, three seconds). */
+static bool sVramAsked;
 static bool sBandsReady;
 void CtrVideo_RequestPlaneRelease(void);
 static bool ReleaseIdleSurfaces(void);
@@ -3660,6 +3753,24 @@ static void LayersRelease(void)
     for (unsigned bg = 0; bg < 4; ++bg) LayerRelease(bg);
 }
 
+/* The backgrounds the last LayersPrepare drew from a texture. */
+static unsigned sLayersWanted;
+
+/* The layer textures of a screen that is not up any more (the bag's, the
+ * Fly map's), before they go idle: outside the frame, as LayerRelease. */
+static bool ReleaseIdleLayers(void)
+{
+    bool any = false;
+
+    for (unsigned bg = 0; bg < 4; ++bg)
+        if (!(sLayersWanted & (1u << bg)) && sLayers[bg].tex.data)
+        {
+            LayerRelease(bg);
+            any = true;
+        }
+    return any;
+}
+
 /*
  * Outside the frame, where creating or deleting a target cannot stall one in
  * flight: a texture for every background drawn from one this frame, as large
@@ -3688,6 +3799,8 @@ static void LayersPrepare(void)
     unsigned want = LineBackgrounds()
                   | (sStage || sFieldLayers || centred || LineWindows() ? TextBackgrounds() : 0);
 
+    sLayersWanted = want;
+
     /* The wanted ones of the wrong size go first, so what they held is
      * free for any of this frame's new ones. */
     for (unsigned bg = 0; bg < 4; ++bg)
@@ -3708,13 +3821,13 @@ static void LayersPrepare(void)
         sLayerReady[bg] = false;
         if (!(want & (1u << bg)))
         {
-            if (layer->tex.data && sStats.frames - layer->usedFrame > LAYER_IDLE_FRAMES)
+            if (layer->tex.data && (sVramAsked || sStats.frames - layer->usedFrame > LAYER_IDLE_FRAMES))
                 LayerRelease(bg);
             continue;
         }
         if (!layer->tex.data)
         {
-            if (sLayerFail[bg] && sStats.frames - sLayerFail[bg] < LAYER_RETRY_FRAMES) continue;
+            if (sLayerFail[bg] && (int32_t)(sStats.frames - sLayerFail[bg]) < (int32_t)LAYER_RETRY_FRAMES) continue;
             if (!LayerCreate(bg, width, height))
             {
                 /*
@@ -3894,7 +4007,8 @@ static bool FastCells(unsigned bg, const uint16_t *cells, unsigned count, const 
     for (unsigned i = 0, t = 0, e = tiles; i < count; ++i)
     {
         unsigned cell = cells[i], entry = cellEntry[cell];
-        int x = (int)(cell % columns) * 8, y = (int)(cell / columns) * 8;
+        /* columns is 32 or 64: no library division per cell (no divider on the ARM11) */
+        int x = (int)(cell & (columns - 1)) * 8, y = (int)(cell >> __builtin_ctz(columns)) * 8;
 
         if (cellSlot[cell] >= 0)
             FastQuad(sFastVertices + (first + t++) * 4, x, y, cellSlot[cell], entry & 1024, entry & 2048);
@@ -4070,7 +4184,7 @@ static bool LayerRenderCells(unsigned bg)
         C3D_AlphaTest(false, GPU_ALWAYS, 0);
         C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
         for (unsigned i = 0; i < count; ++i)
-            C2D_DrawRectSolid((dirty[i] % columns) * 8, (dirty[i] / columns) * 8, 0, 8, 8, 0);
+            C2D_DrawRectSolid((dirty[i] & (columns - 1)) * 8, (dirty[i] >> __builtin_ctz(columns)) * 8, 0, 8, 8, 0);
         C2D_Flush();
         BlendForget();
     }
@@ -4080,10 +4194,15 @@ static bool LayerRenderCells(unsigned bg)
         unsigned cell = dirty[i];
 
         if (cellSlot[cell] >= 0)
-            DrawSlot(cellSlot[cell], (cell % columns) * 8, (cell / columns) * 8,
+            DrawSlot(cellSlot[cell], (cell & (columns - 1)) * 8, (cell >> __builtin_ctz(columns)) * 8,
                      cellEntry[cell] & 1024, cellEntry[cell] & 2048);
     }
     C2D_Flush();
+    /* DrawSlot drops quads past the geometry budget, and their cells already
+     * hold their new signatures: draw the whole layer again next frame, or
+     * they stay holes until their tiles change. */
+    if (sStats.tiles >= MAX_DRAWS - 32)
+        layer->valid = false;
     sInLayerTexture = false;
     BlendForget();
     return true;
@@ -4826,7 +4945,7 @@ static void DrawAffineBg(unsigned bg)
         {
             if (!wrap && ((unsigned)x >= tiles || (unsigned)y >= tiles)) continue;
             unsigned entry = map + ((unsigned)y & mask) * tiles + ((unsigned)x & mask);
-            if (entry >= 0x10000) { Error(0, "affine map outside BG VRAM"); continue; }
+            if (entry >= 0x10000) { Error(7, "affine map outside BG VRAM"); continue; }
             DrawTile(chars + sMemory.vram[entry] * 64, 0, true, x * 8, y * 8, false, false);
         }
     ViewBase();
@@ -4899,7 +5018,7 @@ static void PlaceScreenObject(int i, unsigned boxW, unsigned boxH, bool voxel, i
  * care which sprite it starts from, so any wrap of x or y is harmless here.
  * The 64 tiles are looked up once and drawn at every place.
  */
-static void DrawFogLattice(unsigned attr2, unsigned width, unsigned height, bool color256,
+static void DrawFogLattice(unsigned attr2, unsigned bank, unsigned width, unsigned height, bool color256,
                            int x, int y, bool flipX, bool flipY)
 {
     int slots[8 * 8];
@@ -4913,7 +5032,7 @@ static void DrawFogLattice(unsigned attr2, unsigned width, unsigned height, bool
             unsigned sx = flipX ? columns - 1 - tx : tx;
             unsigned sy = flipY ? rows - 1 - ty : ty;
             unsigned tile = CtrVideo_ObjTile(attr2 & 1023, sx, sy, width, color256, Reg(0) & 0x40);
-            slots[ty * columns + tx] = GetTileSlot(0x10000 + tile * 32, 16 + (attr2 >> 12), color256);
+            slots[ty * columns + tx] = GetTileSlot(0x10000 + tile * 32, bank, color256);
         }
     if (x0 > sClipX0) x0 -= (int)width * ((x0 - sClipX0 + (int)width - 1) / (int)width);
     if (y0 > sClipY0) y0 -= (int)height * ((y0 - sClipY0 + (int)height - 1) / (int)height);
@@ -5003,8 +5122,9 @@ static bool SpriteBatchRoom(unsigned tiles)
  * One sprite, already placed: its tiles batched when they can be, drawn one by
  * one otherwise (an affine sprite, a fractional position, a full batch).
  */
-static void DrawObjectAt(int x, int y, unsigned attr1, unsigned attr2, unsigned width, unsigned height,
-                         unsigned boxW, unsigned boxH, bool affine, bool color256, bool effects, unsigned mode)
+static void DrawObjectAt(int x, int y, unsigned attr1, unsigned attr2, unsigned bank, unsigned width,
+                         unsigned height, unsigned boxW, unsigned boxH, bool affine, bool color256, bool effects,
+                         unsigned mode)
 {
     if (x >= sClipX1 || x + (int)boxW <= sClipX0
      || y >= sClipY1 || y + (int)boxH <= sClipY0) return;
@@ -5034,7 +5154,7 @@ static void DrawObjectAt(int x, int y, unsigned attr1, unsigned attr2, unsigned 
                     unsigned sx = flipX ? width / 8 - 1 - tx : tx;
                     unsigned sy = flipY ? height / 8 - 1 - ty : ty;
                     unsigned tile = CtrVideo_ObjTile(attr2 & 1023, sx, sy, width, color256, Reg(0) & 0x40);
-                    int slot = GetTileSlot(0x10000 + tile * 32, 16 + (attr2 >> 12), color256);
+                    int slot = GetTileSlot(0x10000 + tile * 32, bank, color256);
 
                     if (slot < 0) continue;
                     ++sStats.tiles;
@@ -5072,7 +5192,7 @@ static void DrawObjectAt(int x, int y, unsigned attr1, unsigned attr2, unsigned 
             unsigned sx = flipX ? width / 8 - 1 - tx : tx;
             unsigned sy = flipY ? height / 8 - 1 - ty : ty;
             unsigned tile = CtrVideo_ObjTile(attr2 & 1023, sx, sy, width, color256, Reg(0) & 0x40);
-            DrawTile(0x10000 + tile * 32, 16 + (attr2 >> 12), color256,
+            DrawTile(0x10000 + tile * 32, bank, color256,
                      (affine ? 0 : x + CTR_VIEW_X + sLayerShift) + (int)tx * 8,
                      (affine ? 0 : y + CTR_VIEW_Y) + (int)ty * 8, flipX, flipY);
         }
@@ -5196,7 +5316,7 @@ static void DrawObjects(unsigned priority, bool effects)
             SpriteBatchFlush();
             Blend(4, effects, mode == 1);
             ViewBase();
-            DrawFogLattice(attr2, width, height, color256, x, y,
+            DrawFogLattice(attr2, ObjBank((unsigned)i, attr2), width, height, color256, x, y,
                            (attr1 & 0x1000) != 0, (attr1 & 0x2000) != 0);
             if (fog) fogDrawn = true;
             else latticeDrawn = true;
@@ -5215,11 +5335,12 @@ static void DrawObjects(unsigned priority, bool effects)
             while (top + (int)boxH > sClipY0) top -= 160;
             for (int cy = top; cy < sClipY1; cy += 160)
                 for (int cx = left; cx < sClipX1; cx += 240)
-                    DrawObjectAt(cx, cy, attr1, attr2, width, height, boxW, boxH, false, color256, effects,
-                                 mode);
+                    DrawObjectAt(cx, cy, attr1, attr2, ObjBank((unsigned)i, attr2), width, height, boxW, boxH,
+                                 false, color256, effects, mode);
             continue;
         }
-        DrawObjectAt(x, y, attr1, attr2, width, height, boxW, boxH, affine, color256, effects, mode);
+        DrawObjectAt(x, y, attr1, attr2, ObjBank((unsigned)i, attr2), width, height, boxW, boxH, affine, color256,
+                     effects, mode);
     }
     SpriteBatchFlush();
     sLayerShift = layerShift;
@@ -5753,7 +5874,8 @@ static void ObjWindowPrepare(void)
     sObjWinWanted = false;
     if (!wanted) sObjWinNeed = 0;
     if (wanted) sObjWinUsedFrame = sStats.frames;
-    else if (sObjWinTarget && (sTransitionRequested || sStats.frames - sObjWinUsedFrame > LAYER_IDLE_FRAMES))
+    else if (sObjWinTarget && (sTransitionRequested || sVramAsked
+                               || sStats.frames - sObjWinUsedFrame > LAYER_IDLE_FRAMES))
         ObjWindowRelease();
     /* Too small for the window now on screen: made again, larger. */
     if (wanted && sObjWinTarget && large && sObjWinTex.width < OBJWIN_SIZE_LARGE)
@@ -6132,7 +6254,7 @@ bool CtrVideo_Init(void)
         sMortonPair[i / 2] = sMorton[i] / 2;
         if ((sMorton[i] & 1) || sMorton[i + 1] != sMorton[i] + 1) sMortonPairs = false;
     }
-    for (unsigned i = 0; i < 512; ++i)
+    for (unsigned i = 0; i < sizeof(sPalette) / sizeof(sPalette[0]); ++i)
         sTexturePalette[i] = CtrVideo_RGBA5551(sPalette[i]);
     C2D_Prepare();
     Flat2D();
@@ -6178,12 +6300,8 @@ void CtrVideo_Bind(CtrVideoMemory memory)
  * directly, and the allocation is tried again later.
  */
 static bool sSceneCached;
-/* The overworld's ask for VRAM (CtrVideo_RequestPlaneRelease), for the frame
- * being prepared: the battle's surfaces and the voxel world's stereo surface
- * give theirs back too (ScenePrepare, SlotsPrepare, StereoSurfaceManage).
- * Held after a battle in 3D they kept the field's atlas out, and the field
- * was drawn in 2D until they went idle. */
-static bool sVramAsked;
+/* A battle without its scene surface has no 3D: tried again soon. */
+#define SCENE_RETRY_FRAMES 60u
 
 static void SceneRelease(void)
 {
@@ -6202,20 +6320,34 @@ static void ScenePrepare(void)
         return;
     }
     sSceneUsedFrame = sStats.frames;
-    if (sScene || (sSceneFailed && sStats.frames - sSceneFailFrame < LAYER_RETRY_FRAMES)) return;
-    for (unsigned attempt = 0; attempt < 2 && !sScene; ++attempt)
+    if (sScene || (sSceneFailed && sStats.frames - sSceneFailFrame < SCENE_RETRY_FRAMES)) return;
+    for (unsigned attempt = 0; attempt < 3 && !sScene; ++attempt)
     {
+        bool freed = false;
+
         if (C3D_TexInitVRAM(&sSceneTex, SCENE_W, SCENE_H, GPU_RGBA5551)
             && (sScene = C3D_RenderTargetCreateFromTex(&sSceneTex, GPU_TEXFACE_2D, 0, -1)))
             break;
         SceneRelease();
-        /* The overworld's atlases of other maps are what a 2D screen gets
-         * back first, as for the depth planes (BandsReady). */
+        /*
+         * Back from the bag or the party (a centred screen), what it held is
+         * not idle yet: its layer textures, its depth planes, the bottom
+         * surface. Kept, they left no 512 KiB gap, the battle had no scene
+         * surface and so no 3D until the retry - the turn was over by then
+         * (port.log, 2026-10-15: 187 frames with the slider up, none in 3D).
+         * Then the overworld's atlases of other maps, as for the depth planes.
+         */
+        if (attempt == 0)
+        {
+            freed = ReleaseIdleLayers();
+            freed = ReleaseIdleSurfaces() || freed;
+        }
 #if CTR_VOXEL_ENABLED
-        if (attempt == 0 && CtrVoxel_ReleaseIdleVram() == 0) break;
-#else
-        break;
+        if (!freed && attempt < 2)
+            freed = CtrVoxel_ReleaseIdleVram() > 0;
 #endif
+        if (!freed)
+            break;
     }
     if (!sScene)
     {
@@ -7086,7 +7218,7 @@ static bool BallTexture(void)
     uint16_t *data;
 
     if (sBallTex.data) return true;
-    if (!mask || (sBallFailFrame && sStats.frames - sBallFailFrame < BALL_RETRY_FRAMES)) return false;
+    if (!mask || (sBallFailFrame && (int32_t)(sStats.frames - sBallFailFrame) < BALL_RETRY_FRAMES)) return false;
     if (!C3D_TexInit(&sBallTex, size, size, GPU_RGBA5551))
     {
         memset(&sBallTex, 0, sizeof(sBallTex));
@@ -8361,12 +8493,23 @@ static void StereoSurfaceManage(void)
         static const GPU_TEXCOLOR formats[] = {GPU_RGBA8, GPU_RGB565};
         unsigned made = 0;
 
-        for (; made < 2; ++made)
+        for (unsigned round = 0; round < 2 && !sStereoTarget; ++round)
         {
-            if (C3D_TexInitVRAM(&sStereoTex, 512, 256, formats[made])
-                && (sStereoTarget = C3D_RenderTargetCreateFromTex(&sStereoTex, GPU_TEXFACE_2D, 0, -1)))
-                break;
-            StereoSurfaceRelease();
+            for (made = 0; made < 2; ++made)
+            {
+                if (C3D_TexInitVRAM(&sStereoTex, 512, 256, formats[made])
+                    && (sStereoTarget = C3D_RenderTargetCreateFromTex(&sStereoTex, GPU_TEXFACE_2D, 0, -1)))
+                    break;
+                StereoSurfaceRelease();
+            }
+            /* As the scene surface: what a screen left behind goes first. */
+            if (!sStereoTarget && round == 0)
+            {
+                bool freed = ReleaseIdleLayers();
+
+                if (!(ReleaseIdleSurfaces() || freed))
+                    break;
+            }
         }
         if (sStereoTarget)
         {
@@ -9441,7 +9584,7 @@ static bool ReleaseIdleSurfaces(void)
         any = true;
     }
     if (any)
-        CtrLog_Write(CTR_LOG_VIDEO, "VRAM short for a layer: idle 3D planes / bottom surface released "
+        CtrLog_Write(CTR_LOG_VIDEO, "VRAM short: idle 3D planes / bottom surface released "
                      "(VRAM free=%lu)", (unsigned long)vramSpaceFree());
     return any;
 }
@@ -9774,6 +9917,8 @@ static const char *const sFpsGlyphs[] =
     "111101111100100", /* P */
     "001001010100100", /* / */
 };
+#endif
+
 /* Game frames a second, hidden ones included (CtrPlatform_FrameCount): the
  * game's speed, beside the pictures a second the counter always showed.
  * With real-time pacing (3ds_platform.c) the two differ on a slow frame. */
@@ -9838,6 +9983,7 @@ static void DrawPoisonVeil(C3D_RenderTarget *target, unsigned alpha)
     C2D_DrawRectSolid(0, 0, 0, CTR_GAME_WIDTH, CTR_GAME_HEIGHT, C2D_Color32(150, 60, 200, alpha));
 }
 
+#if CTR_SHOW_FPS
 static void DrawFps(C3D_RenderTarget *target)
 {
     unsigned fps = (unsigned)(sStats.fps + 0.5f), game = (unsigned)(sGameFps + 0.5f);
@@ -10062,9 +10208,12 @@ void CtrVideo_Present(void)
     LayersPrepare();
     ScenePrepare();
     SlotsPrepare();
-    sVramAsked = false;
     ObjWindowPrepare();
+    sVramAsked = false;
     uint64_t waitStart = svcGetSystemTick();
+#if CTR_VOXEL_ENABLED
+    CtrVoxel_NoteFrameWait(waitStart);
+#endif
     if (!C3D_FrameBegin(C3D_FRAME_SYNCDRAW)) return;
     sUploadCommands = 0;
     sRenderReserve = sBattle ? 28u : 24u;
@@ -10202,7 +10351,6 @@ void CtrVideo_Present(void)
     if (sUsed > CACHE_COUNT - 4096) { memset(sHash, 0, sizeof(sHash)); sUsed = 0; ++sCacheGeneration; }
     PORT_PROF_BEGIN(palette);
     CtrDayNight_Update();
-    TrackVram();
     UpdatePalette();
     KeySectionColours();
     PORT_PROF_END(palette, PORT_PROF_PALETTE);

@@ -173,7 +173,7 @@ bool VoxelRelief_Init(void)
         l->belt = (uint8_t)((U16(row + 6) >> 10) & 0x0F);
         l->cells = sBlob + offset;
         l->count = (uint16_t)cells;
-        if (offset + (uint32_t)cells * CELL_BYTES > (uint32_t)size)
+        if (offset > (uint32_t)size || (uint32_t)cells * CELL_BYTES > (uint32_t)size - offset)
             goto fail;
         for (unsigned k = 1; k < cells; ++k)
         {

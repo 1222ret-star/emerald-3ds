@@ -21,6 +21,11 @@ bool CtrVoxel_Update(void);
  * finishes is uploaded by the next Update.
  */
 void CtrVoxel_AfterSubmit(uint64_t frameBeginTick);
+/* Called just before the next C3D_FrameBegin() waits, with the tick: what ran
+ * between the end of AfterSubmit and here (the game, the audio, the bottom
+ * screen, the compositor's preparation, the log) is the share the next
+ * AfterSubmit leaves free. */
+void CtrVoxel_NoteFrameWait(uint64_t waitTick);
 /* Called instead after a frame the world was not drawn in: what it holds only
  * to be drawn (the night lamps' buffers) goes once no queued frame reads it. */
 void CtrVoxel_Idle(void);

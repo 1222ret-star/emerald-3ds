@@ -14,7 +14,7 @@
 #ifndef SIGN_MASK_PATH
 #define SIGN_MASK_PATH "voxel/signposts.bin"
 #endif
-#define SIGN_MAGIC "VXS2"
+#define SIGN_MAGIC "VXS3"
 
 typedef struct
 {
@@ -22,6 +22,7 @@ typedef struct
     uint16_t rows[16];
     uint16_t head[16];  /* the sign's part drawn in the cell north of it */
     uint16_t headGround;
+    uint16_t ground;    /* the metatile the sign's own cell is laid with */
 } SignRecord;
 
 static SignRecord *sIndex;
@@ -104,52 +105,94 @@ bool VoxelSign_IsLantern(const uint16_t head[16])
     return top != 0 && (top & (top - 1u)) == 0 && width >= 7;
 }
 
-static float LampWeight(float xpos, float zpos, float centerX, float centerZ)
+/* The ground a lamp's light may fall on: what is walked or seen between
+ * things - floor, water, the foot of a post, fence or prop. Not a building,
+ * tree, cliff, ledge or stair, whose ground is not where the pool lies. */
+static bool LampLit(const VoxelMapInstance *inst, int x, int z)
 {
-    float dx = xpos - centerX, dz = zpos - centerZ;
-    float weight = 1.0f - (dx * dx + dz * dz) / 3.0625f;
-    return weight > 0.0f ? weight * weight : 0.0f;
+    int localX = x - inst->originX, localZ = z - inst->originY;
+    unsigned role;
+
+    if (localX < 0 || localZ < 0 || localX >= inst->width || localZ >= inst->height)
+        return false;
+    role = VoxelRegions_RoleAt(inst->layoutId, localX, localZ);
+    return role == VOXEL_ROLE_FLOOR || role == VOXEL_ROLE_WATER || role == VOXEL_ROLE_SIGNPOST
+        || role == VOXEL_ROLE_FENCE || role == VOXEL_ROLE_PROP;
 }
 
+/* A rectangle of the pool on one ground, its texture (the round falloff of
+ * VOXEL_LAMP_POOL_RADIUS) mapped from the lamp's centre. */
+static void LampPoolQuad(VoxelBuilder *b, float x0, float z0, float x1, float z1,
+                         float centerX, float centerZ)
+{
+    float scale = 0.5f / VOXEL_LAMP_POOL_RADIUS;
+    float u0 = 0.5f + (x0 - centerX) * scale, u1 = 0.5f + (x1 - centerX) * scale;
+    float v0 = 0.5f + (z0 - centerZ) * scale, v1 = 0.5f + (z1 - centerZ) * scale;
+
+    VoxelBuilder_Quad(b,
+        &(VoxelVertex){x0, 0.0f, z0, u0, v0, 1.0f},
+        &(VoxelVertex){x1, 0.0f, z0, u1, v0, 1.0f},
+        &(VoxelVertex){x1, 0.0f, z1, u1, v1, 1.0f},
+        &(VoxelVertex){x0, 0.0f, z1, u0, v1, 1.0f});
+}
+
+/*
+ * The pool of light under a lamp: a textured disc on the ground, its falloff
+ * per pixel. Where every cell it covers is lit ground at one height - a city
+ * street - it is one quad; elsewhere a quad a cell, on the cells it may light.
+ * It used to be four quads a cell with the falloff in the vertices, which drew
+ * it in visible squares, and it left out the lamp's own cell (a signpost) and
+ * any fence beside it: dark squares where the light is brightest.
+ */
 static void LampGround(VoxelBuilder *builder, const VoxelMapInstance *inst,
                        float centerX, float centerZ)
 {
-    int firstX = (int)floorf(centerX) - 2, firstZ = (int)floorf(centerZ) - 2;
+    const float r = VOXEL_LAMP_POOL_RADIUS;
+    int firstX = (int)floorf(centerX - r), lastX = (int)floorf(centerX + r);
+    int firstZ = (int)floorf(centerZ - r), lastZ = (int)floorf(centerZ + r);
+    float lift = 0.0f, shift = 0.0f;
+    bool flat = true;
+
     if (builder == NULL)
         return;
     builder->base = VoxelRelief_Base(inst);
-    for (int zpos = firstZ; zpos <= firstZ + 4; ++zpos)
-        for (int xpos = firstX; xpos <= firstX + 4; ++xpos)
+    for (int zpos = firstZ; zpos <= lastZ && flat; ++zpos)
+        for (int xpos = firstX; xpos <= lastX && flat; ++xpos)
         {
-            int localX = xpos - inst->originX, localZ = zpos - inst->originY;
-            if (localX < 0 || localZ < 0 || localX >= inst->width || localZ >= inst->height
-                || VoxelRegions_RoleAt(inst->layoutId, localX, localZ) != VOXEL_ROLE_FLOOR)
+            float l = VoxelRelief_CellLift(inst, xpos, zpos), s = VoxelRelief_CellShift(inst, xpos, zpos);
+
+            if (zpos == firstZ && xpos == firstX)
+            {
+                lift = l;
+                shift = s;
+            }
+            flat = LampLit(inst, xpos, zpos) && l == lift && s == shift;
+        }
+    if (flat)
+    {
+        if (builder->capacity - builder->count < 6u)
+            return;
+        builder->lift = lift;
+        builder->shift = shift;
+        LampPoolQuad(builder, centerX - r, centerZ - r, centerX + r, centerZ + r, centerX, centerZ);
+        return;
+    }
+    for (int zpos = firstZ; zpos <= lastZ; ++zpos)
+        for (int xpos = firstX; xpos <= lastX; ++xpos)
+        {
+            /* the cell's nearest point to the centre: is any of it lit? */
+            float nx = centerX < xpos ? xpos : centerX > xpos + 1 ? xpos + 1 : centerX;
+            float nz = centerZ < zpos ? zpos : centerZ > zpos + 1 ? zpos + 1 : centerZ;
+
+            if ((nx - centerX) * (nx - centerX) + (nz - centerZ) * (nz - centerZ) >= r * r
+             || !LampLit(inst, xpos, zpos))
                 continue;
+            if (builder->capacity - builder->count < 6u)
+                return;
             builder->lift = VoxelRelief_CellLift(inst, xpos, zpos);
             builder->shift = VoxelRelief_CellShift(inst, xpos, zpos);
-            for (unsigned row = 0; row < 2; ++row)
-                for (unsigned column = 0; column < 2; ++column)
-                {
-                    float left = xpos + column * 0.5f, top = zpos + row * 0.5f;
-                    VoxelVertex corners[4] = {
-                        {left, 0.0f, top, 0.0f, 0.0f, 0.0f},
-                        {left + 0.5f, 0.0f, top, 0.0f, 0.0f, 0.0f},
-                        {left + 0.5f, 0.0f, top + 0.5f, 0.0f, 0.0f, 0.0f},
-                        {left, 0.0f, top + 0.5f, 0.0f, 0.0f, 0.0f},
-                    };
-                    float total = 0.0f;
-                    for (unsigned corner = 0; corner < 4; ++corner)
-                    {
-                        corners[corner].shade = LampWeight(corners[corner].x, corners[corner].z,
-                                                          centerX, centerZ);
-                        total += corners[corner].shade;
-                    }
-                    if (total == 0.0f)
-                        continue;
-                    if (builder->capacity - builder->count < 6u)
-                        return;
-                    VoxelBuilder_Quad(builder, &corners[0], &corners[1], &corners[2], &corners[3]);
-                }
+            LampPoolQuad(builder, (float)xpos, (float)zpos, (float)(xpos + 1), (float)(zpos + 1),
+                         centerX, centerZ);
         }
 }
 
@@ -439,14 +482,28 @@ static bool EmitCell(VoxelBuilder *b, const VoxelMapInstance *inst, int x, int y
     }
     {
         float gu0, gv0, gu1, gv1;
-        /* The lone detector guarantees an open south neighbour. Never paint
-         * the sign's drawing a second time on its ground. */
-        if (ground && VoxelMesh_TileUV(b, x, y + 1, &gu0, &gv0, &gu1, &gv1))
+        /* The ground the generator matched to the cell's drawing round the
+         * sign (the lawn it stands on, not the path south of it); the cell
+         * south of it when the atlas has none. Never paint the sign's
+         * drawing a second time on its ground. */
+        if (ground && (VoxelMesh_MetatileUV(b, r->ground, &gu0, &gv0, &gu1, &gv1)
+                    || VoxelMesh_TileUV(b, x, y + 1, &gu0, &gv0, &gu1, &gv1)))
             VoxelMesh_Top(b, (float)x, (float)y, 0.0f, 0.0f,
                           gu0, gv0, gu1, gv1, 1.0f);
     }
     VoxelSign_Emit(b, (float)x, (float)(y - (mask.headRows ? 1 : 0)), 0.0f, &mask,
                    VOXEL_SIGN_PINNED_DEPTH, 1.0f);
+    return true;
+}
+
+bool VoxelSign_Ground(const VoxelMapInstance *inst, int x, int y, int *metatile)
+{
+    const SignRecord *r;
+
+    if (!inst) return false;
+    r = FindMask((unsigned)inst->layoutId, x - inst->originX, y - inst->originY);
+    if (!r) return false;
+    if (metatile) *metatile = r->ground;
     return true;
 }
 
@@ -506,9 +563,10 @@ static bool ShadowOf(const VoxelMapInstance *inst, int x, int y, SignShadow *s)
     const int16_t *relief;
     bool head;
 
-    if (!VoxelSign_IsCell(inst, x, y))
+    /* one search: VoxelSign_IsCell would make the same one again */
+    r = inst ? FindMask((unsigned)inst->layoutId, x - inst->originX, y - inst->originY) : NULL;
+    if (r == NULL)
         return false;
-    r = FindMask((unsigned)inst->layoutId, x - inst->originX, y - inst->originY);
     head = HasHead(r);
     memset(s, 0, sizeof(*s));
     if (head)

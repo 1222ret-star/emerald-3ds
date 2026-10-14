@@ -911,11 +911,15 @@ static u8 ReceiveData(u32 *out)
         {
             if (!sA.children[i].active)
                 continue;
-            len = QueuePop(&sA.children[i].frames, &data);
+            struct FrameQueue *q = &sA.children[i].frames;
+
+            /* Room first: a frame that does not fit stays for the next call. */
+            len = q->count ? q->len[q->head] : 0;
             if (len > 31)
                 len = 31;
             if (total + len > 0x6C)
                 break;
+            QueuePop(q, &data);
             out[0] |= len << (8 + 5 * i);
             memcpy(bytes + total, data, len);
             total += len;

@@ -66,7 +66,10 @@ typedef struct
     int x0, y0, x1, y1;
     uint8_t alpha[48 * 20];
     bool made;
+    uint8_t tries;  /* a trace costs ms: one that keeps failing stops (LABEL_TRIES) */
 } Label;
+
+#define LABEL_TRIES 60
 
 typedef struct
 {
@@ -351,6 +354,8 @@ static void Trace(Label *label, const uint8_t *bits, int w, int h)
     int cw = w * TRACE_K + 2 * TRACE_PAD, ch = h * TRACE_K + 2 * TRACE_PAD;
 
     label->made = false;
+    if (label->tries < 255)
+        ++label->tries;
     if (w > 24 || h > 8)
         return;
     for (int i = -TRACE_RADIUS; i <= TRACE_RADIUS; ++i)
@@ -427,7 +432,7 @@ static void MakeLabels(const uint16_t *boxTileVram)
 {
     uint8_t bits[24 * 8];
 
-    if (!sHpLabel.made)
+    if (!sHpLabel.made && sHpLabel.tries < LABEL_TRIES)
     {
         /* "HP" (Spanish "PS"): the bar's first two tiles, its orange colours. */
         const uint8_t *h = CtrBattleHud_ElementGfx(1), *p = CtrBattleHud_ElementGfx(2);
@@ -446,7 +451,7 @@ static void MakeLabels(const uint16_t *boxTileVram)
         /* A pill's letters: the light colour inside its first 20 columns. */
         static const uint8_t elements[5] = {21, 24, 27, 30, 33};   /* PSN PRZ SLP FRZ BRN, battler 0 */
 
-        if (sPills[s].made)
+        if (sPills[s].made || sPills[s].tries >= LABEL_TRIES)
             continue;
         memset(bits, 0, sizeof(bits));
         for (int y = 1; y < 7; ++y)
@@ -454,7 +459,7 @@ static void MakeLabels(const uint16_t *boxTileVram)
                 bits[y * 24 + x] = TilePixel(CtrBattleHud_ElementGfx(elements[s] + x / 8), x & 7, y) == 2;
         Trace(&sPills[s], bits, 24, 8);
     }
-    if (!sExpLabel.made && boxTileVram)
+    if (!sExpLabel.made && sExpLabel.tries < LABEL_TRIES && boxTileVram)
     {
         /* "EXP": the player's box, row 4 of its tiles, columns 2 and 3,
          * lines 2-4 - the label's olive top and yellow letters. */
@@ -820,9 +825,14 @@ void CtrBattleHud_SetHp(unsigned char id, short value, bool max)
 
     if (!slot)
         return;
-    if (max) slot->maxHp = value;
-    else slot->hp = value;
-    slot->dirty = true;
+    /* Dirty only on a change: each recompose clears and redraws the box. */
+    int16_t *field = max ? &slot->maxHp : &slot->hp;
+
+    if (*field != value)
+    {
+        *field = value;
+        slot->dirty = true;
+    }
 }
 
 void CtrBattleHud_SetBar(unsigned char id, bool exp, unsigned char pixels, unsigned char colour)
@@ -850,7 +860,7 @@ void CtrBattleHud_SetStatus(unsigned char id, unsigned char status)
 {
     Slot *slot = SlotOf(id);
 
-    if (slot)
+    if (slot && slot->status != status)
     {
         slot->status = status;
         slot->dirty = true;
@@ -861,7 +871,7 @@ void CtrBattleHud_SetBall(unsigned char id, bool shown)
 {
     Slot *slot = SlotOf(id);
 
-    if (slot)
+    if (slot && slot->ball != shown)
     {
         slot->ball = shown;
         slot->dirty = true;
@@ -872,7 +882,7 @@ void CtrBattleHud_SetSafariBalls(unsigned char id, unsigned char balls)
 {
     Slot *slot = SlotOf(id);
 
-    if (slot)
+    if (slot && slot->safariBalls != balls)
     {
         slot->safariBalls = balls;
         slot->dirty = true;

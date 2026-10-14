@@ -31,7 +31,7 @@ index 11095bc7ac57e3688f84e03f8e836897eb0e8e2a..26b61682d54d25c45113d91e3e89cf0e
  
  static void PlayerHandleGetMonData(void);
  static void PlayerHandleSetMonData(void);
-@@ -230,6 +234,129 @@ static void CompleteOnBankSpritePosX_0(void)
+@@ -230,6 +234,137 @@ static void CompleteOnBankSpritePosX_0(void)
          PlayerBufferExecCompleted();
  }
  
@@ -101,33 +101,41 @@ index 11095bc7ac57e3688f84e03f8e836897eb0e8e2a..26b61682d54d25c45113d91e3e89cf0e
 +    return ITEM_NONE;
 +}
 +
-+/* Select the next available ball in bag order, wrapping at either end. */
++/* The Poke Balls pocket slot of the first stack of `ball`, or the capacity. */
++static u32 QuickBallFirstStack(u16 ball)
++{
++    u32 i;
++
++    for (i = 0; i < gBagPockets[BALLS_POCKET].capacity; i++)
++        if (gBagPockets[BALLS_POCKET].itemSlots[i].itemId == ball)
++            break;
++    return i;
++}
++
++/* Select the next available ball in bag order, wrapping at either end. A
++ * ball in two stacks counts once, at its first: stopping at a second stack
++ * sent the next press back to the first and left the balls past it out. */
 +bool8 CtrBattle_QuickBallCycle(s8 direction)
 +{
 +    u16 current = CtrBattle_QuickBallItem(), ball;
 +    u32 capacity = gBagPockets[BALLS_POCKET].capacity;
-+    u32 currentIndex = capacity, i, step;
++    u32 currentIndex, step;
 +
 +    if (current == ITEM_NONE || direction == 0 || capacity == 0)
 +        return FALSE;
-+    for (i = 0; i < capacity; i++)
-+        if (gBagPockets[BALLS_POCKET].itemSlots[i].itemId == current)
-+        {
-+            currentIndex = i;
-+            break;
-+        }
++    currentIndex = QuickBallFirstStack(current);
 +    if (currentIndex == capacity)
 +        return FALSE;
-+    for (step = 1; step <= capacity; step++)
++    for (step = 1; step < capacity; step++)
 +    {
 +        u32 index = direction > 0 ? (currentIndex + step) % capacity
-+                                  : (currentIndex + capacity - (step % capacity)) % capacity;
++                                  : (currentIndex + capacity - step) % capacity;
 +
 +        ball = gBagPockets[BALLS_POCKET].itemSlots[index].itemId;
-+        if (IsBall(ball) && CheckBagHasItem(ball, 1))
++        if (IsBall(ball) && QuickBallFirstStack(ball) == index && CheckBagHasItem(ball, 1))
 +        {
 +            sQuickBallSelected = ball;
-+            return ball != current;
++            return TRUE;
 +        }
 +    }
 +    return FALSE;
@@ -161,7 +169,7 @@ index 11095bc7ac57e3688f84e03f8e836897eb0e8e2a..26b61682d54d25c45113d91e3e89cf0e
  static void HandleInputChooseAction(void)
  {
      u16 itemId = gBattleBufferA[gActiveBattler][2] | (gBattleBufferA[gActiveBattler][3] << 8);
-@@ -245,6 +336,10 @@ static void HandleInputChooseAction(void)
+@@ -245,6 +380,10 @@ static void HandleInputChooseAction(void)
  #ifdef PLATFORM_3DS
      if (CtrBattleMenu_Active())
          CtrBattleMenu_ActionInput(&gActionSelectionCursor[gActiveBattler], FALSE);
@@ -172,7 +180,7 @@ index 11095bc7ac57e3688f84e03f8e836897eb0e8e2a..26b61682d54d25c45113d91e3e89cf0e
  #endif
      if (JOY_NEW(A_BUTTON))
      {
-@@ -1399,6 +1494,12 @@ static void CompleteWhenChoseItem(void)
+@@ -1399,6 +1538,12 @@ static void CompleteWhenChoseItem(void)
  {
      if (gMain.callback2 == BattleMainCB2 && !gPaletteFade.active)
      {
@@ -185,7 +193,7 @@ index 11095bc7ac57e3688f84e03f8e836897eb0e8e2a..26b61682d54d25c45113d91e3e89cf0e
          BtlController_EmitOneReturnValue(B_COMM_TO_ENGINE, gSpecialVar_ItemId);
          PlayerBufferExecCompleted();
      }
-@@ -2595,6 +2694,9 @@ static void PlayerHandleChooseAction(void)
+@@ -2595,6 +2740,9 @@ static void PlayerHandleChooseAction(void)
  
      gBattlerControllerFuncs[gActiveBattler] = HandleChooseActionAfterDma3;
      BattleTv_ClearExplosionFaintCause();
@@ -195,7 +203,7 @@ index 11095bc7ac57e3688f84e03f8e836897eb0e8e2a..26b61682d54d25c45113d91e3e89cf0e
  #ifdef PLATFORM_3DS
      if (CtrBattleMenu_Active())
      {
-@@ -2700,6 +2802,27 @@ static void PlayerHandleChooseItem(void)
+@@ -2700,6 +2848,27 @@ static void PlayerHandleChooseItem(void)
  {
      s32 i;
  

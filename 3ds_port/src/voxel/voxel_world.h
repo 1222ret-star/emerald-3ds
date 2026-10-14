@@ -67,8 +67,6 @@ void VoxelWorld_BeginBatch(void);
 
 /* The current map, its connections and theirs (see voxel_world.c). */
 void VoxelWorld_BuildInstances(void);
-/* Layouts of the maps just past those placed, none of them on screen now. */
-unsigned VoxelWorld_NextLayouts(unsigned *layouts, unsigned max);
 /*
  * The asset payloads the renderer reads for the maps on screen and one
  * crossing away - each layout's border, each tileset's attributes, metatiles,

@@ -2,6 +2,37 @@
 
 ## Unreleased
 
+- Follower Pokémon (OPTIONS > ENHANCEMENTS > FOLLOWER, off by default): the
+  party's lead walks behind the player on its HeartGold/SoulSilver overworld
+  sprite, comes out of and goes back into its Poké Ball (warps, surf, bike,
+  rooms too low for it), and answers when talked to with its cry and one of
+  HGSS's messages. The builder fetches those sprites and texts at pinned
+  commits and converts them; a file it cannot get is left out and the build
+  goes on. The visible wild Pokémon use the same sprites where they exist.
+  Sixteen more OBJ palettes, 3DS only, give them colours of their own. Its
+  patch is 0056-follower-pokemon.
+
+- Night lamps light a round pool that brightens the ground under them, in
+  place of the orange squares; on an Old 3DS they are no longer rebuilt at
+  every step of the camera.
+
+- Quick ball: the arrows reach every ball in the pocket when one kind is in
+  two stacks; a change of ball redraws its plate alone.
+
+- Voxel Petalburg: the hedges wrap the houses and the signs stand on their
+  own ground.
+
+- A battle keeps its 3D after the bag or the party is closed: the layers the
+  last screen left are given back to VRAM at once.
+
+- Code audit: the asset loaders checked against bad data, an audio worker
+  race and uninitialised reads fixed, fewer needless redraws of the bottom
+  screen and the battle HUD; the frame budget measures the real end of the
+  frame.
+
+- The builder rejects a modified French (BPEF) ROM, by @andyst-dev (pull
+  request #62).
+
 - Local wireless play between 3DS systems nearby, by @eathanpage (pull
   request #76): the Union Room, the Direct Corner's Trade Center and
   Colosseum, the Berry Blender, the wireless minigames, link contests and the

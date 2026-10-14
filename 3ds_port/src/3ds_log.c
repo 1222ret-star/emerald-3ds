@@ -326,7 +326,11 @@ void CtrLog_Write(CtrLogCategory category, const char *format, ...)
     if (length < 0)
         return;
     if (length >= (int)sizeof(line))
+    {
+        /* Truncated: still a line of its own in port.log. */
         length = sizeof(line) - 1;
+        line[length - 1] = '\n';
+    }
     /* The bottom screen no longer mirrors the log: only the debug output and
      * the SD file receive it, and the screen is left to the overlay. */
     svcOutputDebugString(line, length);

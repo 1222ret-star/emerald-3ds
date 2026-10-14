@@ -641,12 +641,17 @@ verify-voxel-building-anim: romfs/voxel/buildings.bin
 # with a reason for each, and the verdict that fails the build on the rest,
 # and on an entry in it that finds no fault; and the parts that make them right (casings,
 # tables on legs, tops flat against a wall, pieces cut by their outlines,
-# frames seen through, domes) still exact at 45 degrees.
+# frames seen through, domes) still exact at 45 degrees. And what of a
+# model's texture the export puts on its page: every texel its faces read,
+# clear ones too, so that none reads the next image packed beside it (the
+# laboratory's desk tops in a strip on its floor); a floor decal's quads
+# only over its marks.
 .PHONY: verify-voxel-interior-lint
 verify: verify-voxel-interior-lint
 verify-voxel-interior-lint:
 	"$(PYTHON)" -B tests/voxel_interior_lint_test.py
 	"$(PYTHON)" -B tests/voxel_interior_parts_test.py
+	"$(PYTHON)" -B tests/voxel_building_crop_test.py
 
 .PHONY: verify-pokedex-capture verify-voxel-dewford
 verify: verify-pokedex-capture verify-voxel-dewford

@@ -74,15 +74,15 @@ def check_sign_fixture(tree):
     # A post here (voxel_cells.is_signpost: drawn as one, walkable to its
     # south), drawn by sign_record; the event board reads it the same.
     assert layout.role_at(11, 16) == "signpost"
-    assert event_board_masks(pair, layout, 11, 16) == signs.sign_record(layout, pair, 11, 16)
+    assert event_board_masks(pair, layout, 11, 16) == signs.sign_record(layout, pair, 11, 16)[:3]
     assert [layout.metatile(11, row) for row in (15, 16, 17)] == [0x208, 0x210, 0x124]
     records = signs.layout_records(layout_index, layout, pair)
     fixture = [record for record in records if record[1:3] == (11, 16)]
     assert len(fixture) == 1
-    _, _, _, rows, head, ground = fixture[0]
+    _, _, _, rows, head, ground, cell = fixture[0]
     assert rows == [0xFFFE] * 10 + [0x7FFC, 0x0FE0, 0x3FF8, 0x7FFC, 0x3FF8, 0x0FE0]
     assert head == [0] * 9 + [0x3FF8, 0x7FFC] + [0xFFFE] * 5
-    assert ground == 0x124
+    assert ground == 0x124 and cell == 0x124
     assert sum(row.bit_count() for row in rows) == 212
     assert sum(row.bit_count() for row in head) == 99
     # the board's top, 0x208 north of it, read as its head
@@ -100,7 +100,7 @@ def check_sign_fixture(tree):
         executable = pathlib.Path(temporary) / "voxel_sign_test"
         signs.write_records(records, binary)
         data = binary.read_bytes()
-        assert data[:4] == b"VXS2" and len(data) == 8 + len(records) * 72
+        assert data[:4] == b"VXS3" and len(data) == 8 + len(records) * 74
         assert struct.unpack_from("<I", data, 4)[0] == len(records)
         subprocess.run([compiler, "-std=c99", "-O2", "-Wall", "-Wextra", "-Werror",
                         "-I" + str(PORT / "include"), "-I" + str(PORT / "src/voxel"),

@@ -128,7 +128,7 @@ def run():
             pair = voxel_cells.pair_for(layout.primary, layout.secondary)
             x, y = b["x"], b["y"]
             assert layout.role_at(x, y) == "signpost", (path.parent.name, layout.role_at(x, y))
-            rows, head, _ = sign_record(layout, pair, x, y)
+            rows, head, _, _ = sign_record(layout, pair, x, y)
             assert rows[15] and not all(r == 0xFFFF for r in rows), path.parent.name
             assert any(head), path.parent.name
             gyms += 1

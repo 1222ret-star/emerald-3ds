@@ -147,7 +147,7 @@ static void ReadCell(StageCell *cell, int x, int z, bool indoor)
 {
     const VoxelMapInstance *inst = VoxelWorld_GetInstanceAt(x, z);
     VoxelVisualShape shape;
-    int metatile, ground;
+    int metatile;
     float top = 0.0f;
     const int16_t *relief;
 
@@ -172,7 +172,7 @@ static void ReadCell(StageCell *cell, int x, int z, bool indoor)
     cell->kind = KindOf(VoxelWorld_GetMetatileBehavior(x, z));
     cell->blocked = VoxelWorld_GetCollision(x, z) != 0;
     metatile = VoxelWorld_GetMetatileId(x, z);
-    if (VoxelBuildings_CellAt(inst, x, z, &ground, &top) && top > cell->top)
+    if (VoxelBuildings_CellAt(inst, x, z, NULL, &top) && top > cell->top)
         cell->top = top;
     if (VoxelWorld_UsesTreeSprites(inst))
     {

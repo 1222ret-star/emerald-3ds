@@ -259,8 +259,9 @@ static bool TakeModel(unsigned i, const uint8_t *r)
     m->isStatic = (U32(r + 8) & 0x80000000u) != 0;
     m->heights = U32(r + 12);
     m->top = 0.0f;
-    return m->firstVertex + m->vertexCount <= sVertexCount
-        && m->heights + (unsigned)m->w * m->h <= sHeightBytes;
+    /* Subtractive bounds: a sum of two u32s from the file can wrap. */
+    return m->vertexCount <= sVertexCount && m->firstVertex <= sVertexCount - m->vertexCount
+        && (unsigned)m->w * m->h <= sHeightBytes && m->heights <= sHeightBytes - (unsigned)m->w * m->h;
 }
 
 static bool TakePageModel(unsigned i, const uint8_t *r)
@@ -284,7 +285,7 @@ static bool TakePlacement(unsigned i, const uint8_t *r)
     p->extraCount = (uint16_t)U16(r + 10);
     p->extraFirst = U32(r + 12);
     return p->pageModel < sPageModelCount
-        && p->extraFirst + p->extraCount <= sVertexCount;
+        && p->extraCount <= sVertexCount && p->extraFirst <= sVertexCount - p->extraCount;
 }
 
 /* The animated texels' table, when the file ends with one; true with none. */
@@ -308,6 +309,10 @@ static bool ReadAnims(FILE *file)
     sAnimStaticCount = U32(head + 8);
     if (sAnimRunCount == 0)
         return true;
+    /* Counts bounded by the bytes left, so the sizes below cannot wrap. */
+    if (sAnimLiveCount > (unsigned long)(size - at) / 8u
+     || sAnimStaticCount > (unsigned long)(size - at) / sizeof(uint16_t))
+        return false;
     sAnimRuns = malloc(sAnimRunCount * sizeof(*sAnimRuns));
     sAnimPalettes = malloc(sAnimPaletteCount * 16u * sizeof(uint16_t) + 1);
     sAnimLives = malloc(sAnimLiveCount * sizeof(*sAnimLives) + 1);
@@ -328,9 +333,10 @@ static bool ReadAnims(FILE *file)
         r->firstLive = U32(row + 12);
         r->firstStatic = U32(row + 16);
         if (r->page >= sPageCount || r->blocks == 0
-         || r->offset + r->blocks * 128u > (uint32_t)sPages[r->page].w * sPages[r->page].h * 2u
-         || r->firstLive + r->lives > sAnimLiveCount
-         || r->firstStatic + r->blocks * 64u > sAnimStaticCount)
+         || r->blocks * 128u > (uint32_t)sPages[r->page].w * sPages[r->page].h * 2u
+         || r->offset > (uint32_t)sPages[r->page].w * sPages[r->page].h * 2u - r->blocks * 128u
+         || r->lives > sAnimLiveCount || r->firstLive > sAnimLiveCount - r->lives
+         || r->blocks * 64u > sAnimStaticCount || r->firstStatic > sAnimStaticCount - r->blocks * 64u)
             return false;
     }
     /* Little-endian u16s, the console's own order. */
@@ -400,6 +406,9 @@ bool VoxelBuildings_Init(void)
     sVariantCount = U16(header + 20);
     sDeckCount = U16(header + 22);
 
+    /* A u32 count times the record size wraps a 32-bit size_t. */
+    if (sVertexCount > 0x7FFFFFFFu / sizeof(VoxelVertex))
+        goto done;
     sPages = malloc(sPageCount * sizeof(*sPages) + 1);
     sModels = malloc(sModelCount * sizeof(*sModels) + 1);
     sPageModels = malloc(sPageModelCount * sizeof(*sPageModels) + 1);

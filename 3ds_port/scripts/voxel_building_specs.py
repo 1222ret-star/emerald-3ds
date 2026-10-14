@@ -1920,7 +1920,7 @@ class GableRoof(HipRoof):
             if not tag.endswith(drop):
                 mesh.tri(tri[0], tri[1], tri[2], shade, tag)
         x0, x1, zf, zb, y0, ye = self.x0, self.x1, self.zf, self.zb, self.y0, self.ye
-        zr, zq, yr, yt = self.z_rf, self.z_rb, self.yr, self.yt
+        zr, zq, yr = self.z_rf, self.z_rb, self.yr
         if self.front is not None:
             strip_face(mesh, [(x0, y0, zf), (x1, y0, zf), (x1, ye, zf), (x0, ye, zf)],
                        (0, y0, zf), (1, 0, 0), (0.0, 1.0, 0.0), self.front, SHADE_ART,
@@ -2493,11 +2493,23 @@ def center_escalator(flat, way):
     down to the one below) to the floor at x 0. The console's floor has no
     hole for them: sinking, the steps and the glass below the floor are
     the drawing's, laid on it - the GBA's 45 degrees exactly, and from the
-    console's camera the stair the drawing shows going down."""
+    console's camera the stair the drawing shows going down. Rising, the
+    balustrades are a band that climbs, the steps a plate: the drawing
+    shows the floor under them where they leave it (its glass ends a row
+    lower every two columns, from row 113 at x 0), and stood down to the
+    floor there they took it on their faces - a pale band under the glass,
+    cut in steps."""
     top = 7 + way * flat / 2.0
     rail = [(0, 0), (32, 0), (32, 7), (flat, 7), (0, top)]
     if way > 0:
-        steps, front = [(0, 0), (32, 0), (32, 0.5), (flat, 0.5), (0, flat / 2.0 + 0.5)], 118
+        # the glass's foot, a straight line through its drawn steps' middles
+        # (row 112.5 + x / 2 at the front): every pixel of glass inside it,
+        # every one of floor out - its edge the line, not a stair the
+        # texture's transparency cuts
+        rail = [(0, flat / 2.0 - 0.5), (flat - 1, 0), (32, 0), (32, 7), (flat, 7), (0, top)]
+        steps = [(0, flat / 2.0), (flat, 0), (32, 0), (32, 0.5), (flat, 0.5),
+                 (0, flat / 2.0 + 0.5)]
+        front = 118
     else:
         # down to the floor at x 0; the steps' plate runs on under the south
         # balustrade, where the glass below the floor is drawn
@@ -2583,12 +2595,24 @@ POKEMON_CENTER_1F = [
           10, fill="column", leave=("de7b31", "cdc58b", "eedea4"), side=(108, 54, 116, 64),
           plan=center_counter_plan(65, 159, 15, 34, 55, 64)),
     # behind it, on the floor where the nurse stands: the healing machine
-    # and the box beside it lie flat - their trays are their tops, their
-    # fronts the band over the counter, which hides their foot
-    piece("phone", [(126, 24, 146, 45)], 14, leave=WALL_COLOURS, foot=54, cells=[(8, 3)]),
+    # lies flat - its tray is its top, its front the band over the counter,
+    # which hides its foot
     piece("healer", [(80, 14, 112, 45)], 14, leave=WALL_COLOURS, foot=54, against=32,
           cells=[(5, 3)]),
-    piece("pc", [(158, 6, 178, 42)], 26, leave=WALL_COLOURS, back=32),
+    # and the telephone beside it, against the wall: a box, its top the lid
+    # with the cross (rows 25 to 32), its front the grey under it; and its
+    # dial, a block in front of the box's west end, its keys over its top
+    # and front. Inside their outlines: cut wider, the wall and the floor
+    # round them stood up as a cream slab beside the box
+    piece("phone", [(133, 25, 144, 41), (128, 31, 133, 42)], 8,
+          leave=WALL_COLOURS + CENTER_FLOOR,
+          plan=[("box", [(133, 33), (141.5, 33), (144, 35.5), (144, 41), (133, 41)], 0, 8,
+                 (135, 140, 41)),
+                ("dial", [(128, 36), (133, 36), (133, 42), (128, 42)], 0, 5, (129, 130, 42))]),
+    # the PC by the map, inside its outline: its top the screen's housing
+    # (rows 8 to 15), against the wall; cut two pixels wider, it stood the
+    # counter's outline and the baseboard's line beside it up its sides
+    piece("pc", [(160, 8, 176, 40)], 24, leave=WALL_COLOURS, back=32),
     piece("bookcase", [(32, 14, 65, 42)], 18, leave=WALL_COLOURS, back=32),
     # a card: the wall, the corner's shade and the floor round its pot left
     piece("plant", [(14, 10, 34, 40)], 26, card=True, through=True,
@@ -2632,10 +2656,11 @@ def center_terminal(x0):
 POKEMON_CENTER_2F = [
     # the three link terminals, in front of the counter, and the glass
     # tubes that stand behind them - each tube's foot its own, not drawn on
-    # the terminal's top. The first is a computer as deep as its drawn top
-    # (the tube behind it in view over it); the other two are a head on a
-    # pedestal, each a block (center_terminal)
-    piece("terminal_1", [(48, 40, 64, 73)], 24, leave=WALL_COLOURS, back=64),
+    # the terminal's top. The first is the ground floor's PC, pixel for
+    # pixel inside its outline, and stands here as it is
+    # (gen_voxel_buildings.reuse_pieces; the tube behind it in view over
+    # it); the other two are a head on a pedestal, each a block
+    # (center_terminal)
     piece("terminal_2", [(128, 56, 144, 81)], 20, plan=center_terminal(128)),
     piece("terminal_3", [(192, 56, 208, 81)], 20, plan=center_terminal(192)),
     # the gates between the counter's stretches: low, set back to its back
@@ -2767,6 +2792,20 @@ def stairwell(name, x0, x1, front, back, opening, side, crest):
     return piece(name, [], 32, side=side, walls=walls)
 
 
+def house_tv():
+    """Littleroot's television (piece `plan`): the set, a box as deep as its
+    drawn top - the bezel's grey four rows, and behind them the tube's
+    housing, narrower row by row (rows 61 to 63) - from y 8 to 20, its sides
+    its casing's dark; under it the stand, on the same plan, its sides its
+    frame's dark. Laid back over the cell it blocks with one row of that
+    top repeated, the set was a black box with a grey band at its front."""
+    # its edges between the drawn pixels, through their rows' middles: every
+    # centre of the housing's pixels inside, every one of the floor's out
+    plan = [(67.5, 81), (76.5, 81), (78, 82.5), (80, 83.5), (80, 88), (64, 88), (64, 83.5),
+            (66, 82.5)]
+    return [("set", plan, 8, 20, (64, 66, 80)), ("stand", plan, 0, 8, (71, 73, 88))]
+
+
 def brendan_1f():
     rug = BLUE_RUG
     return (house_chair("chair_nw", (33, 96, 37, 112), (37, 100, 47, 112), rug)
@@ -2774,23 +2813,28 @@ def brendan_1f():
             + house_chair("chair_ne", (91, 96, 95, 112), (81, 100, 91, 112), rug)
             + house_chair("chair_se", (91, 112, 95, 128), (81, 116, 91, 128), rug) + [
         piece("table", [(50, 96, 78, 128)], 8, leave=rug, solid=True),
-        # the television on its stand, a set as deep as the cell it blocks,
-        # and the low white cupboard beside it. Its sides: the set's grey
-        # casing over the stand's dark frame, not the glass of its doors
-        piece("tv", [(64, 61, 80, 88)], 20, back=72, top=(68, 62, 78, 63),
-              side=[(64, 68, 66, 80), (71, 80, 73, 88)], leave=HOUSE_FLOOR),
+        # the television on its stand (house_tv), and the low white cupboard
+        # beside it
+        piece("tv", [(64, 61, 80, 88)], 20, leave=HOUSE_FLOOR, plan=house_tv()),
         piece("cabinet", [(32, 65, 63, 88)], 9, back=72),
-        # the kitchen along the back wall: fridge, sink, china cabinet
-        piece("fridge", [(0, 18, 16, 48)], 24, leave=HOUSE_FLOOR, back=32),
+        # the kitchen along the back wall: fridge, sink, china cabinet. The
+        # fridge and the cabinet are as deep as drawn, their tops their
+        # drawn rows: laid back to the wall with those rows repeated, a top
+        # carried its back outline across its middle (the fridge's dark
+        # line, the cabinet's yellow plain twice its size)
+        piece("fridge", [(0, 18, 16, 48)], 24, leave=HOUSE_FLOOR, back=42),
         # a wire of a tap: the baseboard between its spokes is seen through it
         piece("tap", [(22, 24, 29, 29)], 5, base=8, leave=HOUSE_WALL[:2], through=True),
         piece("sink", [(16, 29, 48, 41), (17, 41, 47, 48)], 8, back=32, top=(18, 38, 46, 39)),
         # on two legs: the floor under it is the floor
-        piece("dresser", [(49, 19, 72, 48)], 23, back=32, leave=HOUSE_FLOOR),
+        piece("dresser", [(49, 19, 72, 48)], 23, back=42, leave=HOUSE_FLOOR),
         stairwell("stairwell", 128, 144, 48, 29, 19, (128, 29, 144, 34), 16),
         # the back wall, a cell forward east of the step; the doorway is cut
-        # out of it and it stands on its foot
-        piece("wall_e", [(112, 32, 113, 48), (113, 16, 176, 29), (113, 29, 128, 48),
+        # out of it and it stands on its foot. Its west edge, the outline
+        # down the step's corner, is its face's full height: drawn only from
+        # row 32 down, the face had a slit a pixel wide above, and from
+        # below 45 degrees the void behind the wall showed through it
+        piece("wall_e", [(112, 16, 113, 48), (113, 16, 176, 29), (113, 29, 128, 48),
                          (144, 29, 176, 48)], 32, fill=16, foot=48,
               side=(156, 16, 172, 48), walls=[((112, 32), (112, 48))]),
         piece("wall", [(0, 0, 113, 32), (113, 0, 117, 16)], 32, fill=16, foot=32,
@@ -2813,9 +2857,9 @@ def may_1f():
         # the television and its cabinet, the fridge, the tap and the sink
         # are Brendan's, pixel for pixel, and stand here as they are
         # (gen_voxel_buildings.reuse_pieces)
-        piece("dresser", [(105, 19, 128, 48)], 23, back=32, leave=HOUSE_FLOOR),
+        piece("dresser", [(105, 19, 128, 48)], 23, back=42, leave=HOUSE_FLOOR),
         stairwell("stairwell", 32, 48, 48, 29, 19, (32, 29, 48, 34), 16),
-        piece("wall_w", [(63, 32, 64, 48), (0, 16, 63, 29), (0, 29, 32, 48),
+        piece("wall_w", [(63, 16, 64, 48), (0, 16, 63, 29), (0, 29, 32, 48),
                          (48, 29, 63, 48)], 32, fill=16, foot=48,
               side=(4, 16, 20, 48), walls=[((64, 48), (64, 32))]),
         piece("wall", [(63, 0, 176, 32), (59, 0, 63, 16)], 32, fill=16, foot=32,
@@ -3260,6 +3304,19 @@ LAB_SHADOW = ("b4b4a4", "949494")      # the floor's shade, and its grid in it
 LAB_FLOOR = ("d5d5b4",)                 # the floor itself, where it shows beside a stack
 
 
+def lab_machine():
+    """The machine under the lab's dome in plan: an octagon whose edges
+    pass between the drawing's pixels - every centre of one of its pixels
+    inside, every one of the floor's out - so that at 45 degrees no face
+    behind shows at a corner. The back corners follow the drawn top's rows
+    (one wider the first row, then one a row, then the drawing's kink
+    where two rows end alike), the front ones the drawn foot, a slant half
+    a pixel out of its pixels' corners; symmetric about x 176."""
+    left = [(160, 120.5), (160, 113.5), (161, 112.5), (161, 111.5), (165, 107.5), (168, 106)]
+    right = [(352 - x, z) for (x, z) in reversed(left)]
+    return left + right + [(184.5, 128), (167.5, 128)]
+
+
 def lab():
     sh = LAB_SHADOW
     return [
@@ -3287,7 +3344,11 @@ def lab():
         # the machine, its dome, the two canisters beside it: a round glass
         # dome on a machine whose sides are its casing, its shadow the floor's
         piece("dome", [("ellipse", 176, 103.5, 8.5, 7.5)], 5, base=10, round="dome"),
-        piece("machine", [(160, 95, 192, 128)], 10, leave=sh),
+        # an octagon, its corners cut on the slant as drawn (lab_machine):
+        # a box, its sides square to the corners' slants, stood a dark slab
+        # beside it
+        piece("machine", [(160, 95, 192, 128)], 10, leave=sh, side=(172, 118, 180, 128),
+              plan=lab_machine()),
         piece("canisters", [(192, 109, 208, 128)], 16, leave=sh, back=112),
         # the two bookcases in the room, a box on each
         piece("box_w1", [(8, 82, 23, 96)], 6, base=21, solid=True),
@@ -4511,13 +4572,32 @@ SPECS = [
         # Petalburg's hedges. Not a building: a run of metatiles of any shape,
         # so each connected run becomes its own model, read column by column
         # off its drawing. The front, where a run ends to the south, is
-        # drawn 11 rows tall.
+        # drawn 11 rows tall. 23F is the rounded north end of a run.
         "name": "hedge",
         "components": {
             "secondary": "gTileset_Petalburg",
-            "tiles": {0x23c, 0x23d, 0x23e, 0x244, 0x245, 0x246, 0x24c, 0x24d, 0x24e,
+            "tiles": {0x23c, 0x23d, 0x23e, 0x23f, 0x244, 0x245, 0x246, 0x24c, 0x24d, 0x24e,
                       0x254, 0x255, 0x256, 0x264, 0x265, 0x266},
             "height": 11,
+            # the row under the woods carries the crowns' lower leaves: the
+            # trees draw those (voxel_tree.c EmitMissingRow), the hedge is
+            # its plain twin
+            "clean": {0x24d: 0x23d, 0x24e: 0x23d, 0x255: 0x23c, 0x256: 0x23e,
+                      # an arm's inner corner (244, 246): the run turning into
+                      # it draws its front across the arm's top; in 3D that
+                      # front ends at the arm's side, and the arm is straight
+                      0x244: 0x24c, 0x246: 0x24c},
+            # and the run turning into those corners, from the east (244)
+            # or the west (246), meets the arm with no slit
+            "joins": {0x244: 1, 0x246: -1},
+            # a run that goes on behind a house: drawn on under its roof as
+            # the bare hedge is (23D over 245)
+            "under": {0x23d: 0x245},
+            "side_longest": True,
+            # its shaded east band has texels of the lawn's colours
+            "close": 2,
+            # its shadow on the lawn, past its dark outline, is no hedge
+            "outline": (57, 82, 0),
         },
         "ground": [GRASS],
     },

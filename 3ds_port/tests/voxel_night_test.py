@@ -2,6 +2,7 @@
 
 import argparse
 import functools
+import re
 from pathlib import Path
 import struct
 import subprocess
@@ -127,7 +128,7 @@ int main(int argc, char **argv)
             "-I" + str(ROOT / "src/voxel"), "-I" + str(ROOT / "include"),
             str(temporary / "test.c"), str(ROOT / "src/voxel/voxel_building.c"),
             "-Wl,-dead_strip" if sys.platform == "darwin" else "-Wl,--gc-sections",
-            "-o", str(temporary / "test"),
+            "-o", str(temporary / "test"), "-lm",
         ], check=True)
         # VXB7, before the u16 decks and the pages of their own rows, is not read
         for magic, flag, truncated in ((b"VXB7", False, False), (b"VXB8", False, False),
@@ -385,6 +386,13 @@ enum { C3D_RGB, C3D_Alpha, GPU_TEXTURE0, GPU_TEXTURE2, GPU_CONSTANT, GPU_PREVIOU
        GPU_TEVOP_A_SRC_R, GPU_TEVOP_A_SRC_ALPHA, GPU_MODULATE, GPU_TEVOP_RGB_SRC_COLOR,
        GPU_TEVOP_RGB_SRC_ALPHA, GPU_INTERPOLATE, GPU_REPLACE, GPU_PRIMARY_COLOR, GPU_TEVSCALE_2,
        GPU_TEXTURE1, GPU_MULTIPLY_ADD };
+enum { GPU_BLEND_ADD = 1, GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_DST_COLOR, GPU_ONE, GPU_ZERO };
+static int sBlend[6];
+static void C3D_AlphaBlend(int colorEq, int alphaEq, int srcClr, int dstClr, int srcAlpha, int dstAlpha)
+{
+    sBlend[0] = colorEq; sBlend[1] = alphaEq; sBlend[2] = srcClr;
+    sBlend[3] = dstClr; sBlend[4] = srcAlpha; sBlend[5] = dstAlpha;
+}
 typedef struct { float dappleLow, dappleHigh; } VoxelLight;
 static float sMoonlight;
 static uint32_t sMoonlightColour;
@@ -420,6 +428,7 @@ static void C3D_TexEnvInit(C3D_TexEnv *env) { memset(env, 0, sizeof(*env)); sAlp
 static void C3D_TexEnvScale(C3D_TexEnv *env, int mode, int scale)
 { (void)env; if (mode == C3D_Alpha) sAlphaScale = scale; }
 '''
+    source += re.search(r"#define VOXEL_LAMP_POOL_GAIN .*", text).group(0) + "\n"
     source += "\n".join(functions)
     source += r'''
 int main(void)
@@ -465,15 +474,22 @@ int main(void)
     BuildingGlowEnv(&mask, 1.0f);
     BuildingGlowEnv(NULL, 1.0f);
     assert(bound[2] == NULL && sGlowBound == NULL && sEnvs[2].colour == 0);
+    /* the glow: a flat colour over the scene by its alpha */
     LampTexEnv(1.0f, false);
     assert(sEnvs[0].rgbFunc == GPU_REPLACE && sEnvs[0].alphaFunc == GPU_REPLACE);
     assert(sEnvs[0].colour == 0xDC6BBFFFu && sAlphaScale == 0);
+    assert(sBlend[2] == GPU_SRC_ALPHA && sBlend[3] == GPU_ONE_MINUS_SRC_ALPHA);
+    /* the pool: the falloff texture times a warm colour, added to the
+       ground in proportion to it (dst * src + dst) */
     LampTexEnv(1.0f, true);
-    assert(sEnvs[0].alpha[0] == GPU_PRIMARY_COLOR && sEnvs[0].alphaFunc == GPU_MODULATE);
-    assert(sEnvs[0].alphaOp[0] == GPU_TEVOP_A_SRC_R && sAlphaScale == GPU_TEVSCALE_2);
-    assert(sEnvs[0].colour == 0x4B6BBFFFu);
+    assert(sEnvs[0].rgb[0] == GPU_TEXTURE0 && sEnvs[0].rgbFunc == GPU_MODULATE);
+    assert(sEnvs[0].alphaFunc == GPU_REPLACE && sAlphaScale == 0);
+    assert(sBlend[0] == GPU_BLEND_ADD && sBlend[2] == GPU_DST_COLOR && sBlend[3] == GPU_ONE);
+    assert(sEnvs[0].colour == (0xFF000000u | (uint32_t)(VOXEL_LAMP_POOL_GAIN * 60.0f + 0.5f) << 16
+                               | (uint32_t)(VOXEL_LAMP_POOL_GAIN * 150.0f + 0.5f) << 8
+                               | (uint32_t)(VOXEL_LAMP_POOL_GAIN * 255.0f + 0.5f)));
     LampTexEnv(0.0f, true);
-    assert((sEnvs[0].colour >> 24) == 0);
+    assert((sEnvs[0].colour & 0x00FFFFFFu) == 0);
     sMoonlight = 0.0f;
     TerrainTexEnv(NULL);
     assert(sEnvs[0].rgbFunc == GPU_MODULATE && sEnvs[2].colour == 0);

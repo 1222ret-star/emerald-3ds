@@ -40,3 +40,14 @@ Pokémon Emerald's code, data, graphics, audio and text are © Nintendo, Game
 Freak and Creatures. None of it is included in this repository or in the
 releases; the builder produces the data pack on the player's computer from
 their own ROM.
+
+**HeartGold and SoulSilver's follower sprites and messages**, fetched by the
+builder on the player's computer, never included in this repository or the
+releases: the overworld sprites from pret/pokeheartgold
+(https://github.com/pret/pokeheartgold, commit
+`3291d88a7e3e264b503024ead80f4d8b55b835cd`), the messages in the ROM's
+language from Poké Corpus by abcboy101 (https://github.com/abcboy101/poke-corpus,
+commit `5d1da078d70dea5c9feaaba7575626eab4f10a08`), each file checked against
+the SHA-256 listed in `builder/emerald3ds_builder/followers_sources.py` and
+converted for the console. They are Nintendo, Game Freak and Creatures' work;
+not relicensed.

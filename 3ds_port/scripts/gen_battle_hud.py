@@ -290,7 +290,6 @@ def draw_text_box():
     """The text box band (400 x 48 from line 192): the left cap and one middle column."""
     width, height = BOX_CAP + 4, 48
     cv = Canvas(width * SS, height * SS)
-    full = 400 * SS
 
     def rr(x0, y0, x1, y1, r):
         m = cv.mask()

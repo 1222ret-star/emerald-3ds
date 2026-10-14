@@ -416,12 +416,13 @@ static void FlushNode(uint16_t id, uint32_t now)
 
             if (m->sentMs && !resend)
                 continue;
+            /* Room first: a message left for the next frame is not sent yet. */
+            if (body + MSG_HEADER + m->len > FRAME_MAX)
+                break;
             if (m->sentMs)
                 sL.stats.resent++;
             else
                 m->firstMs = now;
-            if (body + MSG_HEADER + m->len > FRAME_MAX)
-                break;
             p[0] = m->seq & 0xFF;
             p[1] = m->seq >> 8;
             p[2] = m->type;
@@ -549,7 +550,7 @@ static bool StartUds(void)
         return true;
     /* Right after the system wakes the radio takes a moment to come back:
      * a few tries before the wireless counts as switched off. */
-    for (int tries = 0; tries < 8; tries++)
+    for (int tries = 0; tries < 8 && !sL.quit; tries++)
     {
         if (tries)
             svcSleepThread(250000000LL);
@@ -640,7 +641,7 @@ static const char *BuildHex(char *out, const uint8_t *id)
 
 static int SessionCheck(const udsNetworkScanInfo *net, uint8_t kind, uint32_t *token)
 {
-    struct AppData app;
+    struct AppData app = {0};   /* a short beacon leaves the rest unread */
     size_t size = 0;
 
     if (R_FAILED(udsGetNetworkStructApplicationData(&net->network, &app, sizeof(app), &size))
@@ -768,10 +769,17 @@ static bool HostNewSession(uint8_t kind)
  * (the status event may already be spent). */
 static void TakeNetwork(bool quiet)
 {
-    udsConnectionStatus st;
+    udsConnectionStatus st = {0};
 
     sL.inNetwork = true;
-    udsGetConnectionStatus(&st);
+    if (R_FAILED(udsGetConnectionStatus(&st)) || st.cur_NetworkNodeID == 0)
+    {
+        /* No id and no node mask to trust: garbage would join random nodes. */
+        CtrLog_Write(CTR_LOG_ERROR, "local: no connection status, session dropped");
+        LeaveNetwork(true);
+        EndSession(LOCAL_SESSION_FAILED);
+        return;
+    }
     udsWaitConnectionStatusEvent(false, false);
     LightLock_Lock(&sL.lock);
     for (uint16_t id = 1; id < NODE_SLOTS; id++)
@@ -810,7 +818,7 @@ static void MergeAlone(void)
     bool found = false;
     Result ret = -1;
 
-    if (!sL.hosting || now < sL.nextMergeMs || now >= sL.mergeUntilMs
+    if (!sL.hosting || sL.myId == 0 || now < sL.nextMergeMs || now >= sL.mergeUntilMs
      || (sL.nodeMask & ~(1u << (sL.myId - 1))))
         return;
     sL.nextMergeMs = now + MERGE_MS + (uint32_t)(rand() % MERGE_JITTER_MS);
@@ -1088,6 +1096,8 @@ void LocalLink_Init(void)
     if (sL.thread == NULL)
     {
         CtrLog_Write(CTR_LOG_ERROR, "local: no thread, local wireless off");
+        svcCloseHandle(sL.wake);
+        sL.wake = 0;
         return;
     }
     sL.ready = true;
@@ -1099,8 +1109,14 @@ void LocalLink_Shutdown(void)
         return;
     sL.quit = true;
     Wake();
-    if (R_SUCCEEDED(threadJoin(sL.thread, 3000000000LL)))
-        threadFree(sL.thread);
+    if (R_FAILED(threadJoin(sL.thread, 3000000000LL)))
+    {
+        /* Still inside UDS (a scan, a join): closing its handle and the
+         * service under it would crash or hang the exit. */
+        CtrLog_Write(CTR_LOG_ERROR, "local: thread still busy at exit, UDS left open");
+        return;
+    }
+    threadFree(sL.thread);
     svcCloseHandle(sL.wake);
     sL.wake = 0;
     if (sL.udsReady)

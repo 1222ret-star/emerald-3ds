@@ -77,8 +77,6 @@ void CtrPlatform_NoteBottom(float ms) { sTiming.bottomMs = ms; }
 
 bool CtrPlatform_Init(void)
 {
-    /* A New 3DS runs at 804 MHz with its L2 cache; an Old 3DS ignores this. */
-    osSetSpeedupEnable(true);
     gfxInitDefault();
     /* A New 3DS runs the application core at 804 MHz with its L2 cache when
      * asked; an Old 3DS ignores this. */
@@ -348,8 +346,8 @@ void CtrPlatform_EndFrame(void)
         sHooks.vblank();
     uint64_t presentStart = svcGetSystemTick();
     /* Before the present, which reads them: its DROP line is about the frame
-     * that just ran, and the voxel builds after FrameEnd estimate the next. */
-    sTiming.gameMs = (endStart - sWorkStart) * 1000.0f / SYSCLOCK_ARM11;
+     * that just ran, and the voxel builds after FrameEnd estimate the next
+     * (gameMs is already this frame's, from above). */
     sTiming.vblankMs = (presentStart - endStart) * 1000.0f / SYSCLOCK_ARM11;
     /* FrameEnd(0) also flushes the console's linear LCD buffer. Calling
      * gfxFlushBuffers here would flush BOTH screens again, not just bottom. */
@@ -536,7 +534,7 @@ void Port_ProfBegin(void)
 {
     if (sProfFrames >= 600)
     {
-        char text[256];
+        char text[256] = "";   /* no bucket named: logged empty, not garbage */
         size_t used = 0;
 
         for (unsigned i = 0; i < PROF_BUCKETS && sProf[i].name != NULL && used < sizeof(text) - 32; ++i)

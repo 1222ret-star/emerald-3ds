@@ -117,6 +117,19 @@ void CtrVideo_MarkFogOam(unsigned first, unsigned end);
  * wrap round the screen (rain, snow, sand swirls, bubbles). Cleared with the
  * fog's (CtrVideo_ClearFogOam). */
 void CtrVideo_MarkWeatherOam(unsigned first, unsigned end, bool lattice);
+/*
+ * The OBJ palettes past the GBA's sixteen (include/palette.h, PLTT_EXT_*):
+ * the faded colours of all CTR_EXT_PALETTES, handed over when the game copies
+ * its palette to PLTT, and which are in use, a bit each (none: nothing here
+ * is looked at). OAM entries [first, end) of a sprite drawn with one are
+ * marked with it, as BuildOamBuffer writes them (src/sprite.c): attr2's four
+ * bits of palette cannot name it. The voxel field reads them for its cards.
+ */
+#define CTR_EXT_PALETTES 16
+void CtrVideo_LatchExtPalettes(const uint16_t *colors, unsigned inUse);
+const uint16_t *CtrVideo_ExtPalette(unsigned index);
+void CtrVideo_ClearExtPaletteOam(void);
+void CtrVideo_MarkExtPaletteOam(unsigned first, unsigned end, unsigned index);
 void CtrVideo_NotifyTilesetAnimWrite(const void *dest, unsigned bytes);
 /*
  * A write the game made through its BIOS copies (3ds_prof_wrap.c): VRAM,

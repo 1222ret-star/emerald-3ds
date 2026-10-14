@@ -30,6 +30,12 @@ void VoxelMesh_Top(VoxelBuilder *b,float x,float z,float h,float inset,
     assert(u == .5f); /* donor, not the board */
     sFloor = true;
 }
+/* No atlas slot for the matched ground: the cell south of the sign is laid. */
+bool VoxelMesh_MetatileUV(VoxelBuilder *b,int m,float *u,float *v,float *ue,float *ve)
+{
+    (void)b; (void)m; (void)u; (void)v; (void)ue; (void)ve;
+    return false;
+}
 bool VoxelMesh_TileUV(VoxelBuilder *b,int x,int y,float *u,float *v,float *ue,float *ve)
 {
     (void)b; (void)x;
@@ -124,7 +130,7 @@ static void CheckDewford(void)
     assert(VoxelSign_EmitStanding(&builder, &inst, xpos, ypos));
     assert(!sFloor && builder.count > 0 && builder.dropped == 0);
     VoxelSign_Shutdown();
-    puts("PASS Dewford gym sign: real VXS2, wall-role override, 23-pixel board, head UV, ground, no lamp glow");
+    puts("PASS Dewford gym sign: real VXS3, wall-role override, 23-pixel board, head UV, ground, no lamp glow");
 }
 
 int main(int argc,char **argv)
@@ -187,7 +193,7 @@ int main(int argc,char **argv)
     assert(argc==2);
     FILE *f=fopen(argv[1],"rb");
     unsigned char header[8], key[6];
-    assert(f && fread(header,1,8,f)==8 && memcmp(header,"VXS2",4)==0);
+    assert(f && fread(header,1,8,f)==8 && memcmp(header,"VXS3",4)==0);
     assert(fread(key,1,6,f)==6); fclose(f);
     sLayout=key[0]|(key[1]<<8); sX=key[2]|(key[3]<<8); sY=key[4]|(key[5]<<8);
     VoxelMapInstance inst={.layoutId=(int)sLayout};

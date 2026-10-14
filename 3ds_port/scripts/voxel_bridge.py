@@ -126,9 +126,11 @@ DECK = 40           # px: the deck's road over the ground
 RAIL = 13           # px: the rails' height over the deck (the drawing's)
 NORTH_RAIL = 14     # px: the north rail's, drawn without the front's top
                     # highlight and over two rows of its kerb
-GIRDER = 18         # px: kerb and girder under the deck's south edge (drawn)
-SIDE_GIRDER = 8     # px: the girder down its other sides, which the drawing
-                    # never shows: a walker (32 px) passes under a span
+GIRDER = 18         # px: kerb and girder under the deck's south edge (drawn),
+                    # and as deep down its other sides, which the drawing
+                    # never shows (shallower, the front hung past them at a
+                    # corner; a walker crossing under a side now has the beam
+                    # at its head for a step, as under the front)
 SLAB = 4            # px: the deck's own thickness between its girders
 RAMP_RUN = 56       # px: what a ramp runs south while it falls DECK
 BLOCK = 1           # cells: a model is this much of the road - one cell, as a
@@ -731,10 +733,8 @@ class Bridge:
                     upright(u, (znl, znr), n0, a, "deck.rail_n")
                     claimed.update((u, v) for v in range(n0, a))
                 # the girder under it, which the drawing never shows
-                put([(u + 1, DECK - SIDE_GIRDER, znr), (u, DECK - SIDE_GIRDER, znl), (u, DECK, znl),
-                     (u + 1, DECK, znr)],
-                    [(u, a), (u + 1, a), (u + 1, a + 1), (u, a + 1)], "deck.girder_n~depth~clamp",
-                    (u, a))
+                put([(u + 1, DECK - GIRDER, znr), (u, DECK - GIRDER, znl), (u, DECK, znl),
+                     (u + 1, DECK, znr)], [(u, a)] * 4, "deck.flank_girdern_n~depth", (u, a))
                 if sloped:
                     # the ramp: its rows from its head in the deck down to
                     # its foot (the slot's walls either side, _corner)
@@ -888,7 +888,7 @@ class Bridge:
                     if not strip:
                         # no rail drawn here (a chamfer's, standing on the
                         # front or the north edge): the deck's side
-                        flank("girder", out_dir, xi, DECK - SIDE_GIRDER, DECK, v + DECK, v + DECK + 1,
+                        flank("girder", out_dir, xi, DECK - GIRDER, DECK, v + DECK, v + DECK + 1,
                               (edge, v))
                         continue
                     claimed.update((w, v) for w in strip)
@@ -926,10 +926,10 @@ class Bridge:
                     put(pts, [(x, z - y) for (x, y, z) in pts], "deck.rail_side", (c0, v))
                 flank("rail", out_dir, outer, h, top, zt, zt1, at)
                 flank("rail", in_dir, inner, h, top, zt, zt1, at)
-                flank("girder", out_dir, outer, h - SIDE_GIRDER, h, zt, zt1, at)
-                flank("under", in_dir, inner, h - SIDE_GIRDER, h - SLAB, zt, zt1, at)
-                quad = [(inner[0], h - SIDE_GIRDER, zt), (outer[0], h - SIDE_GIRDER, zt),
-                        (outer[1], h - SIDE_GIRDER, zt1), (inner[1], h - SIDE_GIRDER, zt1)]
+                flank("girder", out_dir, outer, h - GIRDER, h, zt, zt1, at)
+                flank("under", in_dir, inner, h - GIRDER, h - SLAB, zt, zt1, at)
+                quad = [(inner[0], h - GIRDER, zt), (outer[0], h - GIRDER, zt),
+                        (outer[1], h - GIRDER, zt1), (inner[1], h - GIRDER, zt1)]
                 put(quad[::-1] if side == "w" else quad, [at] * 4, "deck.under~depth~clamp", at)
         # whatever else of it is drawn, touching what is placed: the piers
         # beside a span or the deck's end - drawn beside the road, as the GBA
@@ -1197,8 +1197,8 @@ class Bridge:
         # the north rail straight on to the strip's outer side, its girder under it
         put([(xa, DECK, zn), (xb, DECK, zn), (xb, DECK + NORTH_RAIL, zn), (xa, DECK + NORTH_RAIL, zn)],
             [at] * 4, "deck.flank_railn_s~depth", at)
-        put([(xb, DECK - SIDE_GIRDER, zn), (xa, DECK - SIDE_GIRDER, zn), (xa, DECK, zn), (xb, DECK, zn)],
-            [at] * 4, "deck.girder_n~depth~clamp", at)
+        put([(xb, DECK - GIRDER, zn), (xa, DECK - GIRDER, zn), (xa, DECK, zn), (xb, DECK, zn)],
+            [at] * 4, "deck.flank_girdern_n~depth", at)
         # the strip on north to the rail: its top, column by column in the
         # colours of its first full-width row, and its faces
         # (kept out of _merge, which would lay the whole strip in its first
@@ -1212,9 +1212,9 @@ class Bridge:
         del out[n:]
         out_dir, in_dir = (side, "e" if side == "w" else "w")
         flank("rail", out_dir, xo, DECK, top, zn, zt, at)
-        flank("girder", out_dir, xo, DECK - SIDE_GIRDER, DECK, zn, zt, at)
+        flank("girder", out_dir, xo, DECK - GIRDER, DECK, zn, zt, at)
         flank("rail", in_dir, xi, DECK, top, zn, zt, at)
-        flank("under", in_dir, xi, DECK - SIDE_GIRDER, low, zn, zt, at)
+        flank("under", in_dir, xi, DECK - GIRDER, low, zn, zt, at)
 
     def _feet_north(self):
         """The deck's inner corners on its north side, where a road coming
@@ -1269,8 +1269,8 @@ class Bridge:
         # the north rail straight on across the strip's foot, its girder under it
         put([(xa, DECK, zn), (xb, DECK, zn), (xb, DECK + NORTH_RAIL, zn), (xa, DECK + NORTH_RAIL, zn)],
             [at] * 4, "deck.flank_railn_s~depth", at)
-        put([(xb, DECK - SIDE_GIRDER, zn), (xa, DECK - SIDE_GIRDER, zn), (xa, DECK, zn), (xb, DECK, zn)],
-            [at] * 4, "deck.girder_n~depth~clamp", at)
+        put([(xb, DECK - GIRDER, zn), (xa, DECK - GIRDER, zn), (xa, DECK, zn), (xb, DECK, zn)],
+            [at] * 4, "deck.flank_girdern_n~depth", at)
         # the strip on down to the rail, in the colours of the last row the
         # generic build lays (one texel a column, kept out of _merge)
         z0 = r0 + top
@@ -1285,9 +1285,9 @@ class Bridge:
             out_dir, in_dir = (side, "e" if side == "w" else "w")
             sat = (s0, r0 - 1)
             flank("rail", out_dir, xo, DECK, top, z0, zn, sat)
-            flank("girder", out_dir, xo, DECK - SIDE_GIRDER, DECK, z0, zn, sat)
+            flank("girder", out_dir, xo, DECK - GIRDER, DECK, z0, zn, sat)
             flank("rail", in_dir, xi, DECK, top, z0, zn, sat)
-            flank("under", in_dir, xi, DECK - SIDE_GIRDER, low, z0, zn, sat)
+            flank("under", in_dir, xi, DECK - GIRDER, low, z0, zn, sat)
 
     def _south_corner(self, head, out, put, south, flank, generic):
         """An inner corner on the deck's south side, square: where the road
@@ -1350,9 +1350,8 @@ class Bridge:
             put([(a, low, zf - BEHIND), (b, low, zf - BEHIND), (b, low, r0 + DECK), (a, low, r0 + DECK)],
                 [(a, r0)] * 4, "deck.under~depth~clamp", (a, r0))
         # the front straight on to the strip, and across the strip's head
-        put([(fa, DECK - GIRDER, zf), (fb, DECK - GIRDER, zf), (fb, top, zf), (fa, top, zf)],
-            [at] * 4, "deck.flank_rail_s~depth", at)
-        put([(s0, DECK - SIDE_GIRDER, zf), (s1, DECK - SIDE_GIRDER, zf), (s1, top, zf), (s0, top, zf)],
+        self._front(put, fa, fb, zf, at)
+        put([(s0, DECK - GIRDER, zf), (s1, DECK - GIRDER, zf), (s1, top, zf), (s0, top, zf)],
             [at] * 4, "deck.flank_rail_s~depth", at)
         # the strip on north to the front: its top, column by column in the
         # colours of its first straight row (kept out of _merge), its faces
@@ -1367,12 +1366,19 @@ class Bridge:
         xo, xi = (s0, s1) if side == "w" else (s1, s0)
         out_dir, in_dir = (side, "e" if side == "w" else "w")
         flank("rail", out_dir, xo, DECK, top, zf, zt, sat)
-        flank("girder", out_dir, xo, DECK - SIDE_GIRDER, DECK, zf, zt, sat)
+        flank("girder", out_dir, xo, DECK - GIRDER, DECK, zf, zt, sat)
         flank("rail", in_dir, xi, DECK, top, zf, zt, sat)
-        flank("under", in_dir, xi, DECK - SIDE_GIRDER, low, zf, zt, sat)
-        quad = [(xi, DECK - SIDE_GIRDER, zf), (xo, DECK - SIDE_GIRDER, zf),
-                (xo, DECK - SIDE_GIRDER, zt), (xi, DECK - SIDE_GIRDER, zt)]
+        flank("under", in_dir, xi, DECK - GIRDER, low, zf, zt, sat)
+        quad = [(xi, DECK - GIRDER, zf), (xo, DECK - GIRDER, zf),
+                (xo, DECK - GIRDER, zt), (xi, DECK - GIRDER, zt)]
         put(quad[::-1] if side == "w" else quad, [sat] * 4, "deck.under~depth~clamp", sat)
+
+    @staticmethod
+    def _front(put, xa, xb, zf, at):
+        """The front's rail and girder straight on at depth zf over x [xa,
+        xb), dressed with the flank."""
+        put([(xa, DECK - GIRDER, zf), (xb, DECK - GIRDER, zf), (xb, DECK + RAIL, zf), (xa, DECK + RAIL, zf)],
+            [at] * 4, "deck.flank_rail_s~depth", at)
 
     def _south_outer_corner(self, foot, out, put, south, flank, generic):
         """An outer corner on the deck's south side, square (`feet`): the
@@ -1432,8 +1438,7 @@ class Bridge:
             put([(a, low, zf - BEHIND), (b, low, zf - BEHIND), (b, low, r0 + DECK), (a, low, r0 + DECK)],
                 [(a, r0)] * 4, "deck.under~depth~clamp", (a, r0))
         # the front straight on to the strip's outer side
-        put([(xa, DECK - GIRDER, zf), (xb, DECK - GIRDER, zf), (xb, top, zf), (xa, top, zf)],
-            [at] * 4, "deck.flank_rail_s~depth", at)
+        self._front(put, xa, xb, zf, at)
         # the strip on south to the front: its top, column by column in the
         # colours of the last row the generic build lays (kept out of
         # _merge), its faces
@@ -1449,11 +1454,11 @@ class Bridge:
             xo, xi = (s0, s1) if side == "w" else (s1, s0)
             out_dir, in_dir = (side, "e" if side == "w" else "w")
             flank("rail", out_dir, xo, DECK, top, z0, zf, sat)
-            flank("girder", out_dir, xo, DECK - SIDE_GIRDER, DECK, z0, zf, sat)
+            flank("girder", out_dir, xo, DECK - GIRDER, DECK, z0, zf, sat)
             flank("rail", in_dir, xi, DECK, top, z0, zf, sat)
-            flank("under", in_dir, xi, DECK - SIDE_GIRDER, low, z0, zf, sat)
-            quad = [(xi, DECK - SIDE_GIRDER, z0), (xo, DECK - SIDE_GIRDER, z0),
-                    (xo, DECK - SIDE_GIRDER, zf), (xi, DECK - SIDE_GIRDER, zf)]
+            flank("under", in_dir, xi, DECK - GIRDER, low, z0, zf, sat)
+            quad = [(xi, DECK - GIRDER, z0), (xo, DECK - GIRDER, z0),
+                    (xo, DECK - GIRDER, zf), (xi, DECK - GIRDER, zf)]
             put(quad[::-1] if side == "w" else quad, [sat] * 4, "deck.under~depth~clamp", sat)
         return True
 
@@ -1960,8 +1965,9 @@ def _tile_flanks(faces):
     where its rows do down it. Their uvs are the flank's own pixels."""
     out = []
     # (the north rail: the front's rail under its highlight, down to the
-    # kerb's two rows)
-    offset = {"rail": 0.0, "railn": 1.0, "wall": 0.0, "girder": float(RAIL), "under": float(RAIL + SLAB)}
+    # kerb's two rows; and its girder under the kerb the rail is drawn with)
+    offset = {"rail": 0.0, "railn": 1.0, "wall": 0.0, "girder": float(RAIL), "girdern": float(RAIL + 2),
+              "under": float(RAIL + SLAB)}
     for f in faces:
         pts, uvs, tag, at = f
         if not tag.startswith("deck.flank_") or tag.endswith("~clamp"):
@@ -2138,7 +2144,6 @@ def block_specs(spec):
         faces = br.quads()
         curb_of = {(x, y): t for (y, x0, x1, t) in br.curbs for x in range(x0, x1)}
         flank = br.flank_sample()
-        S = BLOCK * 16
         ground = {c: br.ground_for(*c) for c in br.drawn_cells()}
         tops, masks = _world_cover(faces, br.w, br.h)
         patch_of = collections.defaultdict(dict)
@@ -2313,8 +2318,9 @@ class Faces:
             shade = vb.SHADE_ART
             if tag.startswith("deck.flank_") and not tag.endswith("~clamp"):
                 facing = tag[len("deck.flank_"):].split("_")[1][0]
-                # (a ramp's slot's wall ends facing south, as the front does)
-                shade = {"w": vb.SHADE_WEST, "e": vb.SHADE_EAST}.get(facing, vb.SHADE_ART)
+                # (a ramp's slot's wall ends facing south, as the front does;
+                # the north girder faces away, in the back's shade)
+                shade = {"w": vb.SHADE_WEST, "e": vb.SHADE_EAST, "n": vb.SHADE_BACK}.get(facing, vb.SHADE_ART)
             elif tag.startswith("deck.pier_side_"):
                 shade = vb.SHADE_WEST if tag[len("deck.pier_side_")] == "w" else vb.SHADE_EAST
             elif tag.startswith(("deck.girder_n", "deck.under")):

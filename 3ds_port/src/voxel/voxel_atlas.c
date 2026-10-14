@@ -446,7 +446,7 @@ bool VoxelAtlas_JobBegin(VoxelAtlasJob *job, const VoxelMapInstance *inst, uint1
         unsigned m, hidden;
         const uint8_t *cut;
 
-        if (AtlasSourceOf(job->primary, job->secondary, id, &m, &hidden, &cut) && job->used[m])
+        if (AtlasSourceOf(job->primary, job->secondary, id, &m, &hidden, &cut) && m < VOXEL_METATILE_REAL && job->used[m])
             job->used[id] = job->used[m];
     }
     /* An older in-flight chunk can request an extension after all of its

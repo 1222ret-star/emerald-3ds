@@ -291,10 +291,15 @@ static void (*sMix)(void);
 #define CTR_AUDIO_CLOCK_IDLE_MS 16.0f
 
 /* NDSP's thread, once per DSP frame (about 5 ms): the queue may have moved. */
+/* Set once the engine is back on the game thread (CtrAudio_Kick): the
+ * worker must never mix again, or two cores would run the engine at once
+ * when the clock is turned back on. */
+static volatile bool sGivenUp;
+
 static void DspFrame(void *arg)
 {
     (void)arg;
-    if (sClock)
+    if (sClock && !sGivenUp)
         LightEvent_Signal(&sKick);
 }
 
@@ -383,6 +388,8 @@ bool CtrAudio_StartWorker(void (*mix)(void))
 
 bool CtrAudio_Kick(void)
 {
+    if (sGivenUp)
+        return false;
     if (sClock && sReady)
     {
         /* The DSP's callback wakes the worker; the game thread never waits. */
@@ -402,6 +409,7 @@ bool CtrAudio_Kick(void)
         if (sWorkerCore == 1 && waitMs > CTR_AUDIO_WAIT_LIMIT_MS)
         {
             /* The worker is idle and stays so: it is never kicked again. */
+            sGivenUp = true;
             CtrLog_Write(CTR_LOG_AUDIO, "sound engine back on the game thread: it waited %.2f ms "
                          "a frame for the system core", waitMs);
             return false;

@@ -35,6 +35,13 @@ void VoxelMesh_Top(VoxelBuilder *builder, float xpos, float zpos, float height, 
     (void)u0; (void)v0; (void)u1; (void)v1; (void)shade;
 }
 
+bool VoxelMesh_MetatileUV(VoxelBuilder *builder, int metatileId,
+                          float *u0, float *v0, float *u1, float *v1)
+{
+    (void)builder; (void)metatileId; (void)u0; (void)v0; (void)u1; (void)v1;
+    return false;
+}
+
 bool VoxelMesh_TileUV(VoxelBuilder *builder, int xpos, int zpos,
                       float *u0, float *v0, float *u1, float *v1)
 {
@@ -87,8 +94,8 @@ unsigned VoxelRegions_RoleAt(unsigned layout, int xpos, int zpos)
 
 int main(void)
 {
-    uint16_t record[36] = {7, 4, 4};
-    uint8_t header[8] = {'V', 'X', 'S', '2', 1, 0, 0, 0};
+    uint16_t record[37] = {7, 4, 4};
+    uint8_t header[8] = {'V', 'X', 'S', '3', 1, 0, 0, 0};
     uint16_t *head = record + 19;
     for (unsigned row = 0; row < 16; ++row)
         record[3 + row] = 0x0180;

@@ -46,7 +46,9 @@ static unsigned sInstanceCount;
  * handful of distinct tilesets and layouts on screen, so a scan beats anything
  * cleverer, and every entry is dropped at VoxelWorld_BeginBatch.
  */
-#define VOXEL_MEMO_SLOTS 8
+/* At least one per instance: past a full memo every lookup on the remaining
+ * instances falls back to the asset binary search, per tile. */
+#define VOXEL_MEMO_SLOTS (MAX_VOXEL_MAP_INSTANCES + 4)
 
 struct VoxelMemo
 {
@@ -591,14 +593,15 @@ static VoxelVisualShape BehaviorShape(u8 behavior)
 
 VoxelVisualShape VoxelWorld_ClassifyTile(int worldX, int worldY)
 {
-    const VoxelMapInstance *inst = VoxelWorld_GetInstanceAt(worldX, worldY);
+    const VoxelMapInstance *inst = NULL;
+    u16 block = GetRawBlock(worldX, worldY, &inst);   /* one instance search for all three reads */
     int metatileId;
     VoxelVisualShape announced;
 
     if (inst == NULL)
         return VOXEL_SHAPE_VOID;
 
-    metatileId = VoxelWorld_GetMetatileId(worldX, worldY);
+    metatileId = block & MAPGRID_METATILE_ID_MASK;
     if (VoxelWorld_UsesTreeSprites(inst)
      && (VoxelTree_Part(inst->secondaryTileset, metatileId) >= 0
          || VoxelTree_GroundMetatile(inst->secondaryTileset, metatileId) != metatileId))
@@ -609,7 +612,7 @@ VoxelVisualShape VoxelWorld_ClassifyTile(int worldX, int worldY)
         return VOXEL_SHAPE_SIGN;
 
     /* The cells whose behaviour says what they are: water and furniture. */
-    announced = BehaviorShape(VoxelWorld_GetMetatileBehavior(worldX, worldY));
+    announced = BehaviorShape(UNPACK_BEHAVIOR(GetMetatileAttribute(inst, metatileId)));
     if (announced != VOXEL_SHAPE_COUNT)
         return announced;
 
@@ -1008,44 +1011,6 @@ int VoxelWorld_BorderMetatile(int worldX, int worldY)
     by = worldY - sInstances[0].originY + MAP_OFFSET;
     index = ((bx + 1) & 1) + (((by + 1) & 1) * 2);
     return (int)(border[index] & MAPGRID_METATILE_ID_MASK);
-}
-
-/*
- * Layouts of the maps just past those placed: the connections of each
- * connection. They are placed the moment the player crosses, and whatever is
- * read for them then is read in the middle of a frame.
- */
-unsigned VoxelWorld_NextLayouts(unsigned *layouts, unsigned max)
-{
-    unsigned count = 0;
-
-    for (unsigned i = 1; i < sInstanceCount; ++i)
-    {
-        const struct MapHeader *header = sInstances[i].header;
-        const struct MapConnection *conn;
-
-        if (header == NULL || header->connections == NULL)
-            continue;
-        conn = header->connections->connections;
-        for (s32 c = 0; c < header->connections->count && count < max; ++c, ++conn)
-        {
-            const struct MapHeader *next;
-            bool known = false;
-
-            if (conn->direction == CONNECTION_DIVE || conn->direction == CONNECTION_EMERGE)
-                continue;
-            next = GetMapHeaderFromConnection(conn);
-            if (next == NULL || next->mapLayout == NULL)
-                continue;
-            for (unsigned k = 0; k < count && !known; ++k)
-                known = layouts[k] == next->mapLayoutId;
-            for (unsigned k = 0; k < sInstanceCount && !known; ++k)
-                known = (unsigned)sInstances[k].layoutId == next->mapLayoutId;
-            if (!known)
-                layouts[count++] = next->mapLayoutId;
-        }
-    }
-    return count;
 }
 
 static unsigned AddPayload(const void **payloads, unsigned count, unsigned max, const void *ptr)

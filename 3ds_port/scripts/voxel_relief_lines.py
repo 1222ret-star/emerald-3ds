@@ -45,7 +45,7 @@ sys.path.insert(0, HERE)
 
 import voxel_building as vb  # noqa: E402
 import voxel_relief_fixes as vrf  # noqa: E402
-from PIL import Image, ImageDraw  # noqa: E402
+from PIL import Image  # noqa: E402
 
 GRID = 64                      # tests/voxel_mesh_dump.c: the virtual atlas
 METATILE_REAL = 1024           # voxel_atlas.h

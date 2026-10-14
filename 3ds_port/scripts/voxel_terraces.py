@@ -1545,7 +1545,6 @@ def behind_trees(c, flat, grids):
     own, drawn over it). (A face run on down a pixel a row through the
     tree's cell was a slope with a toothed foot: a cliff broken where it
     met the wood.)"""
-    step = LEVEL / N
     for cell in sorted(grids, key=lambda cl: (cl[1], cl[0])):
         if c.kind.get(cell) != UNKNOWN or c.role(cell) != "tree" or cell in c.keep:
             continue
@@ -2374,7 +2373,7 @@ def cracks(sol):
     """[(cell, neighbour, edge)]: every edge where two cells part with no
     wall closing it (the higher one west, east or north of the step) and no
     ground run on behind it (the higher one south): must be empty."""
-    c, g = sol["cells"], sol["grids"]
+    g = sol["grids"]
     rec = records(sol)
     out = []
     for (x, y) in g:

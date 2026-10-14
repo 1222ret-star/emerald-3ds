@@ -130,7 +130,7 @@ def connections():
     if _CONNECTIONS is not None:
         return _CONNECTIONS
     maps_dir = os.path.join(ROOT, "data", "maps")
-    by_id, layout_of = {}, {}
+    by_id = {}
     for name in os.listdir(maps_dir):
         path = os.path.join(maps_dir, name, "map.json")
         if os.path.exists(path):

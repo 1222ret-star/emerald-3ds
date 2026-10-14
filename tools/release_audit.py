@@ -55,9 +55,14 @@ ROM_TOLERANCE = 256
 
 FORBIDDEN_SUFFIXES = {
     ".gba", ".agb", ".nds", ".3ds", ".cci", ".cia", ".cxi", ".sav", ".srm", ".sgm",
-    ".ml1", ".ml2", ".ml3", ".log", ".pyc", ".pyo", ".pak", ".elf", ".map",
+    ".ml1", ".ml2", ".ml3", ".log", ".pyc", ".pyo", ".pak", ".elf", ".map", ".nsbtx",
 }
-FORBIDDEN_DIRS = {"__pycache__", ".claude", ".agents", "validation", "romfs_generated"}
+FORBIDDEN_DIRS = {"__pycache__", ".claude", ".agents", "validation", "romfs_generated",
+                  "private_assets", "hgss_followers"}
+# HeartGold/SoulSilver's follower sprites, as fetched (BTX0) or converted
+# (FMN1, builder/emerald3ds_builder/followers.py): the builder downloads them
+# on the player's computer; no repository or release carries them.
+FORBIDDEN_MAGIC = (b"BTX0", b"FMN1")
 FORBIDDEN_NAMES = [re.compile(r"^session-.*\.md$", re.I), re.compile(r"^baserom.*", re.I)]
 # RomFS may only carry these hand-written files; anything else there is output.
 ROMFS_ALLOWED = {".gitignore", "boot.txt"}
@@ -207,6 +212,8 @@ def audit(entries, allow: Allow, denylist, rom_index: RomIndex | None,
             findings.append(Finding(name, "forbidden-dir"))
         if any(rx.match(path.name) for rx in FORBIDDEN_NAMES):
             findings.append(Finding(name, "forbidden-name"))
+        if read()[:4] in FORBIDDEN_MAGIC:
+            findings.append(Finding(name, "follower-sprite"))
         if "romfs" in parts[:-1] and path.name not in ROMFS_ALLOWED:
             findings.append(Finding(name, "generated-romfs"))
         if "third_party" in parts[:-1]:

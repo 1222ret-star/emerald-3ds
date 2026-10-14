@@ -55,10 +55,9 @@ Modelling vocabulary
 
 import math
 import os
-import struct
 import sys
 
-from PIL import Image, ImageDraw
+from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from dump_region_art import incbin_map, read_u16, Tilesets, ROOT  # noqa: E402
@@ -162,7 +161,8 @@ class LayoutArt:
             out.append(grid)
         return out
 
-    def building_art(self, x0, y0, w, h, ground, cells=None, ground_px=None, upper=False):
+    def building_art(self, x0, y0, w, h, ground, cells=None, ground_px=None, upper=False,
+                     swap=None):
         """RGBA image of the cells, with every ground pixel transparent.
 
         A bottom-layer 8x8 block that is one of the ground's is ground whole.
@@ -172,7 +172,9 @@ class LayoutArt:
         the same place in its cell is ground too. `cells` limits the image to
         the (cx, cy) cells that belong to the object. With `upper`, only the
         upper layer: an object drawn whole on it (a railing) over a bottom
-        layer that is the map's ground, edges and all.
+        layer that is the map's ground, edges and all. `swap` draws some
+        metatiles as others: an object with something else drawn over it (a
+        hedge under a tree's leaves), as it is without.
         """
         img = Image.new("RGBA", (w * 16, h * 16), (0, 0, 0, 0))
         px = img.load()
@@ -181,6 +183,8 @@ class LayoutArt:
                 if cells is not None and (cx, cy) not in cells:
                     continue
                 m = self.metatile(x0 + cx, y0 + cy)
+                if swap:
+                    m = swap.get(m, m)
                 low, high = self.subtiles(m, 0), self.subtiles(m, 1)
                 for q in range(4):
                     is_ground = tuple(rgb for rgb, _ in low[q]) in ground
@@ -1380,7 +1384,6 @@ class Mound:
         k = self.rise
         spans = self._spans()
         n = max(4, int(math.ceil(max(b - a for _, a, b in spans) / float(self.step))))
-        mid_x = (spans[0][0] + spans[-1][0]) / 2.0
         cols = []
         for (x, vt, vb) in spans:
             L = float(vb - vt)
@@ -2570,7 +2573,6 @@ class PlanPrism:
                 continue
             # dressed with the strip, laid from the end it faces left of
             a, b = ((xa, za), (xb, zb))
-            dx, dz = (b[0] - a[0]) / L, (b[1] - a[1]) / L
             # rows counted so that the foot of the wall takes the strip's foot
             ph = tile.rect[3] - tile.rect[1]
             off = (-(y1 - y0)) % ph
@@ -2901,15 +2903,21 @@ class PlainWall:
 class Decal:
     """What a room paints on its floor in the cells a model covers: a flat
     quad per cell, drawn from the floor-only copy of the drawing that the
-    model's art carries `v_offset` rows below its own."""
+    model's art carries `v_offset` rows below its own. With `boxes` ({cell:
+    (u0, v0, u1, v1)}, pixels of the cell) a cell's quad covers only that
+    box - what it paints: the export crops a texture to what its faces
+    read, and a cell's quad over a few marks would keep a cell of clear
+    texels on the page."""
 
-    def __init__(self, name, cells, v_offset, lift=0.5):
+    def __init__(self, name, cells, v_offset, lift=0.5, boxes=None):
         self.name, self.cells, self.v_offset, self.lift = name, cells, v_offset, lift
+        self.boxes = boxes or {}
 
     def emit(self, mesh):
         y, o = self.lift, self.v_offset
         for (i, j) in self.cells:
-            x0, z0, x1, z1 = i * 16.0, j * 16.0, i * 16.0 + 16.0, j * 16.0 + 16.0
+            u0, v0, u1, v1 = self.boxes.get((i, j), (0, 0, 16, 16))
+            x0, z0, x1, z1 = i * 16.0 + u0, j * 16.0 + v0, i * 16.0 + u1, j * 16.0 + v1
             quad = [(x0, y, z0), (x1, y, z0), (x1, y, z1), (x0, y, z1)]
             # Half a pixel above the floor drawn under it - any less and the
             # console's depth buffer cannot tell them apart up close - and
