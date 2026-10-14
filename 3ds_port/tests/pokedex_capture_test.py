@@ -78,6 +78,7 @@ static int CtrPokenavList_Bg(void) { return -1; }
 static void ViewBase(void) {}
 static void C2D_Flush(void) {}
 static void RestoreScissor(void) {}
+static void VramSyncRange(unsigned address, unsigned bytes) { (void)address; (void)bytes; }
 static void C3D_SetScissor(int mode, int left, int top, int right, int bottom) {
     (void)mode; (void)left; (void)top; (void)right; (void)bottom;
 }
