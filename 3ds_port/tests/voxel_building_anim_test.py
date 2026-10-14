@@ -87,7 +87,9 @@ def fountain_tris(blob, layout_index):
     hbytes, nmasks = struct.unpack_from("<2H", blob, 12)
     nverts, nvar, ndecks = struct.unpack_from("<IHH", blob, 16)
     o = 24
-    pages = [struct.unpack_from("<HHI", blob, o + 8 * i) for i in range(npages)]
+    # the height's top bit flags a page with window glass
+    pages = [(w, h & 0x7FFF, off) for (w, h, off) in
+             (struct.unpack_from("<HHI", blob, o + 8 * i) for i in range(npages))]
     o += npages * 8
     models = [struct.unpack_from("<BBHIII", blob, o + 16 * i) for i in range(nmodels)]
     o += nmodels * 16
