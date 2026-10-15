@@ -75,6 +75,8 @@ typedef struct
 typedef struct
 {
     uint8_t kind, sprite, battler;
+    /* The box's sprite as made: once it is not, the box is gone (BoxGone). */
+    const struct SpriteTemplate *spriteTemplate;
     uint8_t name[POKEMON_NAME_LENGTH + 1];
     uint8_t gender;          /* 0 male, 1 female, 2 none */
     uint8_t level;
@@ -933,6 +935,7 @@ void CtrBattleHud_BoxCreated(unsigned char healthboxSpriteId, unsigned char batt
     memset(slot, 0, sizeof(*slot));
     slot->kind = kind;
     slot->sprite = healthboxSpriteId;
+    slot->spriteTemplate = left->template;
     slot->battler = battler;
     slot->name[0] = EOS;
     slot->gender = 2;
@@ -1135,6 +1138,23 @@ void CtrBattleHud_Uploaded(unsigned index)
         sBoxes[index].changedTop = sBoxes[index].changedBottom = 0;
 }
 
+/*
+ * Whether box `index`'s sprite is no longer the one it was made with: the
+ * battle is over and its sprites freed. The evolution scene and the egg
+ * hatching are drawn as the battle is (CtrVideo_SetBattle), and the compositor
+ * knows a box by its tiles; a box left over would be drawn in place of
+ * whatever sprite now has them - the evolving mon shown as the last battle's
+ * HP box.
+ */
+static bool BoxGone(int index)
+{
+    const Slot *slot = &sSlots[index];
+    const struct Sprite *sprite = &gSprites[slot->sprite];
+
+    return !sprite->inUse || sprite->template != slot->spriteTemplate
+        || sprite->oam.tileNum != sBoxes[index].boxTile;
+}
+
 const CtrHudBox *CtrBattleHud_Boxes(void)
 {
     if (!CtrBattleHud_Ready())
@@ -1145,6 +1165,8 @@ const CtrHudBox *CtrBattleHud_Boxes(void)
         float fade;
         uint32_t fadeColour, signature;
 
+        if (sBoxes[i].used && BoxGone(i))
+            sBoxes[i].used = false;
         if (!sBoxes[i].used)
             continue;
         /* What can change without the game telling: the doubles' numbers, the

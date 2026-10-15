@@ -4,7 +4,48 @@ Applies after 0009-optional-settings.patch; apply with tools/bootstrap.py.
 diff --git a/src/evolution_scene.c b/src/evolution_scene.c
 --- a/src/evolution_scene.c
 +++ b/src/evolution_scene.c
-@@ -770,6 +770,25 @@
+@@ -212,6 +212,20 @@
+     SetMainCallback2(CB2_BeginEvolutionScene);
+ }
+ 
++#ifdef PLATFORM_3DS
++/*
++ * The scene shows the right half of the battle's background (BG3 at x 256):
++ * plain stripes. The 3DS's wider screen carries BG3 out past the GBA's edges,
++ * and on the left that wrapped into the half with the battle's platforms, an
++ * opponent's platform at the screen's left edge. That half is never seen on
++ * the GBA here: it is made the same stripes.
++ */
++static void CtrPlainBackgroundBothHalves(void)
++{
++    CpuCopy16((void *)BG_SCREEN_ADDR(27), (void *)BG_SCREEN_ADDR(26), BG_SCREEN_SIZE);
++}
++#endif
++
+ void EvolutionScene(struct Pokemon *mon, u16 postEvoSpecies, bool8 canStopEvo, u8 partyId)
+ {
+     u8 name[POKEMON_NAME_BUFFER_SIZE];
+@@ -247,6 +261,9 @@
+ 
+     InitBattleBgsVideo();
+     LoadBattleTextboxAndBackground();
++#ifdef PLATFORM_3DS
++    CtrPlainBackgroundBothHalves();
++#endif
+     ResetSpriteData();
+     ScanlineEffect_Stop();
+     ResetTasks();
+@@ -353,6 +370,9 @@
+ 
+     InitBattleBgsVideo();
+     LoadBattleTextboxAndBackground();
++#ifdef PLATFORM_3DS
++    CtrPlainBackgroundBothHalves();
++#endif
+     ResetSpriteData();
+     FreeAllSpritePalettes();
+     gReservedSpritePaletteCount = 4;
+@@ -773,6 +793,25 @@
              BattlePutTextOnWindow(gStringVar4, B_WIN_MSG);
              PlayBGM(MUS_EVOLVED);
              gTasks[taskId].tState++;
