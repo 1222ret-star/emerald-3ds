@@ -55,6 +55,7 @@ void __wrap_GX_BindQueue(gxCmdQueue_s *queue)
  */
 extern u32 __ctru_linear_heap, __ctru_linear_heap_size;
 static bool sGpuEarly;
+static float sCmdBufPeak;
 static uint64_t sGpuEarlyStart;
 
 static uint64_t sFlushTicks;
@@ -129,6 +130,42 @@ static void FlushLinear(void)
     GSPGPU_FlushDataCache((void *)__ctru_linear_heap, __ctru_linear_heap_size);
     sFlushTicks += svcGetSystemTick() - start;
     ++sFlushes;
+}
+
+/*
+ * A render target made in VRAM holds whatever the VRAM held before - on
+ * hardware the atlas or surface that was there last; Azahar hands out
+ * zeroes. The battle's sprite slots once came out as an old atlas where the
+ * info boxes should be, and a surface is only ever drawn into where it is
+ * used, so each is cleared whole once, in the next frame (the targets are
+ * made between frames, where no command list is open).
+ */
+#define MADE_CLEARS 8
+static C3D_RenderTarget *sMadeClears[MADE_CLEARS];
+static unsigned sMadeClearCount;
+
+static void ClearWhenMade(C3D_RenderTarget *target)
+{
+    if (target == NULL) return;
+    for (unsigned i = 0; i < sMadeClearCount; ++i)
+        if (sMadeClears[i] == target) return;
+    if (sMadeClearCount < MADE_CLEARS) sMadeClears[sMadeClearCount++] = target;
+}
+
+/* A target released before its clear: forgotten. */
+static void ClearWhenMadeForget(C3D_RenderTarget *target)
+{
+    for (unsigned i = 0; i < sMadeClearCount; ++i)
+        if (sMadeClears[i] == target) sMadeClears[i] = sMadeClears[--sMadeClearCount];
+}
+
+/* Right after C3D_FrameBegin: the fills go into the queue before anything
+ * the frame draws. */
+static void ClearsRun(void)
+{
+    for (unsigned i = 0; i < sMadeClearCount; ++i)
+        C3D_RenderTargetClear(sMadeClears[i], C3D_CLEAR_ALL, 0, 0);
+    sMadeClearCount = 0;
 }
 
 Result __real_GX_ProcessCommandList(u32 *buf0a, u32 buf0s, u8 flags);
@@ -284,6 +321,18 @@ static int sSurfaceH = 256;
 #define SCENE_ZOOM 2.0f
 #define SCENE_W 1024
 #define SCENE_H 256
+/*
+ * The voxel battle's world picture lives in the scene surface's first
+ * WORLD_COLUMNS columns (RenderBattleWorld): no VRAM surface of its own,
+ * which on hardware the battle found no room for in one battle of two
+ * (404 KiB free in blocks under 140 KiB: "3D voxel surface not made", the
+ * whole battle flat). The scenery and the slots then start past it, after
+ * WORLD_GAP cleared columns: the filter at a slot's left edge reads the
+ * column before it.
+ */
+#define WORLD_COLUMNS 400
+#define WORLD_GAP 8
+static int sSceneColumn;
 /*
  * The GBA line the battle scene is composed down to: the top of the text box
  * frame (CTR_BATTLE_BOX_TOP), which floats a few lines lower than the GBA's
@@ -3743,7 +3792,7 @@ static void LayerRelease(unsigned bg)
 {
     LayerTexture *layer = &sLayers[bg];
 
-    if (layer->target) C3D_RenderTargetDelete(layer->target);
+    if (layer->target) { ClearWhenMadeForget(layer->target); C3D_RenderTargetDelete(layer->target); }
     if (layer->tex.data) C3D_TexDelete(&layer->tex);
     memset(layer, 0, sizeof(*layer));
 }
@@ -3786,7 +3835,10 @@ static bool LayerCreate(unsigned bg, unsigned width, unsigned height)
 
     if (C3D_TexInitVRAM(&layer->tex, width, height, GPU_RGBA5551)
         && (layer->target = C3D_RenderTargetCreateFromTex(&layer->tex, GPU_TEXFACE_2D, 0, -1)))
+    {
+        ClearWhenMade(layer->target);
         return true;
+    }
     LayerRelease(bg);
     return false;
 }
@@ -5859,7 +5911,7 @@ static float sObjWinEyeShift;
 /* Outside the frame, like the battle's other surfaces (SlotsPrepare). */
 static void ObjWindowRelease(void)
 {
-    if (sObjWinTarget) C3D_RenderTargetDelete(sObjWinTarget);
+    if (sObjWinTarget) { ClearWhenMadeForget(sObjWinTarget); C3D_RenderTargetDelete(sObjWinTarget); }
     if (sObjWinTex.data) C3D_TexDelete(&sObjWinTex);
     sObjWinTarget = NULL;
     memset(&sObjWinTex, 0, sizeof(sObjWinTex));
@@ -5889,7 +5941,10 @@ static void ObjWindowPrepare(void)
     {
         if (C3D_TexInitVRAM(&sObjWinTex, size, size, GPU_RGBA8)
             && (sObjWinTarget = C3D_RenderTargetCreateFromTex(&sObjWinTex, GPU_TEXFACE_2D, 0, -1)))
+        {
+            ClearWhenMade(sObjWinTarget);
             break;
+        }
         ObjWindowRelease();
     }
     sObjWinFailed = sObjWinTarget == NULL;
@@ -6197,7 +6252,11 @@ static void Compose(void)
 bool CtrVideo_Init(void)
 {
     const char *step = "C3D_Init command buffer";
-    sC3d = C3D_Init(0x100000);
+    /* 512 KiB, down from 1 MiB: a frame's fullest use is 4% of 1 MiB (the
+     * stats line's cmdbuf=, Azahar: the field, the voxel battle with the
+     * slider up), so the half given back to the linear heap - full in a
+     * battle on hardware - still leaves twelve times the headroom. */
+    sC3d = C3D_Init(0x80000);
     if (!sC3d) goto fail;
     step = "C2D_Init geometry buffers";
     sC2d = C2D_Init(MAX_DRAWS);
@@ -6306,7 +6365,7 @@ static bool sSceneCached;
 static void SceneRelease(void)
 {
     sSceneCached = false;
-    if (sScene) C3D_RenderTargetDelete(sScene);
+    if (sScene) { ClearWhenMadeForget(sScene); C3D_RenderTargetDelete(sScene); }
     if (sSceneTex.data) C3D_TexDelete(&sSceneTex);
     sScene = NULL;
     memset(&sSceneTex, 0, sizeof(sSceneTex));
@@ -6327,7 +6386,10 @@ static void ScenePrepare(void)
 
         if (C3D_TexInitVRAM(&sSceneTex, SCENE_W, SCENE_H, GPU_RGBA5551)
             && (sScene = C3D_RenderTargetCreateFromTex(&sSceneTex, GPU_TEXFACE_2D, 0, -1)))
+        {
+            ClearWhenMade(sScene);
             break;
+        }
         SceneRelease();
         /*
          * Back from the bag or the party (a centred screen), what it held is
@@ -6535,6 +6597,7 @@ static uint32_t SceneCacheKey(int left, int top, int width, int height, unsigned
     union { float f; uint32_t u; } fade = {sPaletteFade}, origin = {sLayerOrigin};
 
     h = SceneCacheMix(h, (uint32_t)left);
+    h = SceneCacheMix(h, (uint32_t)sSceneColumn);
     h = SceneCacheMix(h, (uint32_t)top);
     h = SceneCacheMix(h, (uint32_t)width);
     h = SceneCacheMix(h, (uint32_t)height);
@@ -6744,7 +6807,7 @@ static void BattleSceneCompose(int margin, unsigned exclude)
             return;
         }
 #endif
-        SceneComposeInto(sScene, 0, left, top, width, height, layers);
+        SceneComposeInto(sScene, sSceneColumn, left, top, width, height, layers);
         SceneCacheSync(layers);
         memcpy(sSceneCacheDrawn, sBgDrawn, sizeof(sBgDrawn));
         sSceneCacheKey = key;
@@ -6764,7 +6827,7 @@ static void BattleSceneCompose(int margin, unsigned exclude)
         return;
     }
     sSceneCached = false;
-    SceneComposeInto(sScene, 0, left, top, width, height, 1 | sWorldLayers | exclude | BattleBoxLayers());
+    SceneComposeInto(sScene, sSceneColumn, left, top, width, height, 1 | sWorldLayers | exclude | BattleBoxLayers());
 }
 
 /*
@@ -6781,6 +6844,22 @@ static void BattleSceneCompose(int margin, unsigned exclude)
  */
 static C3D_RenderTarget *sSceneOn;
 
+/*
+ * The PICA's texture cache dropped. Citro3D only asks for that when a
+ * texture binding changes, and Citro2D only rebinds a texture other than the
+ * one it drew with last: the tile atlas and the HD info boxes are the same
+ * texture frame after frame, updated by the CPU, and on hardware the GPU
+ * went on sampling what their texels were - a sprite's tiles came out as
+ * the sand path that had the atlas slots before (a hardware dump of the
+ * frame). Azahar has no such cache. The same bit Citro3D's own context
+ * update writes (GPUREG_TEXUNIT_CONFIG bit 16).
+ */
+static void TexCacheClear(void)
+{
+    C2D_Flush();
+    GPUCMD_AddMaskedWrite(GPUREG_TEXUNIT_CONFIG, 0x4, 1u << 16);
+}
+
 static void SceneOn(C3D_RenderTarget *target)
 {
     if (target != sSceneOn)
@@ -6788,6 +6867,8 @@ static void SceneOn(C3D_RenderTarget *target)
         C2D_Flush();
         GPUCMD_AddWrite(GPUREG_FRAMEBUFFER_FLUSH, 1);
         GPUCMD_AddWrite(GPUREG_FRAMEBUFFER_INVALIDATE, 1);
+        /* What was drawn into the last target is sampled from now on. */
+        GPUCMD_AddMaskedWrite(GPUREG_TEXUNIT_CONFIG, 0x4, 1u << 16);
         sSceneOn = target;
     }
     C2D_SceneBegin(target);
@@ -6797,6 +6878,7 @@ static void SplitFrame(void)
 {
     C3D_FrameSplit(0);
     sSceneOn = NULL;
+    GPUCMD_AddMaskedWrite(GPUREG_TEXUNIT_CONFIG, 0x4, 1u << 16);
 }
 
 /*
@@ -6887,7 +6969,7 @@ static void SceneTexFilter(GPU_TEXTURE_FILTER_PARAM filter)
 /* The composed scene on `target`, `shift` screen pixels across. */
 static void BattleScenePlace(C3D_RenderTarget *target, float shift)
 {
-    ScenePlaceFrom(target, shift, &sSceneTex, 0, true);
+    ScenePlaceFrom(target, shift, &sSceneTex, sSceneColumn, true);
 }
 
 /*
@@ -7039,7 +7121,7 @@ static bool sBottomFailed;
 
 static void BottomRelease(void)
 {
-    if (sBottom) C3D_RenderTargetDelete(sBottom);
+    if (sBottom) { ClearWhenMadeForget(sBottom); C3D_RenderTargetDelete(sBottom); }
     sBottom = NULL;
 }
 
@@ -7064,6 +7146,7 @@ static bool BottomReady(bool wanted)
     if (!sBottom && CtrVoxel_ReleaseIdleVram() > 0)
         sBottom = C3D_RenderTargetCreate(BOTTOM_SIZE, BOTTOM_WIDTH, GPU_RB_RGB565, -1);
 #endif
+    ClearWhenMade(sBottom);
     if (!sBottom)
     {
         if (!sBottomFailed)
@@ -7444,6 +7527,7 @@ typedef struct
     C3D_RenderTarget *target;
     C3D_Tex *tex;
     int column;
+    int end;    /* the first column past the region */
 } SlotRegion;
 static SlotRegion sRegions[2];
 static unsigned sRegionCount;
@@ -7451,7 +7535,7 @@ static unsigned sRegionCount;
 /* Outside the frame, beside the scene surface (ScenePrepare). */
 static void SlotsRelease(void)
 {
-    if (sSlotTarget) C3D_RenderTargetDelete(sSlotTarget);
+    if (sSlotTarget) { ClearWhenMadeForget(sSlotTarget); C3D_RenderTargetDelete(sSlotTarget); }
     if (sSlotTex.data) C3D_TexDelete(&sSlotTex);
     sSlotTarget = NULL;
     memset(&sSlotTex, 0, sizeof(sSlotTex));
@@ -7489,7 +7573,10 @@ static void SlotsPrepare(void)
 
         if (C3D_TexInitVRAM(&sSlotTex, width, SCENE_H, GPU_RGBA5551)
             && (sSlotTarget = C3D_RenderTargetCreateFromTex(&sSlotTex, GPU_TEXFACE_2D, 0, -1)))
+        {
+            ClearWhenMade(sSlotTarget);
             break;
+        }
         SlotsRelease();
 #if CTR_VOXEL_ENABLED
         if (attempt == 0) CtrVoxel_ReleaseIdleVram();
@@ -7647,13 +7734,13 @@ static bool SlotsPack(void)
         {
             const SlotRegion *at = &sRegions[region];
 
-            if (cursor + tw > at->tex->width)
+            if (cursor + tw > at->end)
             {
                 shelf += shelfH;
                 cursor = at->column;
                 shelfH = 0;
             }
-            if (cursor + tw <= at->tex->width && shelf + th <= at->tex->height) break;
+            if (cursor + tw <= at->end && shelf + th <= at->tex->height) break;
             /* On to the next region, from its top. */
             if (++region == sRegionCount) return false;
             cursor = sRegions[region].column;
@@ -7736,7 +7823,7 @@ static void SlotsCompose(void)
         if (k == 0 || slot->region != sSlots[k - 1].region)
         {
             C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
-            DrawnClear(region->target, 0, region->column, 0, region->tex->width - region->column,
+            DrawnClear(region->target, 0, region->column, 0, region->end - region->column,
                        region->tex->height);
             SceneOn(region->target);
             sTargetW = region->tex->width;
@@ -7828,10 +7915,14 @@ static void SlotsPlace(C3D_RenderTarget *target, bool front, bool patches)
 static void BattleWorldEye(C3D_RenderTarget *target, C3D_Tex *world)
 {
     const Tex3DS_SubTexture whole = {CTR_GAME_WIDTH, CTR_GAME_HEIGHT, 0, 1,
-        CTR_GAME_WIDTH / 512.0f, 1 - CTR_GAME_HEIGHT / 256.0f};
-    const Tex3DS_SubTexture left = {4, CTR_GAME_HEIGHT, 0, 1, 4 / 512.0f, 1 - CTR_GAME_HEIGHT / 256.0f};
-    const Tex3DS_SubTexture right = {4, CTR_GAME_HEIGHT, (CTR_GAME_WIDTH - 4) / 512.0f, 1,
-        CTR_GAME_WIDTH / 512.0f, 1 - CTR_GAME_HEIGHT / 256.0f};
+        CTR_GAME_WIDTH / (float)world->width, 1 - CTR_GAME_HEIGHT / (float)world->height};
+    /* Stretched across by the shift, so that both edges stay covered: the
+     * strip the shift uncovered used to be filled with the picture's edge
+     * columns, which stood out as a line down the screen's side whenever
+     * the picture's edge held something dark (a map's end, a wall). A few
+     * per cent across, nothing at the middle where the Pokémon stand. */
+    float shift = roundf(-sEyeParallax * BATTLE_BACK_DEPTH), reach = fabsf(shift);
+    float scaleX = (CTR_GAME_WIDTH + 2.0f * reach) / CTR_GAME_WIDTH;
 
     BlendForget();
     SceneOn(target);
@@ -7839,9 +7930,10 @@ static void BattleWorldEye(C3D_RenderTarget *target, C3D_Tex *world)
     C2D_Flush();
     C3D_AlphaTest(false, GPU_ALWAYS, 0);
     C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ONE, GPU_ZERO);
-    C2D_DrawImageAt((C2D_Image){world, &left}, 0, 0, 0, NULL, 1, 1);
-    C2D_DrawImageAt((C2D_Image){world, &right}, CTR_GAME_WIDTH - 4, 0, 0, NULL, 1, 1);
-    C2D_DrawImageAt((C2D_Image){world, &whole}, roundf(-sEyeParallax * BATTLE_BACK_DEPTH), 0, 0, NULL, 1, 1);
+    /* Nearest: the picture stays pixel-sharp, a column doubled now and then. */
+    if (world == &sSceneTex) SceneTexFilter(GPU_NEAREST);
+    C2D_DrawImageAt((C2D_Image){world, &whole}, shift - reach, 0, 0, NULL, scaleX, 1);
+    if (world == &sSceneTex) SceneTexFilter(GPU_LINEAR);
     C2D_Flush();
     BlendForget();
 }
@@ -7897,6 +7989,8 @@ static void RenderBattleStereo(uint32_t clear, float slider, C3D_Tex *world)
     sParallax = 0;
     sLayerShift = 0;
     sHudFlatScene = false;
+    /* The scenery and the slots past the world's picture (RenderBattleWorld). */
+    sSceneColumn = world ? WORLD_COLUMNS + WORLD_GAP : 0;
     BlendForget();
     /* The scene's placement first: the sprites are clipped to it. */
     sObjWinSlotted = sObjWin.ready;
@@ -7978,8 +8072,8 @@ static void RenderBattleStereo(uint32_t clear, float slider, C3D_Tex *world)
 
         sRegionCount = 0;
         if (scenery && !world && sSlotTarget)
-            sRegions[sRegionCount++] = (SlotRegion){sSlotTarget, &sSlotTex, 0};
-        sRegions[sRegionCount++] = (SlotRegion){sScene, &sSceneTex, scenery ? after : 0};
+            sRegions[sRegionCount++] = (SlotRegion){sSlotTarget, &sSlotTex, 0, sSlotTex.width};
+        sRegions[sRegionCount++] = (SlotRegion){sScene, &sSceneTex, sSceneColumn + (scenery ? after : 0), SCENE_W};
         if (!scenery) sSceneCached = false;   /* the slots go over its columns */
         if (!SlotsPack()) { StereoWhy(3); apart = false; }
     }
@@ -8460,7 +8554,7 @@ static bool sStereoWanted;
 
 static void StereoSurfaceRelease(void)
 {
-    if (sStereoTarget) C3D_RenderTargetDelete(sStereoTarget);
+    if (sStereoTarget) { ClearWhenMadeForget(sStereoTarget); C3D_RenderTargetDelete(sStereoTarget); }
     if (sStereoTex.data) C3D_TexDelete(&sStereoTex);
     sStereoTarget = NULL;
     memset(&sStereoTex, 0, sizeof(sStereoTex));
@@ -8504,7 +8598,10 @@ static void StereoSurfaceManage(void)
             {
                 if (C3D_TexInitVRAM(&sStereoTex, 512, 256, formats[made])
                     && (sStereoTarget = C3D_RenderTargetCreateFromTex(&sStereoTex, GPU_TEXFACE_2D, 0, -1)))
+                {
+                    ClearWhenMade(sStereoTarget);
                     break;
+                }
                 StereoSurfaceRelease();
             }
             /* As the scene surface: what a screen left behind goes first. */
@@ -8861,8 +8958,12 @@ static void RenderBattleWorld(uint32_t clear, float slider)
     unsigned control = Reg(0x50), effect = (control >> 6) & 3;
     float bright = effect >= 2 ? Min(Reg(0x54) & 31, 16) / 16.0f : 0.0f;
     float bloom;
-    bool stereo = slider > 0.0f && sStereoTarget && sScene;
-    C3D_RenderTarget *world = stereo ? sStereoTarget : sTop;
+    bool stereo = slider > 0.0f && sScene;
+    /* With the slider up the picture goes into the scene surface's first
+     * columns, where RenderBattleStereo copies it behind each eye. */
+    C3D_RenderTarget *world = stereo ? sScene : sTop;
+
+    sSceneColumn = stereo ? WORLD_COLUMNS + WORLD_GAP : 0;
     CtrVoxelBattleIntro intro;
 
     /* The world is BG3: its brightness is BG3's. */
@@ -8887,7 +8988,20 @@ static void RenderBattleWorld(uint32_t clear, float slider)
         bloom = fminf(bloom + 0.7f * intro.impact, 1.0f);
     if (bloom > 0.005f)
         VoxelBloomPrepare();
-    C2D_TargetClear(world, C2D_Color32(0, 0, 0, 255));
+    if (stereo)
+    {
+        /* The whole surface, as a memory fill, every frame: a drawn clear
+         * of the slots' columns did not land on hardware (a slot composed
+         * over what was there frames before came back as a lit copy of a
+         * Pokémon at a battle's end), so nothing of a frame before is left
+         * for a slot to sample. The scenery beside the world is composed
+         * again when there is one (a move's background, a few frames). */
+        ColourClear(sScene, 0);
+        sSceneOn = NULL;
+        sSceneCached = false;
+    }
+    else
+        C2D_TargetClear(world, C2D_Color32(0, 0, 0, 255));
     SceneOn(world);
     C2D_ViewReset();
     Blend(5, false, false);
@@ -8915,8 +9029,7 @@ static void RenderBattleWorld(uint32_t clear, float slider)
     PORT_PROF_BEGIN(bwScene);
     if (stereo)
     {
-        sStereoUsedFrame = sStats.frames;
-        RenderBattleStereo(clear, slider, &sStereoTex);
+        RenderBattleStereo(clear, slider, &sSceneTex);
         BattleIntroBars(&intro, true);
         PORT_PROF_END(bwScene, PORT_PROF_BW_SCENE);
         return;
@@ -9563,7 +9676,7 @@ static void BandsRelease(void)
 {
     for (unsigned i = 0; i < CTR_BANDS; ++i)
     {
-        if (sBand[i]) C3D_RenderTargetDelete(sBand[i]);
+        if (sBand[i]) { ClearWhenMadeForget(sBand[i]); C3D_RenderTargetDelete(sBand[i]); }
         if (sBandTex[i].data) C3D_TexDelete(&sBandTex[i]);
         sBand[i] = NULL;
         memset(&sBandTex[i], 0, sizeof(sBandTex[i]));
@@ -9602,6 +9715,7 @@ static void BandsShrink(void)
 {
     unsigned last = sBandCount - 1;
 
+    ClearWhenMadeForget(sBand[last]);
     C3D_RenderTargetDelete(sBand[last]);
     C3D_TexDelete(&sBandTex[last]);
     sBand[last] = NULL;
@@ -9683,6 +9797,7 @@ static bool BandsCreate(void)
          * per plane per frame is memory traffic this path exists to avoid. */
         sBand[i] = C3D_RenderTargetCreateFromTex(&sBandTex[i], GPU_TEXFACE_2D, 0, -1);
         if (!sBand[i]) goto fail;
+        ClearWhenMade(sBand[i]);
         sBandCount = i + 1;
     }
     return true;
@@ -9692,7 +9807,7 @@ fail:
     {
         unsigned i = sBandCount;
 
-        if (sBand[i]) C3D_RenderTargetDelete(sBand[i]);
+        if (sBand[i]) { ClearWhenMadeForget(sBand[i]); C3D_RenderTargetDelete(sBand[i]); }
         if (sBandTex[i].data) C3D_TexDelete(&sBandTex[i]);
         sBand[i] = NULL;
         memset(&sBandTex[i], 0, sizeof(sBandTex[i]));
@@ -10223,6 +10338,9 @@ void CtrVideo_Present(void)
     CtrVoxel_NoteFrameWait(waitStart);
 #endif
     if (!C3D_FrameBegin(C3D_FRAME_SYNCDRAW)) return;
+    ClearsRun();
+    /* Before anything samples what the CPU wrote since the last frame. */
+    TexCacheClear();
     sUploadCommands = 0;
     sRenderReserve = sBattle ? 28u : 24u;
     Flat2D();
@@ -10452,9 +10570,9 @@ void CtrVideo_Present(void)
      * stereo surface (asked for here, made before the next frame). */
 #if CTR_VOXEL_ENABLED
     bool worldStereo = sBattleWorld && sScene && !bottom && !sTransition && sTopRight && slider > 0.02f;
-    if (worldStereo) sStereoWanted = true;
+    /* The world's picture goes into the scene surface (RenderBattleWorld):
+     * no surface of its own to wait for. */
     bool worldWanted = worldStereo;
-    worldStereo = worldStereo && sStereoTarget;
 #else
     const bool worldStereo = false;
 #endif
@@ -10641,6 +10759,13 @@ void CtrVideo_Present(void)
             sEarlyFrames = 0;
             sStereoSplit[0] = sStereoSplit[1] = 0;
         }
+        {
+            /* The command buffer (C3D_Init): its fullest frame, for the
+             * memory budget. */
+            float used = C3D_GetCmdBufUsage();
+
+            if (used > sCmdBufPeak) sCmdBufPeak = used;
+        }
         C3D_FrameEnd(running ? GX_CMDLIST_FLUSH : 0);
         sGpuEarly = false;
     }
@@ -10677,14 +10802,15 @@ void CtrVideo_Present(void)
     if (sStats.frames % 600 == 0)
     {
         CtrLog_Write(CTR_LOG_VIDEO, "frames=%lu fps=%.1f cpu=%.2fms bg=%.2fms obj=%.2fms gpu=%.2fms "
-                     "3d=%lupx%s x%lu quads=%lu cells=%lu sprites=%lu errors=%lu cache=%u linear=%lu vram=%lu",
+                     "3d=%lupx%s x%lu quads=%lu cells=%lu sprites=%lu errors=%lu cache=%u linear=%lu vram=%lu cmdbuf=%.0f%%",
                      (unsigned long)sStats.frames, sStats.fps, sStats.cpuMs,
                      sBgTicks * 1000.0 / SYSCLOCK_ARM11, sObjTicks * 1000.0 / SYSCLOCK_ARM11,
                      sStats.gpuMs, (unsigned long)sStats.stereo,
                      sStats.stereo ? (sPlanes ? "/planes" : "/eyes") : "", (unsigned long)sPlanes,
                      (unsigned long)sStats.tiles, (unsigned long)sStats.cells,
                      (unsigned long)sStats.sprites, (unsigned long)sStats.errors, sUsed,
-                     (unsigned long)linearSpaceFree(), (unsigned long)vramSpaceFree());
+                     (unsigned long)linearSpaceFree(), (unsigned long)vramSpaceFree(), sCmdBufPeak * 100.0f);
+        sCmdBufPeak = 0.0f;
 #if CTR_VOXEL_ENABLED
         if (voxel || sBattleWorld)
         {
