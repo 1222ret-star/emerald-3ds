@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- The 3D battle on a real console, by @darkmattericecoffee (pull request
+  #89): fixes for what only hardware showed, found with surface dumps on a
+  New 3DS. Sprites no longer pick up stale tiles from the GPU's texture
+  cache, new surfaces start cleared, and the voxel battle no longer goes flat
+  when VRAM is fragmented, because the world's picture shares the battle
+  scene's surface. A Pokémon no longer leaves a lit copy at a battle's end,
+  and no lines run down the screen's sides at the stereo shift. The linear
+  heap gains about 700 KiB: the bottom screen is RGB565, and the command
+  buffer is 512 KiB. Follow-ups: the new surfaces are cleared two per GPU
+  queue entry within the room each frame leaves, and the sprites are packed
+  more tightly, so they keep their 3D beside the world's picture.
+
 - Follower Pokémon (OPTIONS > ENHANCEMENTS > FOLLOWER, off by default): the
   party's lead walks behind the player on its HeartGold/SoulSilver overworld
   sprite, comes out of and goes back into its Poké Ball (warps, surf, bike,

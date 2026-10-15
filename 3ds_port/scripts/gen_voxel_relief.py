@@ -513,6 +513,16 @@ class AliasArt(vb.LayoutArt):
         return self._images[key]
 
 
+def reading(art):
+    """What a cache of a tile read off `art` must be keyed by besides its
+    tilesets: an alias reading recolours its secondary tileset's tiles, so
+    another map with the same tilesets read plainly sees other pixels (Route
+    113 and Route 114 share Fallarbor's; keyed by the tilesets alone, the
+    first map read decided the other's tiles, and the terraces of both groups
+    changed with the order the groups were solved in)."""
+    return art.id if isinstance(art, AliasArt) else None
+
+
 def layout_art(lid):
     """The layout's drawing for the analysis (cached)."""
     if lid not in _ART:
@@ -1361,7 +1371,7 @@ def drawn_canvas(name):
                         kind[(oy + cy) * 16 + j][(ox + cx) * 16:(ox + cx + 1) * 16] = [GROUND] * 16
                     continue
                 # the same metatile reads the same: its rows, worked out once
-                key = (A.primary, A.secondary, m, layers, stair)
+                key = (A.primary, A.secondary, m, layers, stair, reading(A))
                 rows = tile_kinds.get(key)
                 if rows is None:
                     img = A.cell_image(m, layers=layers).load()
@@ -1466,7 +1476,7 @@ def _rock_pixels(art, m, layers=(0, 1)):
 def drawn_role(art, m):
     """(role, lower layer only) of metatile m as drawn: role "face",
     "west", "east" or None (a corner, a top, ground)."""
-    key = (art.primary, art.secondary, m)
+    key = (art.primary, art.secondary, m, reading(art))
     if key in _ROLES_DRAWN:
         return _ROLES_DRAWN[key]
     out = (None, False)
@@ -4136,10 +4146,12 @@ def export(layout_ids, path):
     # layout drawing its tileset, u16 metatile, u16 rows[16], bit set where
     # the background is); cells x (u16 layout, u8 x, u8 y, u16 variant, s16
     # foot in pixels over the base, u16 the metatile of the ground behind it
-    # or 0xFFFF, u16 the metatile its cliff walls are drawn with or 0xFFFF),
-    # by layout, x and y; variant 0xFFFF is no cut: a cell under which the
-    # ground behind a terrace's rim runs on (rim_cells), or one with cliffs
-    # only (cell_shapes). Then u32 the table's offset and "CUTS"
+    # or 0xFFFF, u16 the metatile its cliff walls are drawn with or 0xFFFF,
+    # u8 sides, u8 flags: voxel_relief.c has their bits; 1, plain ground
+    # behind, is no longer read), by layout, x and y; variant 0xFFFF is no
+    # cut: a cell under which the ground behind a terrace's rim runs on
+    # (rim_cells), or one with cliffs only (cell_shapes). Then u32 the
+    # table's offset and "CUTS"
     cuts = [c + ((0xFFFF, 0xFF, 0)[len(c) - 6:] if len(c) < 9 else ()) for c in cuts]
     table = struct.pack("<HH", len(variants), len(cuts))
     for (pair, m, mask), (k, lay) in sorted(variants.items(), key=lambda kv: kv[1][0]):

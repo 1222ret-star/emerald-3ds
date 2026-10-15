@@ -724,6 +724,12 @@ static VoxelVertex Mix(VoxelVertex a, VoxelVertex b, float t)
 static void RawQuad(VoxelBuilder *builder, const VoxelVertex *a,
                     const VoxelVertex *b, const VoxelVertex *c, const VoxelVertex *d)
 {
+    /* Whole or not at all: half a quad is a sliver along its diagonal. */
+    if (builder->count + 6 > builder->capacity)
+    {
+        builder->dropped += 2;
+        return;
+    }
     VoxelBuilder_Tri(builder, a, b, c);
     VoxelBuilder_Tri(builder, a, c, d);
 }
@@ -758,9 +764,12 @@ static void WorldPoint(const VoxelBuilder *builder, const VoxelVertex *v,
 
 static void EmitPolygon(VoxelBuilder *builder, const VoxelVertex *out, unsigned count)
 {
-    VoxelBuilder_Tri(builder, &out[0], &out[1], &out[2]);
     if (count == 4)
-        VoxelBuilder_Tri(builder, &out[0], &out[2], &out[3]);
+    {
+        RawQuad(builder, &out[0], &out[1], &out[2], &out[3]);
+        return;
+    }
+    VoxelBuilder_Tri(builder, &out[0], &out[1], &out[2]);
 }
 
 /*
@@ -799,11 +808,11 @@ static void LightPolygon(VoxelBuilder *builder, const VoxelVertex *const *v, uns
  * The relief's lattice (builder->vertexFace): each corner brings its own
  * face term in its shade. A corner turned from the sun casts no ray.
  */
-static void LightVertexFaces(VoxelBuilder *builder, const VoxelVertex *const *v)
+static void LightVertexFaces(VoxelBuilder *builder, const VoxelVertex *const *v, unsigned count)
 {
     VoxelVertex out[4];
 
-    for (unsigned i = 0; i < 4; ++i)
+    for (unsigned i = 0; i < count; ++i)
     {
         float face = v[i]->shade, px, py, pz;
 
@@ -820,12 +829,14 @@ static void LightVertexFaces(VoxelBuilder *builder, const VoxelVertex *const *v)
             out[i].shade = (sample->lit ? face : sAmbient) * sample->contact;
         }
     }
-    EmitPolygon(builder, out, 4);
+    EmitPolygon(builder, out, count);
 }
 
-void VoxelLighting_Quad(VoxelBuilder *builder, const VoxelVertex *a,
-                         const VoxelVertex *b, const VoxelVertex *c,
-                         const VoxelVertex *d)
+/* A quad, or with `count` 3 the triangle a b c (d is c): lit alike, the
+ * triangle only spared the quad's empty second half. */
+static void LightFace(VoxelBuilder *builder, const VoxelVertex *a,
+                      const VoxelVertex *b, const VoxelVertex *c,
+                      const VoxelVertex *d, unsigned count)
 {
     VoxelVertex corners[4] = {*a, *b, *c, *d};
     const VoxelVertex *points[4] = {a, b, c, d};
@@ -838,7 +849,7 @@ void VoxelLighting_Quad(VoxelBuilder *builder, const VoxelVertex *a,
 
     if (builder->vertexFace && builder->lightingConstant < 0.0f && !builder->rounded)
     {
-        LightVertexFaces(builder, points);
+        LightVertexFaces(builder, points, count);
         return;
     }
     if (ny < 0.0f)
@@ -872,7 +883,7 @@ void VoxelLighting_Quad(VoxelBuilder *builder, const VoxelVertex *a,
 
         for (unsigned i = 0; i < 4; ++i)
             corners[i].shade *= light;
-        RawQuad(builder, &corners[0], &corners[1], &corners[2], &corners[3]);
+        EmitPolygon(builder, corners, count);
         return;
     }
 
@@ -888,12 +899,13 @@ void VoxelLighting_Quad(VoxelBuilder *builder, const VoxelVertex *a,
             sample = CachedSample(px, py, pz);
             corners[i].shade *= (sample->lit ? face : sAmbient) * sample->contact;
         }
-        RawQuad(builder, &corners[0], &corners[1], &corners[2], &corners[3]);
+        EmitPolygon(builder, corners, count);
         return;
     }
 
     /* Only ground-sized horizontal faces need extra samples. Four sub-quads
-     * resolve diagonal shadow edges without multiplying all wall geometry. */
+     * resolve diagonal shadow edges without multiplying all wall geometry.
+     * A triangle spanning the cell goes this way as the quad it was. */
     if (builder->lightingRefine
      && a->y == b->y && a->y == c->y && a->y == d->y && (a->y <= 0.41f || builder->artShaded)
      && fabsf(a->x - c->x) >= 0.99f && fabsf(a->z - c->z) >= 0.99f
@@ -928,7 +940,20 @@ void VoxelLighting_Quad(VoxelBuilder *builder, const VoxelVertex *a,
             RawQuad(builder, &grid[0], &grid[2], &grid[8], &grid[6]);
         return;
     }
-    LightPolygon(builder, points, 4, nx, ny, nz);
+    LightPolygon(builder, points, count, nx, ny, nz);
+}
+
+void VoxelLighting_Quad(VoxelBuilder *builder, const VoxelVertex *a,
+                         const VoxelVertex *b, const VoxelVertex *c,
+                         const VoxelVertex *d)
+{
+    LightFace(builder, a, b, c, d, 4);
+}
+
+void VoxelLighting_Tri(VoxelBuilder *builder, const VoxelVertex *a,
+                       const VoxelVertex *b, const VoxelVertex *c)
+{
+    LightFace(builder, a, b, c, c, 3);
 }
 
 /*
@@ -987,96 +1012,5 @@ float VoxelLighting_ModelShade(const VoxelVertex *a, const VoxelVertex *b,
      * static model's is worked out once (ctr_voxel.c StaticMesh).
      */
     return VoxelLighting_Face(nx, ny, nz);
-}
-
-/* Contact shadows are clipped to each receiving ground tile: no floating blob
- * across a wall, void, water edge or step. Like the current billboard renderer,
- * this uses visual mesh heights, not the GBA collision-elevation byte. */
-static bool Receiver(int x, int z, float *height)
-{
-    const VoxelMapInstance *inst = VoxelWorld_GetInstanceAt(x, z);
-    int metatile;
-    if (inst == NULL || inst->indoor)
-        return false;
-    metatile = VoxelWorld_GetMetatileId(x, z);
-    if (VoxelWorld_UsesTreeSprites(inst)
-     && (VoxelTree_Part(inst->secondaryTileset, metatile) >= 0
-         || VoxelTree_GroundMetatile(inst->secondaryTileset, metatile) != metatile))
-    {
-        *height = 0.0f;
-        return true;
-    }
-    {
-        float top;
-
-        /* Ground the model leaves uncovered receives like any other. */
-        if (VoxelBuildings_CellAt(inst, x, z, NULL, &top))
-        {
-            *height = 0.0f;
-            return top <= 0.0f;
-        }
-    }
-    /* Nor is there a flat top on a slope for a shadow to lie on. */
-    if (VoxelRelief_IsSlope(VoxelRelief_Cell(inst, x, z)))
-        return false;
-    switch (VoxelWorld_ClassifyTile(x, z))
-    {
-    case VOXEL_SHAPE_FLAT:
-    case VOXEL_SHAPE_WATER: *height = 0.0f; return true;
-    case VOXEL_SHAPE_DECAL: *height = 0.02f; return true;
-    default: return false;
-    }
-}
-
-/* Sutherland-Hodgman, clipping a convex polygon against one tile edge. An
- * octagon clipped by four planes has at most twelve vertices. */
-static unsigned Clip(const VoxelVertex *in, unsigned count, VoxelVertex *out,
-                      bool axisZ, float edge, bool greater)
-{
-    unsigned written = 0;
-    if (count == 0) return 0;
-    VoxelVertex prev = in[count - 1];
-    float pd = (axisZ ? prev.z : prev.x) - edge;
-    if (!greater) pd = -pd;
-    for (unsigned i = 0; i < count; ++i)
-    {
-        VoxelVertex cur = in[i];
-        float cd = (axisZ ? cur.z : cur.x) - edge;
-        if (!greater) cd = -cd;
-        if ((pd < 0 && cd > 0) || (pd > 0 && cd < 0))
-            out[written++] = Mix(prev, cur, pd / (pd - cd));
-        if (cd >= 0) out[written++] = cur;
-        prev = cur;
-        pd = cd;
-    }
-    return written;
-}
-
-void VoxelLighting_Contact(VoxelBuilder *builder, float x, float z)
-{
-    static const float ring[8][2] = {
-        {-1,0}, {-0.707107f,-0.707107f}, {0,-1}, {0.707107f,-0.707107f},
-        {1,0}, {0.707107f,0.707107f}, {0,1}, {-0.707107f,0.707107f}
-    };
-    VoxelVertex polygon[8], a[16], b[16];
-    /* Slight southeast displacement, away from the northwest sun. */
-    float cx = x + 0.10f, cz = z + 0.06f;
-    for (unsigned i = 0; i < 8; ++i)
-        polygon[i] = (VoxelVertex){cx + ring[i][0] * 0.36f, 0,
-                                   cz + ring[i][1] * 0.23f, 0, 0, 0};
-    for (int tz = Tile(cz - 0.23f); tz <= Tile(cz + 0.23f); ++tz)
-        for (int tx = Tile(cx - 0.36f); tx <= Tile(cx + 0.36f); ++tx)
-        {
-            float height;
-            unsigned n;
-            if (!Receiver(tx, tz, &height)) continue;
-            n = Clip(polygon, 8, a, false, (float)tx, true);
-            n = Clip(a, n, b, false, (float)(tx + 1), false);
-            n = Clip(b, n, a, true, (float)tz, true);
-            n = Clip(a, n, b, true, (float)(tz + 1), false);
-            for (unsigned i = 0; i < n; ++i) b[i].y = height + 0.012f;
-            for (unsigned i = 1; i + 1 < n; ++i)
-                VoxelBuilder_Tri(builder, &b[0], &b[i], &b[i + 1]);
-        }
 }
 #endif

@@ -92,7 +92,8 @@ def build_dump():
     cmd = compiler + ["-std=c99", "-O2", "-I" + hostinc, "-Iinclude", "-Isrc/voxel",
            "-DPORT_LOG(...)=((void)0)", "-DCTR_VOXEL_LIGHTING=1", "-DVOXEL_HOST_FILES",
            '-DVOXEL_BUILDINGS_PATH="romfs/voxel/buildings.bin"',
-           '-DVOXEL_RELIEF_PATH="romfs/voxel/relief.bin"',
+           # a trial relief (VOXEL_RELIEF, as voxel_relief_lines.use_relief)
+           '-DVOXEL_RELIEF_PATH=(getenv("VOXEL_RELIEF") ? getenv("VOXEL_RELIEF") : "romfs/voxel/relief.bin")',
            '-DVOXEL_REGIONS_PATH="romfs/voxel/regions.bin"',
            '-DSIGN_MASK_PATH="romfs/voxel/signposts.bin"'] + SOURCES + ["-lm", "-o", DUMP]
     if os.name != "nt":

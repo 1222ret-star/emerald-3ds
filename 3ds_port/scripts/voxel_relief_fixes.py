@@ -81,6 +81,8 @@ NO_FACE = 0xFFFE
 
 
 # --- relief.bin, read and written without loss ---------------------------------
+# (a height pack() cannot store as it is - an odd one in a map it has to move
+# to 2-pixel units, or one past them - is rounded or clamped, with a warning)
 
 def parse(blob):
     """{"layouts": {index: {w, h, flags, base, belt, level, cells{(x, y): [25 px]}}},
@@ -188,9 +190,17 @@ def pack(relief):
         idx += struct.pack("<HHHHIh", lid, len(cells), t["w"] | (LEVEL if t.get("level") else 0),
                            t["h"] | flags | (t.get("belt", 0) << BELT_SHIFT),
                            offset + len(body), int(t["base"]))
+        lossy = 0
         for (x, y), g in cells:
             body += struct.pack("<BB", x, y)
-            body += struct.pack("<25b", *(max(-128, min(127, int(round(v / unit)))) for v in g))
+            stored = [max(-128, min(127, int(round(v / unit)))) for v in g]
+            lossy += sum(1 for s, v in zip(stored, g) if s * unit != v)
+            body += struct.pack("<25b", *stored)
+        if lossy:
+            # what the console reads differs from what was asked for: halved
+            # to 2-pixel units (a height past 127 px) and rounded, or clamped
+            print("relief: WARNING layout %d: %d lattice height(s) not stored as given "
+                  "(%d-pixel units, -128..127 of them)" % (lid, lossy, unit), file=sys.stderr)
     blob = bytes(head + idx + body)
     table = struct.pack("<HH", len(relief["variants"]), len(relief["cuts"]))
     for lay, m, rows in relief["variants"]:

@@ -361,6 +361,15 @@ static void HandleFrame(uint16_t from, const uint8_t *frame, size_t size)
         if (!n->ackDue)
             n->ackDueMs = LocalLink_Milliseconds();
         n->ackDue = true;
+        /* No room for it in the game's events: not acknowledged, so it comes
+         * again (dropped and acknowledged, it was lost for good). */
+        if (seq == n->expect && type == MSG_DATA && sL.eventCount == EVENT_QUEUE)
+        {
+            static unsigned told;
+            if (told++ < 8)
+                CtrLog_Write(CTR_LOG_ERROR, "local: event queue full, message from %u waits", from);
+            break;
+        }
         if (seq == n->expect)
         {
             n->expect++;
@@ -386,7 +395,12 @@ static void SendFrame(uint16_t to, uint32_t bodyLen)
     h->bodyLen = (uint16_t)bodyLen;
     h->reserved = 0;
     memset(sFrame + sizeof(*h) + bodyLen, 0, size - sizeof(*h) - bodyLen);
+    /* The lock is not held over the call to the service: the game takes it
+     * several times a frame. The frame is ours (only this thread uses sFrame),
+     * and meanwhile the game can only add messages behind the ones in it. */
+    LightLock_Unlock(&sL.lock);
     ret = udsSendTo(to, DATA_CHANNEL, UDS_SENDFLAG_Default, sFrame, size);
+    LightLock_Lock(&sL.lock);
     sL.stats.framesOut++;
     /* UDS_CHECK_SENDTO_FATALERROR, which -Wsign-compare rejects: that one
      * error only means the frame wasn't sent. */
@@ -684,6 +698,19 @@ static bool Connect(const udsNetworkScanInfo *net)
     return true;
 }
 
+/* The search is no longer wanted: the game asked to leave or to start again,
+ * the system slept, or the program is closing. Left to run, it went on to
+ * host a session nobody asked for. */
+static bool SearchCancelled(void)
+{
+    bool cancelled;
+
+    LightLock_Lock(&sL.lock);
+    cancelled = sL.quit || sL.woke || sL.leaveAsked || sL.startAsked;
+    LightLock_Unlock(&sL.lock);
+    return cancelled;
+}
+
 /* otherBuild: a session of this counter of another build was seen. */
 static bool JoinNearby(uint8_t kind, uint32_t lookMs, bool *otherBuild)
 {
@@ -720,7 +747,7 @@ static bool JoinNearby(uint8_t kind, uint32_t lookMs, bool *otherBuild)
             }
         }
         free(nets);
-    } while (!sL.quit && LocalLink_Milliseconds() < until);
+    } while (!SearchCancelled() && LocalLink_Milliseconds() < until);
     return false;
 }
 
@@ -772,6 +799,9 @@ static void TakeNetwork(bool quiet)
     udsConnectionStatus st = {0};
 
     sL.inNetwork = true;
+    /* The status event spent before the status is read: a player joining or
+     * leaving after the read signals it again, and UpdateNodes sees it. */
+    udsWaitConnectionStatusEvent(false, false);
     if (R_FAILED(udsGetConnectionStatus(&st)) || st.cur_NetworkNodeID == 0)
     {
         /* No id and no node mask to trust: garbage would join random nodes. */
@@ -780,7 +810,6 @@ static void TakeNetwork(bool quiet)
         EndSession(LOCAL_SESSION_FAILED);
         return;
     }
-    udsWaitConnectionStatusEvent(false, false);
     LightLock_Lock(&sL.lock);
     for (uint16_t id = 1; id < NODE_SLOTS; id++)
         memset(&sL.nodes[id], 0, sizeof(sL.nodes[id]));
@@ -889,6 +918,9 @@ static void StartSession(uint8_t kind)
     }
     CtrLog_Write(CTR_LOG_GAME, "local: looking for a session of kind %u", kind);
     in = JoinNearby(kind, SEARCH_MS + (uint32_t)(rand() % SEARCH_JITTER_MS), &otherBuild);
+    /* Still searching: the thread's next pass deals with what came. */
+    if (!in && SearchCancelled())
+        return;
     if (!in && otherBuild)
     {
         /* Hosting, we would wait for players who can't come: the ones nearby
@@ -966,6 +998,10 @@ static void LocalThread(void *unused)
     uint32_t lastRead = 0;
 
     (void)unused;
+    /* rand() is per thread (newlib's reent): unseeded here it started from 1
+     * on every system, the same search and merge waits on all of them, and
+     * two players who talked to their attendants together both hosted. */
+    srand((unsigned)svcGetSystemTick() ^ sL.token);
     while (!sL.quit)
     {
         bool start, leave;
@@ -981,6 +1017,10 @@ static void LocalThread(void *unused)
         leave = sL.leaveAsked;
         kind = sL.askedKind;
         sL.startAsked = sL.leaveAsked = false;
+        /* Searching from now: a session that just ended (EndSession(NONE))
+         * left NONE here, which the game read as a failed search. */
+        if (start)
+            sL.state = LOCAL_SESSION_SEARCHING;
         LightLock_Unlock(&sL.lock);
 
         if (start)

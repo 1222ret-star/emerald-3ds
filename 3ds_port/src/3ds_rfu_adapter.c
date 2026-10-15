@@ -430,6 +430,20 @@ static void HandlePeerMessage(u16 from, const u8 *msg, u32 len)
         break;
     case PEER_BATTLE:
     case PEER_BLOCK:
+        // Only from the link: a late one from a player no longer on it was
+        // filed as the host's own block (player 0).
+        if (sA.state == AD_HOST)
+        {
+            for (i = 0; i < RFU_CHILD_MAX; i++)
+                if (sA.children[i].active && sA.children[i].id == from)
+                    break;
+            if (i == RFU_CHILD_MAX)
+                break;
+        }
+        else if (!(sA.state == AD_CHILD && sA.hostId == from))
+        {
+            break;
+        }
         ChannelReceive(msg[0], from, msg + 1, len - 1);
         break;
     }
@@ -992,9 +1006,17 @@ static void CheckGeneration(void)
         else
             LeaveHost(FALSE);
         {
+            // Lost, not dropped quietly: the session's "left" events find
+            // no child any more, and without 0x29 the game only noticed when
+            // librfu's link watch ran out.
             u8 i;
             for (i = 0; i < RFU_CHILD_MAX; i++)
-                DropChild(i, FALSE);
+            {
+                if (sA.state == AD_HOST && sA.children[i].active)
+                    ChildLost(i, REASON_LINK_LOSS);
+                else
+                    DropChild(i, FALSE);
+            }
         }
         sA.numPending = 0;
         UpdateAdvert();

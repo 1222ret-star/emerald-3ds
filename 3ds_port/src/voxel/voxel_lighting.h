@@ -24,8 +24,6 @@ extern VoxelSun gVoxelSun;
  * away from the sun. The same number, so a wall and the shadow it casts on
  * the grass read as the same shade. */
 #define VOXEL_AMBIENT 0.70f
-/* Four clipped octagons, at most twelve vertices / ten triangles each. */
-#define VOXEL_CONTACT_VERTICES 120u
 
 /* Forgets every cached caster and sample. Required whenever the world they
  * were read from changes - a live tile, the set of maps or their origins -
@@ -46,6 +44,9 @@ float VoxelLighting_Face(float nx, float ny, float nz);
 void VoxelLighting_Quad(VoxelBuilder *builder, const VoxelVertex *a,
                          const VoxelVertex *b, const VoxelVertex *c,
                          const VoxelVertex *d);
+/* The triangle a b c, lit as VoxelLighting_Quad(a, b, c, c) lights it. */
+void VoxelLighting_Tri(VoxelBuilder *builder, const VoxelVertex *a,
+                       const VoxelVertex *b, const VoxelVertex *c);
 /*
  * A modelled building's triangle. `drawnShade` is the face shade the model
  * was written with (voxel_building.py's SHADE_*): the side the face was drawn
@@ -57,7 +58,6 @@ float VoxelLighting_ModelShade(const VoxelVertex *a, const VoxelVertex *b,
                                const VoxelVertex *c, float drawnShade);
 void VoxelLighting_ModelTri(VoxelBuilder *builder, const VoxelVertex *a,
                             const VoxelVertex *b, const VoxelVertex *c, float drawnShade);
-void VoxelLighting_Contact(VoxelBuilder *builder, float x, float z);
 #endif
 
 #endif

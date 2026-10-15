@@ -33,7 +33,7 @@ def build(cc, tmp, path):
     exe = tmp / "anim_test.exe"
     subprocess.run([cc, "-std=c99", "-O2", "-Wall", "-Wextra", "-Werror", "-Iinclude", "-Isrc/voxel",
                     "-iquote", "../include", "-D_GNU_SOURCE", "-DPORT_LOG(...)=((void)0)",
-                    "-DVOXEL_HOST_FILES", '-DVOXEL_BUILDINGS_PATH="%s"' % path,
+                    "-DVOXEL_HOST_FILES", '-DVOXEL_BUILDINGS_PATH="%s"' % path.as_posix(),
                     "tests/voxel_building_anim_test.c"] + SOURCES + ["-lm", "-o", str(exe)],
                    cwd=ROOT, check=True)
     return exe

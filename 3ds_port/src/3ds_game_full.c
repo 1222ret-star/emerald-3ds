@@ -158,6 +158,12 @@ static void WaitForResetKeysUp(void)
     }
 }
 
+/* follower_mon.c, from the optional follower feature (patch 0056); without
+ * it there is nothing to free. */
+void __attribute__((weak)) FollowerMon_ReleaseAll(void)
+{
+}
+
 void CtrGame_SoftReset(void)
 {
     if (sGameAtStart == NULL)
@@ -165,6 +171,12 @@ void CtrGame_SoftReset(void)
         CTR_STUB("RESET", "soft reset unavailable");
         return;
     }
+    /* Port state that belongs to the running game lives outside the restored
+     * sections: the bottom screen's would keep acting as if in the field. */
+    CtrBottom_SoftReset();
+    /* The follower's buffers are malloc'd and only pointed to from the game's
+     * data, which the copy below puts back to NULL: freed first, or leaked. */
+    FollowerMon_ReleaseAll();
     /* The sound worker mixes from the game's variables: not while they change. */
     CtrAudio_LockSound();
     memcpy(__ctr_game_data, sGameAtStart, GameDataBytes());
@@ -173,6 +185,7 @@ void CtrGame_SoftReset(void)
     StartCgbChannels();
     CtrAudio_UnlockSound();
     ++sResets;
+    CtrPlatform_ReportMemory("at soft reset");
     WaitForResetKeysUp();
     longjmp(sAgbMainEntry, 1);
 }
@@ -641,7 +654,9 @@ bool CtrGame_IsOutdoor(void)
 
 bool CtrGame_LocalTimeSeconds(unsigned *seconds)
 {
-    struct SiiRtcInfo rtc;
+    /* RtcGetInfo leaves rtc unwritten when the RTC call fails (locked):
+       start from rtc.c's 2000-01-01 fallback, never stack garbage. */
+    struct SiiRtcInfo rtc = { .month = MONTH_JAN, .day = 1 };
     struct Time local;
 
     if (gSaveBlock2Ptr == NULL || gMapHeader.mapLayout == NULL)

@@ -120,6 +120,9 @@ LOCKED_VOID(SetPokemonCryProgress, (u32 value), (value))
 LOCKED_VOID(SetPokemonCryChorus, (s8 value), (value))
 LOCKED_VOID(SetPokemonCryStereo, (u32 value), (value))
 LOCKED_VOID(SetPokemonCryPriority, (u8 value), (value))
+/* main.c's, called from sound.c: it zeroes the cry songs a playing cry's
+ * sequencer reads on the worker. */
+LOCKED_VOID(ClearPokemonCrySongs, (void), ())
 /*
  * A cry is playing once the sequencer has run its note and given it a
  * channel. On the GBA the VBlank after PlayCry has done that before the game

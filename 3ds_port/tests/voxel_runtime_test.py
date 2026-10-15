@@ -55,10 +55,13 @@ static bool C3D_TexInitVRAM(C3D_Tex *tex, unsigned w, unsigned h, int fmt) {
 static void C3D_TexDelete(C3D_Tex *tex) { assert(tex->data && allocated); --allocated; tex->data = NULL; }
 static void C3D_TexSetFilter(C3D_Tex *t, int a, int b) { (void)t; (void)a; (void)b; }
 static void C3D_TexSetWrap(C3D_Tex *t, int a, int b) { (void)t; (void)a; (void)b; }
+/* No building pages' arena here: nothing is borrowed, every page is VRAM. */
+static void AtlasPageRelease(C3D_Tex *tex) { if (tex->data) C3D_TexDelete(tex); }
+static bool AtlasPageBorrow(C3D_Tex *tex) { (void)tex; return false; }
 typedef struct { bool draft; } VoxelChunk;
 typedef struct { ChunkSite site; VoxelAtlasSlot *atlas; VoxelChunk *chunk; uint32_t hash;
     bool hashKnown, done; unsigned key, need, waitIndex; } BuildRequest;
-static struct { int group, map, cx, cy; bool border, used; uint32_t seen, progress; } sRequestWait[VOXEL_REQUESTS_MAX];
+static struct { int group, map, cx, cy; bool border, used; uint32_t seen, progress, noRoomUntil; } sRequestWait[VOXEL_REQUESTS_MAX];
 static BuildRequest sRequests[VOXEL_REQUESTS_MAX];
 static uint8_t sWaitHead[128], sWaitNext[VOXEL_REQUESTS_MAX];
 #define VOXEL_DRAFT_STARVE_FRAMES 90u
@@ -199,9 +202,13 @@ int main(void) {
     VoxelMapInstance inst = {0}; VoxelAtlasSlot atlas = {.valid = true};
     sRequestCount = 1;
     sRequests[0] = (BuildRequest){.site = {.inst = &inst}, .atlas = &atlas, .need = NEED_STALE, .key = 100000};
-    sRequests[0].waitIndex = RequestWait(&sRequests[0].site);
-    for (sFrame = 0; sFrame < 4; ++sFrame) { RequestWait(&sRequests[0].site); assert(!StartNextJob(0, 2, 0)); }
-    RequestWait(&sRequests[0].site);
+    sRequests[0].waitIndex = RequestWait(&sRequests[0].site, -1);
+    for (sFrame = 0; sFrame < 4; ++sFrame) { RequestWait(&sRequests[0].site, -1); assert(!StartNextJob(0, 2, 0)); }
+    RequestWait(&sRequests[0].site, -1);
+    /* Waiting for room (NoRoomForView): neither overdue nor started. */
+    sRequestWait[sRequests[0].waitIndex].noRoomUntil = sFrame + 1;
+    assert(!RequestOverdue(&sRequests[0]) && !StartNextJob(0, 2, 0) && starts == 0);
+    sRequestWait[sRequests[0].waitIndex].noRoomUntil = sFrame;
     assert(StartNextJob(0, 2, 0) && starts == 1 && sJob.overdue && !sJob.hole);
     /* A square back in view after a gap waits from then, not from its old
      * record: it was overdue at once and forced a slice into the frame. */
@@ -209,9 +216,9 @@ int main(void) {
         uint32_t frame = sFrame;
         unsigned w;
 
-        sFrame += 50; w = RequestWait(&sRequests[0].site);
+        sFrame += 50; w = RequestWait(&sRequests[0].site, -1);
         assert(sRequestWait[w].progress == sFrame && !RequestOverdue(&sRequests[0]));
-        ++sFrame; RequestWait(&sRequests[0].site);
+        ++sFrame; RequestWait(&sRequests[0].site, -1);
         assert(sRequestWait[w].progress == sFrame - 1);
         sFrame = frame; sRequestWait[w].progress = 0; sRequestWait[w].seen = sFrame;
     }
@@ -268,7 +275,7 @@ int main(void) {
     sRequestCount = 3;
     for (unsigned i = 0; i < 3; ++i) {
         sRequests[i] = sRequests[0]; sRequests[i].site.cx = (int)i;
-        sRequests[i].waitIndex = RequestWait(&sRequests[i].site);
+        sRequests[i].waitIndex = RequestWait(&sRequests[i].site, -1);
         sRequests[i].need = i == 0 ? NEED_STALE : i == 1 ? NEED_HOLE : NEED_AHEAD;
         sRequests[i].key = sRequests[i].need * 100000u;
         sRequestWait[sRequests[i].waitIndex].progress = i == 0 ? 0 : sFrame;

@@ -37,9 +37,11 @@ bool CtrClockStore_Load(const void *save, size_t size)
     CtrDayNight_Reset();
     if (save == NULL || size == 0)
         return false;
-    const char *const names[] = {CLOCK_FILE, CLOCK_BACKUP};
+    /* The temp file too: a power cut between Save's FILE->BAK and TMP->FILE
+     * leaves the new state only there. Each must match this save's CRC. */
+    const char *const names[] = {CLOCK_FILE, CLOCK_TEMP, CLOCK_BACKUP};
 
-    for (unsigned index = 0; index < 2; ++index)
+    for (unsigned index = 0; index < sizeof(names) / sizeof(names[0]); ++index)
     {
         file = CtrFs_OpenData(names[index], "rb");
         if (file == NULL)
@@ -72,6 +74,10 @@ bool CtrClockStore_Save(const void *save, size_t size)
     FILE *file;
     bool valid;
 
+    /* A scenario being played saves into memory only (Port_WriteFlash): the
+     * player's own clock file stays the one that matches the player's save. */
+    if (!CtrScenario_SaveWrites())
+        return true;
     if (save == NULL || size == 0 || !CtrDayNight_Snapshot(&snapshot))
         return false;
     memcpy(bytes, "EM3DCLK1", 8);

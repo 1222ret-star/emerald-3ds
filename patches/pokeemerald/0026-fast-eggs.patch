@@ -4,7 +4,7 @@ Applies after 0009-optional-settings.patch; apply with tools/bootstrap.py.
 diff --git a/src/daycare.c b/src/daycare.c
 --- a/src/daycare.c
 +++ b/src/daycare.c
-@@ -897,6 +897,35 @@
+@@ -897,6 +897,37 @@
              TriggerPendingDaycareEgg();
      }
  
@@ -13,15 +13,17 @@ diff --git a/src/daycare.c b/src/daycare.c
 +    // hatches every 5 steps.
 +    {
 +        static u8 sFastEggSteps;
++        bool8 fast = CtrExtras_Get("fast_eggs") != 0;
 +        s32 egg = -1;
 +
-+        for (i = 0; i < gPlayerPartyCount && egg < 0; i++)
++        // the party is read (decrypted) each step only with the option on
++        for (i = 0; fast && i < gPlayerPartyCount && egg < 0; i++)
 +        {
 +            if (GetMonData(&gPlayerParty[i], MON_DATA_IS_EGG)
 +             && !GetMonData(&gPlayerParty[i], MON_DATA_SANITY_IS_BAD_EGG))
 +                egg = i;
 +        }
-+        if (!CtrExtras_Get("fast_eggs") || egg < 0)
++        if (!fast || egg < 0)
 +        {
 +            sFastEggSteps = 0;
 +        }

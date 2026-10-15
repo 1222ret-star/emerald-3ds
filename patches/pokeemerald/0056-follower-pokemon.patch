@@ -11,7 +11,7 @@ diff --git a/include/follower_mon.h b/include/follower_mon.h
 new file mode 100644
 --- /dev/null
 +++ b/include/follower_mon.h
-@@ -0,0 +1,38 @@
+@@ -0,0 +1,41 @@
 +#ifndef GUARD_FOLLOWER_MON_H
 +#define GUARD_FOLLOWER_MON_H
 +
@@ -47,19 +47,26 @@ new file mode 100644
 +void FollowerMon_WildFree(u32 slot, struct Sprite *sprite);
 +/* No palette fade running: an ext palette loaded now keeps its colours. */
 +bool8 FollowerMon_PalettesSettled(void);
++/* The soft reset (3ds_game_full.c): every file it holds freed, before the
++ * game's variables go back to their boot values. */
++void FollowerMon_ReleaseAll(void);
 +#endif
 +
 +#endif // GUARD_FOLLOWER_MON_H
 diff --git a/include/wild_encounter.h b/include/wild_encounter.h
 --- a/include/wild_encounter.h
 +++ b/include/wild_encounter.h
-@@ -36,5 +36,9 @@ void FishingWildEncounter(u8 rod);
+@@ -36,5 +36,13 @@ void FishingWildEncounter(u8 rod);
  u16 GetLocalWildMon(bool8 *isWaterMon);
  u16 GetLocalWaterMon(void);
  bool8 UpdateRepelCounter(void);
 +#ifdef PLATFORM_3DS
 +/* The visible wild Pokemon's tiles, shifted as the camera crosses into the next map. */
 +void VisibleWild_CameraShift(s16 dx, s16 dy);
++/* A step of the player's ended on a visible wild Pokemon: its battle, TRUE. */
++bool8 VisibleWild_StepOnto(void);
++/* The sprite is a visible wild Pokemon's. */
++bool8 VisibleWild_IsSprite(u8 spriteId);
 +#endif
  
  #endif // GUARD_WILD_ENCOUNTER_H
@@ -174,6 +181,22 @@ diff --git a/src/field_control_avatar.c b/src/field_control_avatar.c
      if (InTrainerHill() == TRUE)
          script = GetTrainerHillTrainerScript();
      else
+@@ -671,6 +678,15 @@ void RestartWildEncounterImmunitySteps(void)
+ 
+ static bool8 CheckStandardWildEncounter(u16 metatileBehavior)
+ {
++#ifdef PLATFORM_3DS
++    // Onto a visible wild Pokemon: met at once, whatever the steps since the last battle.
++    if (VisibleWild_StepOnto())
++    {
++        sWildEncounterImmunitySteps = 0;
++        sPrevMetatileBehavior = metatileBehavior;
++        return TRUE;
++    }
++#endif
+     if (sWildEncounterImmunitySteps < 4)
+     {
+         sWildEncounterImmunitySteps++;
 diff --git a/src/field_effect_helpers.c b/src/field_effect_helpers.c
 --- a/src/field_effect_helpers.c
 +++ b/src/field_effect_helpers.c
@@ -240,7 +263,7 @@ diff --git a/src/follower_mon.c b/src/follower_mon.c
 new file mode 100644
 --- /dev/null
 +++ b/src/follower_mon.c
-@@ -0,0 +1,1543 @@
+@@ -0,0 +1,1572 @@
 +#include <stdio.h>
 +#include <stdlib.h>
 +#include <string.h>
@@ -1300,6 +1323,7 @@ new file mode 100644
 +#define POOL(list) ((struct MsgPool){list, ARRAY_COUNT(list)})
 +
 +static u8 *sTexts;
++static u32 sTextsSize;
 +static bool8 sTextsTried;
 +static u8 sText[TEXT_MAX], sTextNo[TEXT_MAX], sTextYes[TEXT_MAX];
 +static u8 sScript[96];
@@ -1328,12 +1352,14 @@ new file mode 100644
 +    sTextsTried = TRUE;
 +    snprintf(path, sizeof(path), "followers/text/%s.bin", LanguageCode());
 +    sTexts = CtrData_Load(path, &size);
++    /* the last string ends the file: any offset inside it reads to an EOS */
 +    if (sTexts != NULL && (size < 8 + 4 * TEXT_COUNT || memcmp(sTexts, "FMT1", 4) != 0
-+                           || (sTexts[4] | (sTexts[5] << 8)) != TEXT_COUNT))
++                           || (sTexts[4] | (sTexts[5] << 8)) != TEXT_COUNT || sTexts[size - 1] != EOS))
 +    {
 +        free(sTexts);
 +        sTexts = NULL;
 +    }
++    sTextsSize = sTexts != NULL ? size : 0;
 +    return sTexts != NULL;
 +}
 +
@@ -1344,7 +1370,33 @@ new file mode 100644
 +    if (sTexts == NULL || id >= TEXT_COUNT)
 +        return NULL;
 +    offset = sTexts[8 + 4 * id] | (sTexts[9 + 4 * id] << 8) | (sTexts[10 + 4 * id] << 16) | (sTexts[11 + 4 * id] << 24);
++    if (offset < 8 + 4 * TEXT_COUNT || offset >= sTextsSize)
++        return NULL;    /* a damaged file: no message rather than a read past it */
 +    return sTexts + offset;
++}
++
++/* A soft reset puts this file's variables back as they were at boot, these
++ * pointers with them: what they hold is freed first, or each reset leaks the
++ * follower's and the wild sprites' files and the texts. No sprite may still
++ * use the frames (none does then: the game's sprites go back with the rest). */
++void FollowerMon_ReleaseAll(void)
++{
++    u32 i;
++
++    free(sFollower.file);
++    free(sFollower.previous);
++    sFollower.file = sFollower.previous = NULL;
++    sFollower.key[0] = '\0';
++    for (i = 0; i < WILD_SLOTS; i++)
++    {
++        free(sWild[i].file);
++        free(sWild[i].stale);
++        sWild[i].file = sWild[i].stale = NULL;
++    }
++    free(sTexts);
++    sTexts = NULL;
++    sTextsSize = 0;
++    sTextsTried = FALSE;
 +}
 +
 +/*
@@ -2297,7 +2349,7 @@ diff --git a/src/wild_encounter.c b/src/wild_encounter.c
      VisibleRemove(v);
      BattleSetup_StartWildBattle();
  }
-@@ -891,41 +1141,151 @@ static void VisibleMove(struct VisibleWild *v, s16 px, s16 py, bool8 surfing)
+@@ -891,41 +1141,198 @@ static void VisibleMove(struct VisibleWild *v, s16 px, s16 py, bool8 surfing)
          v->idle = 30;
          return;
      }
@@ -2323,6 +2375,53 @@ diff --git a/src/wild_encounter.c b/src/wild_encounter.c
 +        sVisible[i].y -= dy;
 +    }
 +    sVisibleShifted = TRUE;
++}
++
++/*
++ * The player's step ended on one (field_control_avatar.c, every step, before
++ * the steps a random encounter waits after the last battle): its battle.
++ * VisibleWild_Update only meets one while the player stands still, so
++ * walking or running over it started nothing. On the tile it is on or, half
++ * way through a step, the one it is walking onto; never one not on show.
++ */
++bool8 VisibleWild_StepOnto(void)
++{
++    struct ObjectEvent *player = &gObjectEvents[gPlayerAvatar.objectEventId];
++    bool8 surfing = TestPlayerAvatarFlags(PLAYER_AVATAR_FLAG_SURFING) != 0;
++    s16 px = player->currentCoords.x, py = player->currentCoords.y;
++    u32 i;
++
++    if (sWildEncountersDisabled == TRUE)
++        return FALSE;
++    for (i = 0; i < VW_MAX; i++)
++    {
++        struct VisibleWild *v = &sVisible[i];
++
++        if (!v->active || v->vanishing || v->spriteId == VW_NONE || v->water != surfing)
++            continue;
++        if ((v->x == px && v->y == py) || (v->progress && v->x + v->dx == px && v->y + v->dy == py))
++        {
++            VisibleStartBattle(v);
++            return TRUE;
++        }
++    }
++    return FALSE;
++}
++
++/*
++ * The sprite is one of these (the voxel world, 3ds_port/src/voxel/
++ * voxel_entities.c): one a tile south of the player has its middle inside the
++ * player's picture, and taken for an effect drawn over the player it was put
++ * at the player's feet, a tile underground, and vanished.
++ */
++bool8 VisibleWild_IsSprite(u8 spriteId)
++{
++    u32 i;
++
++    for (i = 0; i < VW_MAX; i++)
++        if (sVisible[i].active && sVisible[i].spriteId == spriteId && VisibleSpriteValid(&sVisible[i]))
++            return TRUE;
++    return FALSE;
 +}
 +
 +/*
@@ -2462,7 +2561,7 @@ diff --git a/src/wild_encounter.c b/src/wild_encounter.c
      for (i = 0; i < VW_MAX; i++)
      {
          struct VisibleWild *v = &sVisible[i];
-@@ -937,7 +1297,31 @@ void VisibleWild_Update(void)
+@@ -937,7 +1344,31 @@ void VisibleWild_Update(void)
              VisibleRemove(v);
              continue;
          }
@@ -2495,7 +2594,7 @@ diff --git a/src/wild_encounter.c b/src/wild_encounter.c
          {
              bool8 touched = v->idle == 0xFFFF
                  || (v->x == player->currentCoords.x && v->y == player->currentCoords.y && !v->progress);
-@@ -962,7 +1346,23 @@ void VisibleWild_Update(void)
+@@ -962,7 +1393,23 @@ void VisibleWild_Update(void)
      }
  
      percent = EncounterRatePercent();
@@ -2520,7 +2619,7 @@ diff --git a/src/wild_encounter.c b/src/wild_encounter.c
          return;
      if (sVisibleSpawnTimer)
      {
-@@ -972,14 +1372,8 @@ void VisibleWild_Update(void)
+@@ -972,14 +1419,8 @@ void VisibleWild_Update(void)
      /* One more every two seconds at the NORMAL encounter rate (1/2: every
       * four, 2X: every second), up to the setting's number. */
      sVisibleSpawnTimer = 120 * 100 / percent;
@@ -2537,7 +2636,7 @@ diff --git a/src/wild_encounter.c b/src/wild_encounter.c
  }
  #endif
  
-@@ -1048,7 +1442,7 @@ bool8 StandardWildEncounter(u16 curMetatileBehavior, u16 prevMetatileBehavior)
+@@ -1048,7 +1489,7 @@ bool8 StandardWildEncounter(u16 curMetatileBehavior, u16 prevMetatileBehavior)
              else
              {
  #ifdef PLATFORM_3DS
@@ -2546,7 +2645,7 @@ diff --git a/src/wild_encounter.c b/src/wild_encounter.c
                      return FALSE;
  #endif
                  if (DoMassOutbreakEncounterTest() == TRUE && SetUpMassOutbreakEncounter(WILD_CHECK_REPEL | WILD_CHECK_KEEN_EYE) == TRUE)
-@@ -1091,7 +1485,7 @@ bool8 StandardWildEncounter(u16 curMetatileBehavior, u16 prevMetatileBehavior)
+@@ -1091,7 +1532,7 @@ bool8 StandardWildEncounter(u16 curMetatileBehavior, u16 prevMetatileBehavior)
              else // try a regular surfing encounter
              {
  #ifdef PLATFORM_3DS

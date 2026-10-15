@@ -101,6 +101,13 @@ const uint16_t *VoxelBuildings_Footprint(const VoxelMapInstance *inst, int x, in
  * out. False past the last.
  */
 bool VoxelBuildings_Variant(unsigned i, unsigned *layout, unsigned *metatile, unsigned *quarters);
+/*
+ * How VoxelBuildings_CellAt tells whether ground variant (layout, metatile)
+ * is drawn from `inst`'s own tilesets, as the atlas composes it
+ * (voxel_world.c sets it; NULL matches a variant by metatile alone).
+ */
+void VoxelBuildings_SetVariantFits(bool (*fits)(const VoxelMapInstance *inst, unsigned layout,
+                                                unsigned metatile));
 
 /*
  * The face of a model a walker in world cell (x, y) of `inst` stands before:

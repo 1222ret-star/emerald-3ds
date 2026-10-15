@@ -52,6 +52,14 @@ FOLIAGE = 0.5
 NOT_POSTS = {
     "gTileset_Slateport": {0x2b9, 0x2c7, 0x32d, 0x20c, 0x26b, 0x26c, 0x338},
 }
+# The General tileset's mountain rock (voxel_terraces.MOUNTAIN's own range):
+# a cliff's corner standing free, or a rock in the sea, is blocked and open
+# on three sides like a post, but it is the mountain - never a post. As one
+# it stood up as a board drawn with the rock and the sand round it (Route
+# 115's beach: the head of the hill's flank at (14, 61)), and Mossdeep's,
+# Route 124's and Route 127's rocks, Lilycove's and the Safari Zone's
+# corners, with it.
+MOUNTAIN_ROCK = range(0x064, 0x0c0)
 # Steps: mean luminance change between neighbouring pixels along a row (at
 # most) and down a column (at least). The General tileset's flight measures
 # 2 and 28; ground, planks and roofs change along their rows too.
@@ -343,6 +351,8 @@ class Layout:
             return True
         m = self.metatile(x, y)
         if m >= NUM_PRIMARY and m in NOT_POSTS.get(self.secondary, ()):
+            return False
+        if m < NUM_PRIMARY and self.primary == "gTileset_General" and m in MOUNTAIN_ROCK:
             return False
         if self.covers(m):
             return False

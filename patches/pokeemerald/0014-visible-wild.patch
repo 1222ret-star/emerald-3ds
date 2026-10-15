@@ -25,7 +25,7 @@ diff --git a/src/overworld.c b/src/overworld.c
 diff --git a/src/wild_encounter.c b/src/wild_encounter.c
 --- a/src/wild_encounter.c
 +++ b/src/wild_encounter.c
-@@ -552,6 +552,402 @@
+@@ -552,6 +552,403 @@
      return FlagGet(FLAG_LEGENDARIES_IN_SOOTOPOLIS);
  }
  
@@ -387,7 +387,8 @@ diff --git a/src/wild_encounter.c b/src/wild_encounter.c
 +            bool8 touched = v->idle == 0xFFFF
 +                || (v->x == player->currentCoords.x && v->y == player->currentCoords.y && !v->progress);
 +
-+            if (touched && v->water == surfing)
++            // It walked into the player: a repel keeps it off, as it keeps random ones.
++            if (touched && v->water == surfing && (v->idle != 0xFFFF || IsWildLevelAllowedByRepel(v->level)))
 +            {
 +                VisibleStartBattle(v);
 +                return;
@@ -428,7 +429,7 @@ diff --git a/src/wild_encounter.c b/src/wild_encounter.c
  bool8 StandardWildEncounter(u16 curMetatileBehavior, u16 prevMetatileBehavior)
  {
      u16 headerId;
-@@ -615,6 +1011,10 @@
+@@ -615,6 +1012,10 @@
              }
              else
              {
@@ -439,7 +440,7 @@ diff --git a/src/wild_encounter.c b/src/wild_encounter.c
                  if (DoMassOutbreakEncounterTest() == TRUE && SetUpMassOutbreakEncounter(WILD_CHECK_REPEL | WILD_CHECK_KEEN_EYE) == TRUE)
                  {
                      BattleSetup_StartWildBattle();
-@@ -654,6 +1054,10 @@
+@@ -654,6 +1055,10 @@
              }
              else // try a regular surfing encounter
              {

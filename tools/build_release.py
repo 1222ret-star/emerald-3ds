@@ -153,7 +153,16 @@ def main() -> None:
     ap.add_argument("--skip-recipe", action="store_true")
     ap.add_argument("--skip-exe", action="store_true")
     ap.add_argument("--skip-cia", action="store_true", help="no HOME Menu forwarder (needs makerom, bannertool)")
+    ap.add_argument("--allow-local-mk", action="store_true",
+                    help="build even though 3ds_port/local.mk adds this machine's settings")
     args = ap.parse_args()
+
+    # The English variant is built in this tree, so 3ds_port/local.mk (ignored
+    # by Git, e.g. a measurement aid such as -DCTR_MEASURE_AID) would reach the
+    # release; the localized copies never see it.
+    if (PORT / "local.mk").exists() and not args.allow_local_mk:
+        sys.exit("3ds_port/local.mk exists and would change the English build: move it away "
+                 "and rebuild (make clean), or pass --allow-local-mk if it is meant to ship")
 
     # The version the title screen shows is the port Makefile's.
     shown = re.search(r"^APP_VERSION := (\S+)$", (PORT / "Makefile").read_text(encoding="utf-8"), re.M)

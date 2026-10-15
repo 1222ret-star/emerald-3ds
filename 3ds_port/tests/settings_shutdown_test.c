@@ -5,9 +5,22 @@
 #include <time.h>
 #include <3ds.h>
 static int TestClose(FILE *file);
+static int TestRemove(const char *path);
+static int TestRename(const char *from, const char *to);
 #define fclose TestClose
+#define remove TestRemove
+#define rename TestRename
 #include "../src/3ds_settings.c"
 #undef fclose
+#undef remove
+#undef rename
+static unsigned renames;
+static int TestRemove(const char *path) { (void)path; return 0; }
+static int TestRename(const char *from, const char *to) {
+    assert(strcmp(from, "sdmc:/3ds/emerald3ds/settings.txt.tmp") == 0);
+    assert(strcmp(to, "sdmc:/3ds/emerald3ds/settings.txt") == 0);
+    ++renames; return 0;
+}
 static pthread_mutex_t diskMutex = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t diskCond = PTHREAD_COND_INITIALIZER;
 static bool entered, releaseDisk;
@@ -20,7 +33,7 @@ void CtrDayNight_Update(void) {
     ++clockUpdates;
 }
 FILE *CtrFs_OpenData(const char *name, const char *mode) {
-    assert(strcmp(name, "settings.txt") == 0 && strcmp(mode, "w") == 0);
+    assert(strcmp(name, "settings.txt.tmp") == 0 && strcmp(mode, "w") == 0);
     pthread_mutex_lock(&diskMutex);
     entered = true; pthread_cond_signal(&diskCond);
     while (!releaseDisk) pthread_cond_wait(&diskCond, &diskMutex);
@@ -64,6 +77,7 @@ int main(int argc, char **argv) {
         assert(strstr(saved, "day_night=1\n") && strstr(saved, "clock_speed=5\n"));
         assert(strstr(saved, "timed_encounters=1\n") && strstr(saved, "show_clock=1\n"));
         assert(errors == (fault == 2 ? 2u : 0u));
+        assert(renames == (fault == 2 ? 0u : 2u));
     }
     CtrSettings_Shutdown(); /* idempotent, no freed-thread access */
     puts("PASS settings: stalled write, latest snapshot drained, close and open errors, repeated shutdown");
