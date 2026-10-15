@@ -22,9 +22,10 @@
  * sessions below); the game still decides everything.
  *
  * The column is the port's own design (an emerald rail, plates, a focus
- * ring; see "The column's look"), with the game's item icons on it and two
- * new pictures, the RUN shoe and the Y badge (3ds_bottom_art.h, from
- * assets/artwork/bottom). Everything else is the game's own graphics,
+ * ring; see "The column's look"), with the game's item icons on it and a few
+ * new pictures: the RUN shoe, the Y badge and the Pokédex icon
+ * (3ds_bottom_art.h, from assets/artwork/bottom). Everything else is the
+ * game's own graphics,
  * decoded from the same RomFS files the game loads: the party menu
  * background, the Hoenn region map, the trainer
  * card, mon/item/type/status icons, front pictures, the bag sprite, the
@@ -558,7 +559,10 @@ static void LoadResources(void)
     LoadItemIcon(&sRes.column[SCR_POKEMON], gItemIcon_PokeBall, gItemIconPalette_PokeBall);
     LoadItemIcon(&sRes.column[SCR_BAG], gItemIcon_BerryPouch, gItemIconPalette_BerryPouch);
     LoadItemIcon(&sRes.column[SCR_CARD], gItemIcon_ContestPass, gItemIconPalette_ContestPass);
-    LoadItemIcon(&sRes.column[SCR_POKEDEX], gItemIcon_FameChecker, gItemIconPalette_FameChecker);
+    /* Emerald has no Pokédex item icon; port art (Platinum menu Pokédex). */
+    sRes.column[SCR_POKEDEX].tiles = (u8 *)sArtPokedex;
+    sRes.column[SCR_POKEDEX].size = 3;
+    ToPals(&sRes.column[SCR_POKEDEX].pal, sArtPalette, 1);
     LoadItemIcon(&sRes.column[SCR_SAVE], GetItemIconPicOrPalette(ITEM_LETTER, 0), GetItemIconPicOrPalette(ITEM_LETTER, 1));
     LoadItemIcon(&sRes.column[SCR_OPTION], gItemIcon_TeachyTV, gItemIconPalette_TeachyTV);
     sRes.column[SCR_POKENAV].tiles = UnlzFile("pokenav/nav_icon.4bpp.lz", NULL);

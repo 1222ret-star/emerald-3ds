@@ -14,6 +14,10 @@
   queue entry within the room each frame leaves, and the sprites are packed
   more tightly, so they keep their 3D beside the world's picture.
 
+- Touch menu: the POKéDEX button shows a red Pokédex, by @luksgrin (pull
+  request #91), in place of the Fame Checker: Emerald has no Pokédex item
+  graphic, so it is port art mastered from Pokémon Platinum's menu icon.
+
 - Follower Pokémon (OPTIONS > ENHANCEMENTS > FOLLOWER, off by default): the
   party's lead walks behind the player on its HeartGold/SoulSilver overworld
   sprite, comes out of and goes back into its Poké Ball (warps, surf, bike,
