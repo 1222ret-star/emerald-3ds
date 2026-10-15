@@ -109,7 +109,8 @@ void CtrCycle_Input(CtrInputSample *sample)
  * (-DCTR_BATTLE_TEST=SPECIES_x, optionally -DCTR_BATTLE_TEST_LEVEL=n, or
  * -DCTR_BATTLE_TEST_TRAINER=TRAINER_x for that trainer's battle - a double
  * one for a doubles trainer): a second and a half after the field is up,
- * every time it is. Nothing else is pressed.
+ * every time it is; in battle A is pressed every 12 frames, so that its
+ * turns play (FIGHT, the first move, the messages).
  */
 #ifndef CTR_BATTLE_TEST_LEVEL
 #define CTR_BATTLE_TEST_LEVEL 50
@@ -139,7 +140,12 @@ void CtrCycle_Frame(void)
     }
 }
 
-void CtrCycle_Input(CtrInputSample *sample) { (void)sample; }
+void CtrCycle_Input(CtrInputSample *sample)
+{
+    /* In battle, A every 12 frames: FIGHT, the first move, the messages. */
+    if (gMain.inBattle && sFrame % 12 < 2)
+        sample->buttons |= 1;
+}
 
 #else
 

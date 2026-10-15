@@ -54,6 +54,9 @@ typedef struct
      * for the compositor to tint the picture with as it draws it. */
     const uint32_t *pixels;
     uint32_t version;
+    /* The rows changed since the compositor last uploaded the picture
+     * (CtrBattleHud_Uploaded), [changedTop, changedBottom). */
+    uint8_t changedTop, changedBottom;
     float fade;
     uint32_t fadeColour;
     bool used;
@@ -73,6 +76,11 @@ void CtrBattleHud_SetSafariBalls(unsigned char healthboxSpriteId, unsigned char 
 const unsigned char *CtrBattleHud_ElementGfx(unsigned char elementId);
 
 /* ---- For the compositor. ---- */
+/* Its art read and its labels traced on a worker, as a battle's transition
+ * begins (battle_transition.c), so that no frame of the battle does it. */
+void CtrBattleHud_Warm(void);
+/* The compositor has the picture of box `index` as it is now. */
+void CtrBattleHud_Uploaded(unsigned index);
 /* Whether the boxes are drawn in HD at all (the art loaded). */
 bool CtrBattleHud_Ready(void);
 /* The art read and its labels traced, once, as the first battle makes its boxes. */

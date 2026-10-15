@@ -956,6 +956,8 @@ static unsigned sStereoSplit[2];
 static unsigned sStereoWhy[4];
 /* The same, for this frame alone (CTR_FLAT_*, the frame profiler's record). */
 static uint8_t sFrameFlat;
+/* Diagnostic: which kind of blend (BlendWhy). */
+static unsigned sBlendWhy[6];
 static void StereoWhy(unsigned why)
 {
     ++sStereoWhy[why];
@@ -1489,6 +1491,16 @@ static void DrawSlot(int slot, float x, float y, bool flipX, bool flipY)
 
 static bool sDayNightObject;
 static bool sDayNightEnv;
+/*
+ * A background that blends, in front of a group of sprites, drawn into the
+ * group's slot over its sprites (SlotsCompose): the GBA's EVA x layer + EVB x
+ * sprite, in two passes of the layer alone. SLOT_BLEND_UNDER scales what the
+ * slot holds under the layer's pixels by EVB; SLOT_BLEND_OVER adds EVA x the
+ * layer where the slot holds a sprite (its alpha, one bit), nothing where it
+ * holds nothing - the scenery under the slot has the layer blended already.
+ */
+enum { SLOT_BLEND_NONE, SLOT_BLEND_UNDER, SLOT_BLEND_OVER };
+static unsigned sSlotBlendPass;
 
 static void Blend(unsigned layer, bool effects, bool semiTransparent)
 {
@@ -1503,7 +1515,8 @@ static void Blend(unsigned layer, bool effects, bool semiTransparent)
     bool night = (light->rgb[0] != 1.0f || light->rgb[1] != 1.0f || light->rgb[2] != 1.0f)
               && !sInLayerTexture && !sStage && !sCentred && !sBattle && CtrGame_IsOverworld()
               && ((layer >= 1 && layer <= 3) || (layer == 4 && sDayNightObject));
-    unsigned key = layer | (effects << 8) | (semiTransparent << 9) | (night << 10);
+    unsigned pass = sInLayerTexture ? SLOT_BLEND_NONE : sSlotBlendPass;
+    unsigned key = layer | (effects << 8) | (semiTransparent << 9) | (night << 10) | (pass << 11);
 
     if (key == sBlendKey) return;
     sBlendKey = key;
@@ -1516,6 +1529,30 @@ static void Blend(unsigned layer, bool effects, bool semiTransparent)
         sDayNightEnv = false;
     }
     C3D_AlphaTest(true, GPU_GREATER, 0);
+    if (pass != SLOT_BLEND_NONE)
+    {
+        unsigned control = Reg(0x50);
+        bool blends = effects && ((control >> 6) & 3) == 1 && (control & (1u << layer));
+        unsigned eva = Min(Reg(0x52) & 31, 16), evb = Min((Reg(0x52) >> 8) & 31, 16);
+
+        C2D_PlainImageTint(&sTint, C2D_Color32(0, 0, 0, 255), pass == SLOT_BLEND_OVER ? 1.0f - eva / 16.0f : 0.0f);
+        if (!blends)
+        {
+            /* Where the window turns effects off, the layer as it is. */
+            if (pass == SLOT_BLEND_UNDER)
+                C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ZERO, GPU_ZERO, GPU_ONE);
+            else
+                C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ZERO, GPU_ONE, GPU_ZERO, GPU_ONE);
+        }
+        else if (pass == SLOT_BLEND_UNDER)
+        {
+            C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ZERO, GPU_CONSTANT_COLOR, GPU_ZERO, GPU_ONE);
+            C3D_BlendingColor(C2D_Color32(evb * 255 / 16, evb * 255 / 16, evb * 255 / 16, 255));
+        }
+        else
+            C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_DST_ALPHA, GPU_ONE, GPU_ZERO, GPU_ONE);
+        return;
+    }
     if (sObjWinPass != OBJWIN_NONE)
     {
         /* The OBJ window's surface (ObjWindowCompose) keeps a coverage
@@ -2459,8 +2496,23 @@ static void HudRelease(void)
     sHudFailFrame = 0;
 }
 
+/*
+ * The picture's rows that changed (the box's changedTop/Bottom; all of them
+ * into a texture just made) into its two textures, a tile row of 8 at a time:
+ * a bar going down is two or three tile rows. Tile by tile, each texel's
+ * place from the Morton table - CtrVideo_Texel for every texel divided by the
+ * texture's width each time, and the whole picture went up every frame of a
+ * bar's slide: 1.6 ms a box in Azahar.
+ */
 static bool HudUpload(unsigned k, const CtrHudBox *box)
 {
+    unsigned top = box->changedTop & ~7u, bottom = (box->changedBottom + 7u) & ~7u;
+
+    if (!sHudTex[k][0].data || !sHudTex[k][1].data || bottom > HUD_TEX_H || top >= bottom)
+    {
+        top = 0;
+        bottom = HUD_TEX_H;
+    }
     for (unsigned part = 0, x0 = 0; part < 2; x0 += sHudPartW[part], ++part)
     {
         C3D_Tex *tex = &sHudTex[k][part];
@@ -2490,13 +2542,25 @@ static bool HudUpload(unsigned k, const CtrHudBox *box)
             C3D_TexSetWrap(tex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
         }
         data = tex->data;
-        for (unsigned y = 0; y < HUD_TEX_H; ++y)
-            for (unsigned x = 0; x < sHudPartW[part]; ++x)
-                data[CtrVideo_Texel(x, y, sHudPartW[part])] =
-                    x0 + x < CTR_HUD_W && y < CTR_HUD_H ? box->pixels[y * CTR_HUD_W + x0 + x] : 0;
+        for (unsigned ty = top; ty < bottom; ty += 8)
+            for (unsigned tx = 0; tx < sHudPartW[part]; tx += 8)
+            {
+                /* Tiles run left to right, then down (CtrVideo_Texel). */
+                uint32_t *tile = data + ((ty / 8) * (sHudPartW[part] / 8) + tx / 8) * 64;
+
+                for (unsigned y = 0; y < 8; ++y)
+                {
+                    const uint32_t *row = box->pixels + (ty + y) * CTR_HUD_W + x0 + tx;
+                    bool inside = ty + y < CTR_HUD_H;
+
+                    for (unsigned x = 0; x < 8; ++x)
+                        tile[sMorton[y * 8 + x]] = inside && x0 + tx + x < CTR_HUD_W ? row[x] : 0;
+                }
+            }
         C3D_TexFlush(tex);
     }
     sHudVersion[k] = box->version;
+    CtrBattleHud_Uploaded(k);
     return true;
 }
 
@@ -7595,9 +7659,21 @@ typedef struct
     uint8_t patch;          /* nonzero: those backgrounds (Layers bits) over a group */
     uint8_t first;          /* its frontmost OAM entry */
     bool objWin;            /* the OBJ window is over it: drawn at its depth (ObjWindowEye) */
+    uint8_t blendBg;        /* backgrounds in front of it that blend with it, in its slot (SlotsCompose) */
 } BattleSlot;
 static BattleSlot sSlots[128];
 static unsigned sSlotCount;
+/*
+ * Semi-transparent sprites (OBJ mode 1, a move's haze or glow): in no group.
+ * In a slot their blend had nothing under it - the slot is cleared, and one
+ * bit of alpha cannot keep them see-through - so their frames were composed
+ * whole, every sprite flat (26 frames of a move in a test battle). Each is
+ * drawn on its own over each eye's picture instead, after the slots, at its
+ * depth, blended with what is there as the 2D battle blends it (LooseEye).
+ */
+#define LOOSE_MAX 16
+static struct { uint8_t index, priority; int16_t x, y, w, h, centre; } sLoose[LOOSE_MAX];
+static unsigned sLooseCount;
 /* The order the slots are drawn in (SlotsPack): back to front. */
 static uint8_t sPlaceOrder[128];
 /*
@@ -7705,6 +7781,20 @@ static void SlotsPrepare(void)
  * under it, and no window cuts them. `furthest` is the
  * priority of the one furthest back.
  */
+static void BlendWhy(unsigned kind)
+{
+    static unsigned logged[6];
+    static const char *const names[6] = {"semi-transparent OBJ", "BLDCNT OBJ target", "OBJ window under no group",
+                                         "OBJ window cut by WIN0/1", "blended BG in front", "?"};
+
+    ++sBlendWhy[kind];
+    if (logged[kind]++ < 6)
+        CtrLog_Write(CTR_LOG_VIDEO, "3D battle blend: %s (frame %lu, DISPCNT %04x BLDCNT %04x BLDALPHA %04x "
+                     "WININ %04x WINOUT %04x BGCNT %04x %04x %04x %04x drawn %u %u %u)", names[kind],
+                     (unsigned long)sStats.frames, Reg(0), Reg(0x50), Reg(0x52), Reg(0x48), Reg(0x4a), Reg(8),
+                     Reg(10), Reg(12), Reg(14), sBgDrawn[1], sBgDrawn[2], sBgDrawn[3]);
+}
+
 static bool BattleSprites(unsigned *furthest, bool *apart)
 {
     static const uint8_t dimensions[3][4][2] = {
@@ -7719,6 +7809,7 @@ static bool BattleSprites(unsigned *furthest, bool *apart)
     int left = VIEW_LEFT - reach, right = VIEW_RIGHT + reach;
 
     sSlotCount = 0;
+    sLooseCount = 0;
     *furthest = 0;
     /* The OBJ window is on through every battle (DISPCNT 0xbf40); its own
      * sprites (mode 2) are not drawn by this renderer anyway (DrawObjects).
@@ -7747,7 +7838,20 @@ static bool BattleSprites(unsigned *furthest, bool *apart)
         if (x + w > right) w = right - x;
         if (y + h > bottom) h = bottom - y;
         if (w <= 0 || h <= 0) continue;
-        if (mode == 1 || alpha) { if (*apart) StereoWhy(0); *apart = false; }
+        if (mode == 1 && !alpha && sLooseCount < LOOSE_MAX)
+        {
+            sLoose[sLooseCount].index = (uint8_t)i;
+            sLoose[sLooseCount].priority = (uint8_t)((attr2 >> 10) & 3);
+            sLoose[sLooseCount].x = (int16_t)x;
+            sLoose[sLooseCount].y = (int16_t)y;
+            sLoose[sLooseCount].w = (int16_t)w;
+            sLoose[sLooseCount].h = (int16_t)h;
+            sLoose[sLooseCount].centre = (int16_t)(full + (int)(dimensions[shape][attr1 >> 14][1] << twice) / 2);
+            ++sLooseCount;
+            if (((attr2 >> 10) & 3) > *furthest) *furthest = (attr2 >> 10) & 3;
+            continue;
+        }
+        if (mode == 1 || alpha) { if (*apart) { StereoWhy(0); BlendWhy(alpha ? 1 : 0); } *apart = false; }
         /* Mosaic is not drawn (DrawObjects), composed whole or apart: kept
          * apart, a sprite in it keeps its depth. */
         if (((attr2 >> 10) & 3) > *furthest) *furthest = (attr2 >> 10) & 3;
@@ -7762,6 +7866,7 @@ static bool BattleSprites(unsigned *furthest, bool *apart)
         slot->front = false;
         slot->patch = 0;
         slot->objWin = false;
+        slot->blendBg = 0;
         slot->first = (uint8_t)i;
         /* The depth of the whole sprite, not of the part on show. */
         slot->centre = (int16_t)(full + (int)(dimensions[shape][attr1 >> 14][1] << twice) / 2);
@@ -7799,7 +7904,51 @@ static bool BattleSprites(unsigned *furthest, bool *apart)
                 merged = true;
             }
     }
-    return sSlotCount > 0;
+    /* Back to front among themselves, as the GBA layers them: the furthest
+     * priority first, then the higher OAM entries (SlotsPlace interleaves
+     * them with the groups). */
+    for (unsigned i = 1; i < sLooseCount; ++i)
+        for (unsigned j = i; j > 0; --j)
+        {
+            unsigned a = sLoose[j - 1].priority << 8 | sLoose[j - 1].index, b = sLoose[j].priority << 8 | sLoose[j].index;
+
+            if (a >= b) break;
+            {
+                __typeof__(sLoose[0]) t = sLoose[j];
+
+                sLoose[j] = sLoose[j - 1];
+                sLoose[j - 1] = t;
+            }
+        }
+    return sSlotCount > 0 || sLooseCount > 0;
+}
+
+/* Loose sprite `l` over an eye's picture, at its depth (sLoose). */
+static void LooseDraw(C3D_RenderTarget *picture, unsigned l)
+{
+    float offX = sOffX;
+    unsigned exclude = sLayerExclude;
+    uint32_t mask[4];
+
+    memcpy(mask, sObjMask, sizeof(mask));
+    BlendForget();
+    SceneOn(picture);
+    ClipToView();
+    ViewBase();
+    sLayerExclude = 63u & ~16u;
+    sObjMaskOn = true;
+    memset(sObjMask, 0, sizeof(sObjMask));
+    sObjMask[sLoose[l].index >> 5] = 1u << (sLoose[l].index & 31);
+    sOffX = offX + BattleSpriteShift(sLoose[l].centre);
+    Compose();
+    C2D_Flush();
+    sObjMaskOn = false;
+    memcpy(sObjMask, mask, sizeof(mask));
+    sLayerExclude = exclude;
+    sOffX = offX;
+    C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
+    ClipToView();
+    BlendForget();
 }
 
 /*
@@ -8007,6 +8156,19 @@ static void SlotsCompose(void)
         Compose();
         sObjMaskOn = false;
         C2D_Flush();
+        if (slot->blendBg && !slot->patch)
+        {
+            sLayerExclude = 63u & ~slot->blendBg;
+            for (unsigned pass = SLOT_BLEND_UNDER; pass <= SLOT_BLEND_OVER; ++pass)
+            {
+                sSlotBlendPass = pass;
+                BlendForget();
+                Compose();
+                C2D_Flush();
+            }
+            sSlotBlendPass = SLOT_BLEND_NONE;
+            BlendForget();
+        }
     }
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
     sLayerExclude = 0;
@@ -8022,9 +8184,23 @@ static void SlotsCompose(void)
 
 /* The slots on `target` for the eye being drawn, each at its group's depth:
  * those behind the backgrounds in front of sprites, or those before them. */
+static void SlotsPlaceBegin(C3D_RenderTarget *target)
+{
+    BlendForget();
+    SceneOn(target);
+    C2D_ViewReset();
+    Blend(5, false, false);
+    C2D_Flush();
+    C3D_AlphaBlend(GPU_BLEND_ADD, GPU_BLEND_ADD, GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA,
+                   GPU_ONE, GPU_ONE_MINUS_SRC_ALPHA);
+}
+
 static void SlotsPlace(C3D_RenderTarget *target, bool front, bool patches)
 {
     float scale = sZoom / SCENE_ZOOM;
+    /* The loose sprites, among the groups behind the backgrounds in front. */
+    bool loose = !front && !patches && sLooseCount;
+    unsigned next = 0;
 
     BlendForget();
     SceneOn(target);
@@ -8048,6 +8224,20 @@ static void SlotsPlace(C3D_RenderTarget *target, bool front, bool patches)
         C3D_Tex *tex = sRegions[slot->region].tex;
 
         if (slot->front != front || (slot->patch != 0) != patches) continue;
+        /* Those behind the group's frontmost sprite before it. */
+        if (loose && next < sLooseCount)
+        {
+            unsigned key = (unsigned)slot->nearest << 8 | slot->first;
+            bool drew = false;
+
+            while (next < sLooseCount && ((unsigned)sLoose[next].priority << 8 | sLoose[next].index) > key)
+            {
+                C2D_Flush();
+                LooseDraw(target, next++);
+                drew = true;
+            }
+            if (drew) SlotsPlaceBegin(target);
+        }
         const Tex3DS_SubTexture cut = {(u16)tw, (u16)th, slot->sx / (float)tex->width,
             1 - slot->sy / (float)tex->height, (slot->sx + tw) / (float)tex->width,
             1 - (slot->sy + th) / (float)tex->height};
@@ -8058,6 +8248,8 @@ static void SlotsPlace(C3D_RenderTarget *target, bool front, bool patches)
                         (slot->y - 1) * sZoom + sOffY, 0, NULL, scale, scale);
     }
     C2D_Flush();
+    while (loose && next < sLooseCount)
+        LooseDraw(target, next++);
     BlendForget();
 }
 
@@ -8175,11 +8367,25 @@ static void RenderBattleStereo(uint32_t clear, float slider, C3D_Tex *world)
                 break;
             }
         }
-        /* Drawn over each eye whole (ObjWindowEye): not through windows 0 and 1. */
-        if (under && !(Reg(0) & 0x6000)) under->objWin = true;
+        /* Drawn over each eye whole (ObjWindowEye): not through windows 0 and
+         * 1 where they cut its box. Merely on is not enough to refuse it: a
+         * stat change sets WIN0 to nothing (WIN0H = WIN0V = 0) with DISPCNT
+         * keeping it on through the battle (0xbf40), and its 59 frames a
+         * battle were composed whole, the Pokemon flat, for no window. */
+        bool cut = false;
+
+        for (unsigned w = 0; w < 2 && under; ++w)
+            if (Reg(0) & (0x2000u << w))
+            {
+                int x0, x1, y0, y1;
+
+                WindowRect(w, &x0, &x1, &y0, &y1);
+                if (x0 < x1 && y0 < y1 && x0 < wx1 && wx0 < x1 && y0 < wy1 && wy0 < y1) cut = true;
+            }
+        if (under && !cut) under->objWin = true;
         else
         {
-            if (apart) StereoWhy(0);
+            if (apart) { StereoWhy(0); BlendWhy(under ? 3 : 2); }
             apart = false;
             sObjWinSlotted = false;
         }
@@ -8194,6 +8400,16 @@ static void RenderBattleStereo(uint32_t clear, float slider, C3D_Tex *world)
      * or one that blends with what is under it, cannot be split so.
      */
     unsigned front = 0, nearestFront = 3, furthestFront = 0;
+    /*
+     * Those that blend with the sprites under them (the wild battle's
+     * opening, BattleIntroSlide3; a move's background): blended into each
+     * group's slot behind them (SlotsCompose), at the group's depth, rather
+     * than a patch over it - 108 frames of a wild battle's opening were
+     * composed whole, the Pokemon flat. Only with the sprites a second target
+     * and no palette fade (the passes have the tint to themselves); the
+     * scenery has them blended already, outside the sprites.
+     */
+    unsigned blendFront = 0;
 
     for (unsigned bg = 1; bg < 4 && any; ++bg)
         if (sBgDrawn[bg] && (Reg(8 + bg * 2) & 3) < furthest)
@@ -8203,8 +8419,19 @@ static void RenderBattleStereo(uint32_t clear, float slider, C3D_Tex *world)
             front |= 1u << bg;
             if (priority < nearestFront) nearestFront = priority;
             if (priority > furthestFront) furthestFront = priority;
-            if (((control >> 6) & 3) == 1 && (control & (1u << bg)) && apart) { StereoWhy(0); apart = false; }
+            if (((control >> 6) & 3) == 1 && (control & (1u << bg)) && apart)
+            {
+                if ((control & 0x1000) && sPaletteFade <= 0.0f && !(sObjWin.ready && (sObjWin.layers & (1u << bg))))
+                    blendFront |= 1u << bg;
+                else { StereoWhy(0); BlendWhy(4); apart = false; }
+            }
         }
+    /* Loose sprites with a background in front of sprites: their place
+     * among the patches is not worked out; composed whole. */
+    if (sLooseCount && front && apart) { StereoWhy(0); BlendWhy(0); apart = false; }
+    /* Both kinds over the same group, in either order, are not kept apart:
+     * a patch drawn over the blended slot would cover the blend. */
+    if (blendFront && (front & ~blendFront) && apart) { StereoWhy(0); BlendWhy(4); apart = false; }
     for (unsigned k = 0, groups = sSlotCount; front && apart && k < groups; ++k)
     {
         BattleSlot *slot = &sSlots[k];
@@ -8212,11 +8439,13 @@ static void RenderBattleStereo(uint32_t clear, float slider, C3D_Tex *world)
 
         if (slot->furthest <= nearestFront) { slot->front = true; continue; }
         if (slot->nearest <= furthestFront) { StereoWhy(2); apart = false; break; }
+        if (blendFront) { slot->blendBg = (uint8_t)blendFront; continue; }
         if (sSlotCount == sizeof(sSlots) / sizeof(sSlots[0])) { StereoWhy(3); apart = false; break; }
         BattleSlot *patch = &sSlots[sSlotCount++];
 
         *patch = *slot;
         patch->patch = (uint8_t)front;
+        patch->blendBg = 0;
         patch->objWin = false;
         patch->x = (int16_t)(slot->x - reach);
         patch->w = (int16_t)(slot->w + 2 * reach);
@@ -10909,6 +11138,11 @@ void CtrVideo_Present(void)
                          sStereoWhy[3], sSceneReused);
             if (sSceneEmptyReused)
                 CtrLog_Write(CTR_LOG_VIDEO, "3D battle frames: empty scenery not composed in %u", sSceneEmptyReused);
+            if (sStereoWhy[0])
+                CtrLog_Write(CTR_LOG_VIDEO, "3D battle blend kinds: st-obj %u bld-obj %u objwin-nogroup %u "
+                             "objwin-cut %u bg-blend %u", sBlendWhy[0], sBlendWhy[1], sBlendWhy[2], sBlendWhy[3],
+                             sBlendWhy[4]);
+            memset(sBlendWhy, 0, sizeof(sBlendWhy));
             memset(sStereoWhy, 0, sizeof(sStereoWhy));
             sSceneReused = 0;
             sSceneEmptyReused = 0;

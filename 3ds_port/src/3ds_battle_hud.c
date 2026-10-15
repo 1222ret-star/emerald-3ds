@@ -36,6 +36,7 @@
 #include "3ds_battle_hud.h"
 #include "3ds_log.h"
 #include "3ds_video.h"
+#include "3ds_platform.h"
 #include "../compat/port_platform.h"
 
 #define ART_MAGIC "EM3DHUD1"
@@ -83,6 +84,8 @@ typedef struct
     bool ball;
     uint8_t safariBalls;
     bool dirty;
+    /* The picture's rows to draw again, [dirtyTop, dirtyBottom) (MarkRows). */
+    int16_t dirtyTop, dirtyBottom;
     uint32_t signature;
 } Slot;
 
@@ -116,6 +119,9 @@ static Slot sSlots[CTR_HUD_BOXES];
 static CtrHudBox sBoxes[CTR_HUD_BOXES];
 static uint32_t sPixels[CTR_HUD_BOXES][CTR_HUD_W * CTR_HUD_H];
 static Label sHpLabel, sExpLabel, sPills[5];
+/* The rows a picture is drawn in this time (Compose): what is drawn is kept
+ * to them. */
+static int sRowTop = 0, sRowBottom = CTR_HUD_H;
 
 /* ------------------------------------------------------------------------ */
 /* The art                                                                  */
@@ -189,8 +195,49 @@ static void LoadArt(void)
 
 static void MakeLabels(const uint16_t *boxTileVram);
 
+/*
+ * The art read and the labels traced on a worker of their own, started as the
+ * battle's transition begins (CtrBattleHud_Warm), so neither lands in a frame:
+ * read and traced as the first battle made its boxes, they were one frame of
+ * 140 ms in Azahar (hud.bin's 200 KB 37 ms, the seven labels 100) - the jolt
+ * entering the first battle. Whoever needs them before it is done waits for
+ * it; the labels' buffers are the worker's until then.
+ */
+enum { WARM_NONE, WARM_RUNNING, WARM_DONE };
+static volatile int sWarm = WARM_NONE;
+
+static void WarmWorker(void *arg)
+{
+    uint64_t t0 = CtrPlatform_Ticks();
+
+    (void)arg;
+    LoadArt();
+    if (sArtReady)
+        MakeLabels(NULL);
+    CtrLog_Write(CTR_LOG_VIDEO, "battle hud: art and labels ready in %.1f ms on the worker",
+                 CtrPlatform_TickMs(CtrPlatform_Ticks() - t0));
+    __atomic_store_n(&sWarm, WARM_DONE, __ATOMIC_RELEASE);
+}
+
+void CtrBattleHud_Warm(void)
+{
+    if (sWarm != WARM_NONE || (sArtTried && sHpLabel.made))
+        return;
+    sWarm = WARM_RUNNING;
+    if (!CtrPlatform_StartThread(WarmWorker, NULL, 16 * 1024, -2))
+        sWarm = WARM_NONE;
+}
+
+/* The worker's work, waited for if it is still at it. */
+static void WarmWait(void)
+{
+    while (__atomic_load_n(&sWarm, __ATOMIC_ACQUIRE) == WARM_RUNNING)
+        CtrPlatform_SleepUs(500);
+}
+
 bool CtrBattleHud_Ready(void)
 {
+    WarmWait();
     LoadArt();
     return sArtReady;
 }
@@ -244,12 +291,20 @@ static inline uint32_t Over(uint32_t dst, uint32_t src, unsigned coverage)
     if (oa == 0)
         return 0;
     {
+        /* 1 / oa as a 2^32 fraction, rounded up: the quotient below is the
+         * division's for every numerator under 2^17 (checked for each oa on
+         * the host). The three divisions a pixel were most of a bar's
+         * redraw, done in software. */
+        static uint64_t inverse[256];
         unsigned out = oa;
+        uint64_t k = inverse[oa];
 
+        if (!k)
+            k = inverse[oa] = ((1ull << 32) + oa - 1) / oa;
         for (int shift = 24; shift >= 8; shift -= 8)
         {
             unsigned s = (src >> shift) & 0xFF, d = (dst >> shift) & 0xFF;
-            unsigned c = (s * sa + d * da * (255 - sa) / 255) / oa;
+            unsigned c = (unsigned)(((uint64_t)(s * sa + d * da * (255 - sa) / 255) * k) >> 32);
 
             out |= (c > 255 ? 255u : c) << shift;
         }
@@ -266,7 +321,7 @@ static void BlitPart(uint32_t *pic, const Art *art, int x, int y, int sx0, int s
     {
         int py = y + r;
 
-        if (py < 0 || py >= CTR_HUD_H)
+        if (py < sRowTop || py >= sRowBottom)
             continue;
         for (int c = sx0; c < sx1 && c < art->w; ++c)
         {
@@ -282,6 +337,33 @@ static void BlitPart(uint32_t *pic, const Art *art, int x, int y, int sx0, int s
 static void Blit(uint32_t *pic, const Art *art, int x, int y)
 {
     BlitPart(pic, art, x + art->x, y + art->y, 0, art->w);
+}
+
+/* The first art over rows just cleared: over nothing, Over is the art's own
+ * pixel (nothing where it is clear), so its rows are copied. */
+static void BlitOverNothing(uint32_t *pic, const Art *art)
+{
+    int x0 = art->x, c0 = 0, c1 = art->w;
+
+    if (!art->pixels)
+        return;
+    if (x0 < 0) { c0 = -x0; x0 = 0; }
+    if (x0 + (c1 - c0) > CTR_HUD_W) c1 = c0 + CTR_HUD_W - x0;
+    if (c1 <= c0)
+        return;
+    for (int r = 0; r < art->h; ++r)
+    {
+        int py = art->y + r;
+
+        if (py >= sRowTop && py < sRowBottom)
+        {
+            uint32_t *out = pic + py * CTR_HUD_W + x0;
+            const uint32_t *in = art->pixels + r * art->w + c0;
+
+            for (int c = 0; c < c1 - c0; ++c)
+                out[c] = in[c] & 0xFF ? in[c] : 0;
+        }
+    }
 }
 
 /*
@@ -312,6 +394,9 @@ static void BlitLabel(uint32_t *pic, const Label *label, int x, int y, uint32_t 
         float t = label->h > 1 ? (float)r / (label->h - 1) : 0;
         uint32_t colour = 0xFF;
 
+        if (y + label->y + r < sRowTop || y + label->y + r >= sRowBottom)
+            continue;
+
         for (int shift = 24; shift >= 8; shift -= 8)
         {
             float a = (top >> shift) & 0xFF, b = (bottom >> shift) & 0xFF;
@@ -323,7 +408,7 @@ static void BlitLabel(uint32_t *pic, const Label *label, int x, int y, uint32_t 
             int px = x + label->x + c, py = y + label->y + r;
             unsigned a = label->alpha[r * label->w + c];
 
-            if (a && px >= 0 && py >= 0 && px < CTR_HUD_W && py < CTR_HUD_H)
+            if (a && px >= 0 && py >= sRowTop && px < CTR_HUD_W && py < sRowBottom)
                 pic[py * CTR_HUD_W + px] = Over(pic[py * CTR_HUD_W + px], colour, a);
         }
     }
@@ -350,7 +435,8 @@ static void Trace(Label *label, const uint8_t *bits, int w, int h)
 {
     static float canvas[(24 * TRACE_K + 2 * TRACE_PAD) * (8 * TRACE_K + 2 * TRACE_PAD)];
     static float blurred[(24 * TRACE_K + 2 * TRACE_PAD) * (8 * TRACE_K + 2 * TRACE_PAD)];
-    float kernel[2 * TRACE_RADIUS + 1], sum = 0;
+    static float kernel[2 * TRACE_RADIUS + 1];
+    static bool kernelMade;
     int cw = w * TRACE_K + 2 * TRACE_PAD, ch = h * TRACE_K + 2 * TRACE_PAD;
 
     label->made = false;
@@ -358,28 +444,45 @@ static void Trace(Label *label, const uint8_t *bits, int w, int h)
         ++label->tries;
     if (w > 24 || h > 8)
         return;
-    for (int i = -TRACE_RADIUS; i <= TRACE_RADIUS; ++i)
-        sum += kernel[i + TRACE_RADIUS] = expf(-(float)(i * i) / (2 * 2.2f * 2.2f));
-    for (int i = 0; i <= 2 * TRACE_RADIUS; ++i)
-        kernel[i] /= sum;
+    if (!kernelMade)
+    {
+        float sum = 0;
+
+        for (int i = -TRACE_RADIUS; i <= TRACE_RADIUS; ++i)
+            sum += kernel[i + TRACE_RADIUS] = expf(-(float)(i * i) / (2 * 2.2f * 2.2f));
+        for (int i = 0; i <= 2 * TRACE_RADIUS; ++i)
+            kernel[i] /= sum;
+        kernelMade = true;
+    }
+    /* The canvas is the mask's rows each TRACE_K times over, and empty rows
+     * round them: blurred across once per mask row, then copied. */
     for (int y = 0; y < ch; ++y)
+    {
+        int gy = y - TRACE_PAD;
+        bool ink = gy >= 0 && gy < h * TRACE_K;
+
+        if (ink && (gy % TRACE_K) != 0)
+        {
+            memcpy(&blurred[y * cw], &blurred[(y - 1) * cw], (size_t)cw * sizeof(float));
+            continue;
+        }
         for (int x = 0; x < cw; ++x)
         {
-            int gx = x - TRACE_PAD, gy = y - TRACE_PAD;
+            int gx = x - TRACE_PAD;
 
-            canvas[y * cw + x] = gx >= 0 && gy >= 0 && gx < w * TRACE_K && gy < h * TRACE_K
-                && bits[(gy / TRACE_K) * w + gx / TRACE_K] ? 1.0f : 0.0f;
+            canvas[x] = ink && gx >= 0 && gx < w * TRACE_K && bits[(gy / TRACE_K) * w + gx / TRACE_K] ? 1.0f : 0.0f;
         }
-    for (int y = 0; y < ch; ++y)
         for (int x = 0; x < cw; ++x)
         {
             float v = 0;
 
-            for (int i = -TRACE_RADIUS; i <= TRACE_RADIUS; ++i)
-                if (x + i >= 0 && x + i < cw)
-                    v += canvas[y * cw + x + i] * kernel[i + TRACE_RADIUS];
+            if (ink)
+                for (int i = -TRACE_RADIUS; i <= TRACE_RADIUS; ++i)
+                    if (x + i >= 0 && x + i < cw)
+                        v += canvas[x + i] * kernel[i + TRACE_RADIUS];
             blurred[y * cw + x] = v;
         }
+    }
     for (int y = 0; y < ch; ++y)
         for (int x = 0; x < cw; ++x)
         {
@@ -559,7 +662,7 @@ static int DrawGlyph(uint32_t *pic, const u16 *glyphs, unsigned glyph, int x, in
                 unsigned v = (byte >> (6 - 2 * (k & 3))) & 3;
                 int px = x + half * 8 + k, py = y + row;
 
-                if ((v == 1 || v == 2) && px >= 0 && py >= 0 && px < CTR_HUD_W && py < CTR_HUD_H)
+                if ((v == 1 || v == 2) && px >= 0 && py >= sRowTop && px < CTR_HUD_W && py < sRowBottom)
                     pic[py * CTR_HUD_W + px] = v == 1 ? fg : shadow;
             }
         }
@@ -568,7 +671,12 @@ static int DrawGlyph(uint32_t *pic, const u16 *glyphs, unsigned glyph, int x, in
 
 static int DrawText(uint32_t *pic, const uint8_t *str, int x, int y, uint32_t fg)
 {
-    const u16 *glyphs = FontGlyphs();
+    const u16 *glyphs;
+
+    /* Outside the rows being drawn again (Compose): only where it ends. */
+    if (y + 16 <= sRowTop || y >= sRowBottom)
+        return x + TextWidth(str);
+    glyphs = FontGlyphs();
 
     if (!glyphs)
         return x;
@@ -651,7 +759,13 @@ static uint32_t FadeOf(const Slot *slot, float *strength, uint32_t *colour)
     return (uint32_t)u2 << 16 | f2;
 }
 
-static void Compose(int index)
+/*
+ * The picture, rows [top, bottom) of it: everything is drawn as for the whole
+ * picture, kept to those rows. A bar going down draws its own rows again, a
+ * fifth of the picture: the whole of it was drawn and uploaded every frame of
+ * the slide, 3 ms a box in Azahar.
+ */
+static void Compose(int index, int top, int bottom)
 {
     Slot *slot = &sSlots[index];
     const Layout *layout = &sLayouts[slot->kind];
@@ -660,11 +774,19 @@ static void Compose(int index)
     bool numbers = layout->numbers && gBattleSpritesDataPtr
                 && gBattleSpritesDataPtr->battlerData[slot->battler].hpNumbersNoBars;
 
-    memset(pic, 0, sizeof(sPixels[0]));
+    sRowTop = top < 0 ? 0 : top;
+    sRowBottom = bottom > CTR_HUD_H ? CTR_HUD_H : bottom;
+    if (sRowTop >= sRowBottom)
+    {
+        sRowTop = 0;
+        sRowBottom = CTR_HUD_H;
+        return;
+    }
+    memset(pic + sRowTop * CTR_HUD_W, 0, (size_t)(sRowBottom - sRowTop) * CTR_HUD_W * sizeof(pic[0]));
     /* The EXP label is only on the player's singles box. */
     MakeLabels(slot->kind == CTR_HUD_SINGLE_PLAYER
                ? (const uint16_t *)(OBJ_VRAM0 + gSprites[slot->sprite].oam.tileNum * TILE_SIZE_4BPP) : NULL);
-    Blit(pic, &sArt[ART_FRAME + slot->kind], 0, 0);
+    BlitOverNothing(pic, &sArt[ART_FRAME + slot->kind]);
 
     if (!layout->safari)
     {
@@ -742,6 +864,42 @@ static void Compose(int index)
             }
         }
     }
+    sRowTop = 0;
+    sRowBottom = CTR_HUD_H;
+}
+
+/* Rows [top, bottom) of the slot's picture to draw again. */
+static void MarkRows(Slot *slot, int top, int bottom)
+{
+    if (!slot->dirty)
+    {
+        slot->dirtyTop = (int16_t)top;
+        slot->dirtyBottom = (int16_t)bottom;
+    }
+    else
+    {
+        if (top < slot->dirtyTop) slot->dirtyTop = (int16_t)top;
+        if (bottom > slot->dirtyBottom) slot->dirtyBottom = (int16_t)bottom;
+    }
+    slot->dirty = true;
+}
+
+static void MarkAll(Slot *slot)
+{
+    MarkRows(slot, 0, CTR_HUD_H);
+}
+
+/* The rows a piece of art Blit puts at y of the picture covers. */
+static void MarkArt(Slot *slot, const Art *art, int y)
+{
+    if (art->pixels)
+        MarkRows(slot, y + art->y - 1, y + art->y + art->h + 1);
+}
+
+/* A line of text at y (DrawText): its glyphs' 16 rows. */
+static void MarkText(Slot *slot, int y)
+{
+    MarkRows(slot, y - 1, y + 17);
 }
 
 /* ------------------------------------------------------------------------ */
@@ -778,7 +936,7 @@ void CtrBattleHud_BoxCreated(unsigned char healthboxSpriteId, unsigned char batt
     slot->battler = battler;
     slot->name[0] = EOS;
     slot->gender = 2;
-    slot->dirty = true;
+    MarkAll(slot);
     box->used = true;
     box->boxTile = left->oam.tileNum;
     box->boxTiles = (kind == CTR_HUD_SINGLE_PLAYER || kind == CTR_HUD_SINGLE_OPPONENT || kind == CTR_HUD_SAFARI) ? 128 : 64;
@@ -793,6 +951,8 @@ void CtrBattleHud_BoxCreated(unsigned char healthboxSpriteId, unsigned char batt
         box->barTiles = (kind == CTR_HUD_SINGLE_OPPONENT || kind == CTR_HUD_DOUBLE_OPPONENT) ? 9 : 8;
     }
     box->pixels = sPixels[battler];
+    box->changedTop = 0;
+    box->changedBottom = CTR_HUD_H;
     box->version++;
 }
 
@@ -805,7 +965,7 @@ void CtrBattleHud_SetName(unsigned char id, const unsigned char *name, unsigned 
     StringCopyN(slot->name, name, POKEMON_NAME_LENGTH);
     slot->name[POKEMON_NAME_LENGTH] = EOS;
     slot->gender = gender == MON_MALE ? 0 : gender == MON_FEMALE ? 1 : 2;
-    slot->dirty = true;
+    MarkAll(slot);
 }
 
 void CtrBattleHud_SetLevel(unsigned char id, unsigned char level)
@@ -815,7 +975,7 @@ void CtrBattleHud_SetLevel(unsigned char id, unsigned char level)
     if (slot && slot->level != level)
     {
         slot->level = level;
-        slot->dirty = true;
+        MarkAll(slot);
     }
 }
 
@@ -830,8 +990,16 @@ void CtrBattleHud_SetHp(unsigned char id, short value, bool max)
 
     if (*field != value)
     {
+        const Layout *layout = &sLayouts[slot->kind];
+
         *field = value;
-        slot->dirty = true;
+        /* Only the boxes that show it: the singles player's numbers, the
+         * doubles' in place of the bar. The opponent's were a whole picture
+         * drawn and uploaded for nothing, every frame of its bar's slide. */
+        if (layout->hpText)
+            MarkText(slot, Px(24) - 3);
+        if (layout->numbers)
+            MarkText(slot, Px(layout->barY) - 5);
     }
 }
 
@@ -844,13 +1012,19 @@ void CtrBattleHud_SetBar(unsigned char id, bool exp, unsigned char pixels, unsig
     if (exp)
     {
         if (slot->expPixels != pixels)
-            slot->dirty = true;
+            MarkArt(slot, &sArt[ART_EXP_FILL], 0);
         slot->expPixels = pixels;
     }
     else
     {
         if (slot->hpPixels != pixels || slot->hpColour != colour)
-            slot->dirty = true;
+        {
+            int barY = Px(sLayouts[slot->kind].barY);
+
+            MarkArt(slot, &sArt[ART_HP_TRACK], barY);
+            for (unsigned c = 0; c < 3; ++c)
+                MarkArt(slot, &sArt[ART_HP_FILL + c], barY);
+        }
         slot->hpPixels = pixels;
         slot->hpColour = colour;
     }
@@ -863,7 +1037,7 @@ void CtrBattleHud_SetStatus(unsigned char id, unsigned char status)
     if (slot && slot->status != status)
     {
         slot->status = status;
-        slot->dirty = true;
+        MarkAll(slot);
     }
 }
 
@@ -874,7 +1048,7 @@ void CtrBattleHud_SetBall(unsigned char id, bool shown)
     if (slot && slot->ball != shown)
     {
         slot->ball = shown;
-        slot->dirty = true;
+        MarkAll(slot);
     }
 }
 
@@ -885,7 +1059,7 @@ void CtrBattleHud_SetSafariBalls(unsigned char id, unsigned char balls)
     if (slot && slot->safariBalls != balls)
     {
         slot->safariBalls = balls;
-        slot->dirty = true;
+        MarkAll(slot);
     }
 }
 
@@ -955,6 +1129,12 @@ void CtrBattleHud_Clear(void)
         sBoxes[i].used = false;
 }
 
+void CtrBattleHud_Uploaded(unsigned index)
+{
+    if (index < CTR_HUD_BOXES)
+        sBoxes[index].changedTop = sBoxes[index].changedBottom = 0;
+}
+
 const CtrHudBox *CtrBattleHud_Boxes(void)
 {
     if (!CtrBattleHud_Ready())
@@ -975,11 +1155,27 @@ const CtrHudBox *CtrBattleHud_Boxes(void)
         sBoxes[i].fadeColour = fadeColour;
         if (sLayouts[slot->kind].numbers && gBattleSpritesDataPtr)
             signature += gBattleSpritesDataPtr->battlerData[slot->battler].hpNumbersNoBars;
-        if (slot->dirty || signature != slot->signature)
+        if (signature != slot->signature)
+            MarkAll(slot);
+        if (slot->dirty)
         {
+            int top = slot->dirtyTop < 0 ? 0 : slot->dirtyTop;
+            int bottom = slot->dirtyBottom > CTR_HUD_H ? CTR_HUD_H : slot->dirtyBottom;
+
             slot->signature = signature;
             slot->dirty = false;
-            Compose(i);
+            Compose(i, top, bottom);
+            /* What the compositor uploads again (CtrBattleHud_Uploaded). */
+            if (sBoxes[i].changedBottom <= sBoxes[i].changedTop)
+            {
+                sBoxes[i].changedTop = (uint8_t)top;
+                sBoxes[i].changedBottom = (uint8_t)bottom;
+            }
+            else
+            {
+                if (top < sBoxes[i].changedTop) sBoxes[i].changedTop = (uint8_t)top;
+                if (bottom > sBoxes[i].changedBottom) sBoxes[i].changedBottom = (uint8_t)bottom;
+            }
             sBoxes[i].version++;
         }
     }

@@ -67,6 +67,7 @@
 #include "port_log.h"
 #include "port_prof.h"
 
+#include "3ds_battle_hud.h"
 #include "3ds_platform.h"
 #include "3ds_video.h"
 #include "3ds_assets.h"
@@ -452,6 +453,10 @@ static void UpdateStage(void)
                                     : sCentred.on ? sCentred.screen : CTR_CENTRED_NONE);
     CtrVideo_SetBattle(!caughtMonPage && sBattle.on);
     CtrVideo_SetTransition(!caughtMonPage && TransitionOn());
+    /* The battle's info boxes made ready on a worker while the transition
+     * plays, not in a frame of the battle (3ds_battle_hud.c). */
+    if (sTransition.on)
+        CtrBattleHud_Warm();
 }
 
 /*
