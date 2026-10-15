@@ -1,6 +1,6 @@
 # Trees of the General tileset
 
-Original art for the voxel mode's trees, drawn for Pokémon Emerald 3Ds Dual Screen:
+Original art for the voxel mode's trees, drawn for Emerald 3DS:
 
 - `tree_trunk.png`: 32×32, opaque trunk and ground, on a 2×2-cell footprint.
 - `tree_crown.png`: 32×36 RGBA, crown on a transparent background.

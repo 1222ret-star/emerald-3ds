@@ -1,4 +1,4 @@
-Pokémon Emerald 3Ds Dual Screen changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: IVs and EVs on the summary
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: IVs and EVs on the summary
 Applies after 0014-visible-wild.patch; apply with tools/bootstrap.py.
 
 diff --git a/src/pokemon_summary_screen.c b/src/pokemon_summary_screen.c

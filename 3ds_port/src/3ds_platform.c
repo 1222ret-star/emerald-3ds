@@ -407,7 +407,7 @@ void CtrPlatform_Diagnostic(uint32_t frames, uint32_t aPresses, uint32_t checks)
     const CtrVoxelStats *voxel = CtrVoxel_GetStats();
     char text[1020];
     snprintf(text, sizeof(text),
-        "Pokemon Emerald 3Ds Dual Screen\n"
+        "Emerald 3DS\n"
         "FPS: %5.1f FRAME: %-10lu\n"
         "Frame:%6.2f Work:%6.2f ms\n"
         "Peak:%6.2f Slow:%-8lu\n"
@@ -488,7 +488,7 @@ void CtrPlatform_ShowDataError(const char *title, const char *detail)
     consoleInit(GFX_TOP, &console);
     consoleSelect(&console);
     consoleClear();
-    printf("\x1b[2;2HPokemon Emerald 3Ds Dual Screen\n\n\x1b[31m %s\x1b[0m\n\n", title);
+    printf("\x1b[2;2HEmerald 3DS\n\n\x1b[31m %s\x1b[0m\n\n", title);
     for (const char *line = detail; line && *line;)
     {
         const char *end = strchr(line, '\n');

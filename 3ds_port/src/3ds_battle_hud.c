@@ -74,7 +74,9 @@ typedef struct
 
 typedef struct
 {
-    uint8_t kind, sprite, battler;
+    uint8_t kind, sprite, battler, bar;
+    /* The templates its left half and its bar were made from (SlotAlive). */
+    const struct SpriteTemplate *boxTemplate, *barTemplate;
     uint8_t name[POKEMON_NAME_LENGTH + 1];
     uint8_t gender;          /* 0 male, 1 female, 2 none */
     uint8_t level;
@@ -933,6 +935,7 @@ void CtrBattleHud_BoxCreated(unsigned char healthboxSpriteId, unsigned char batt
     memset(slot, 0, sizeof(*slot));
     slot->kind = kind;
     slot->sprite = healthboxSpriteId;
+    slot->boxTemplate = left->template;
     slot->battler = battler;
     slot->name[0] = EOS;
     slot->gender = 2;
@@ -947,7 +950,9 @@ void CtrBattleHud_BoxCreated(unsigned char healthboxSpriteId, unsigned char batt
     }
     else
     {
-        box->barTile = gSprites[left->data[5]].oam.tileNum;  /* hMain_HealthBarSpriteId */
+        slot->bar = (uint8_t)left->data[5];  /* hMain_HealthBarSpriteId */
+        slot->barTemplate = gSprites[slot->bar].template;
+        box->barTile = gSprites[slot->bar].oam.tileNum;
         box->barTiles = (kind == CTR_HUD_SINGLE_OPPONENT || kind == CTR_HUD_DOUBLE_OPPONENT) ? 9 : 8;
     }
     box->pixels = sPixels[battler];
@@ -1123,6 +1128,37 @@ void CtrBattleHud_LiftPlayerTrainer(int lift)
         sOwned = 0xFF;
 }
 
+/*
+ * Whether a box's sprites are still the ones it was made for. Nothing tells
+ * this module when they go: the battle's end frees them with the rest
+ * (ResetSpriteData), and the evolution scene and the egg hatching that follow
+ * are composed as a battle; their mon, given the tiles the box had, was drawn
+ * as the box (over the evolving Pokemon), or cut into pieces of it in 3D. The
+ * bag and the party menu's return (reshow_battle_screen) makes the battlers'
+ * sprites before their boxes, on the old boxes' tiles too. A box whose left
+ * half is gone or another sprite's is forgotten; a bar that is, left out.
+ */
+static bool SlotAlive(int i)
+{
+    const Slot *slot = &sSlots[i];
+    CtrHudBox *box = &sBoxes[i];
+    const struct Sprite *sprite;
+
+    if (slot->sprite >= MAX_SPRITES)
+        return false;
+    sprite = &gSprites[slot->sprite];
+    if (!sprite->inUse || sprite->template != slot->boxTemplate || sprite->oam.tileNum != box->boxTile)
+        return false;
+    if (box->barTiles)
+    {
+        sprite = slot->bar < MAX_SPRITES ? &gSprites[slot->bar] : NULL;
+        if (!sprite || !sprite->inUse || sprite->template != slot->barTemplate
+            || sprite->oam.tileNum != box->barTile)
+            box->barTiles = 0;
+    }
+    return true;
+}
+
 void CtrBattleHud_Clear(void)
 {
     for (int i = 0; i < CTR_HUD_BOXES; ++i)
@@ -1147,6 +1183,11 @@ const CtrHudBox *CtrBattleHud_Boxes(void)
 
         if (!sBoxes[i].used)
             continue;
+        if (!SlotAlive(i))
+        {
+            sBoxes[i].used = false;
+            continue;
+        }
         /* What can change without the game telling: the doubles' numbers, the
          * box's palette. The palette fade is the compositor's tint, not a new
          * picture: one each step would be the whole box drawn again. */

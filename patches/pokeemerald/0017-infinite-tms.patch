@@ -1,4 +1,4 @@
-Pokémon Emerald 3Ds Dual Screen changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: infinite TMs
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: infinite TMs
 Applies after 0016-repel-prompt.patch; apply with tools/bootstrap.py.
 
 diff --git a/src/party_menu.c b/src/party_menu.c

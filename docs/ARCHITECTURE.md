@@ -1,6 +1,6 @@
 # Architecture
 
-Pokémon Emerald 3Ds Dual Screen runs the pokeemerald game code natively on the 3DS's ARM11. The
+Emerald 3DS runs the pokeemerald game code natively on the 3DS's ARM11. The
 game keeps its own main loop (`AgbMain`), its GBA register model and its data;
 the port supplies what the GBA hardware did, through a small bridge.
 

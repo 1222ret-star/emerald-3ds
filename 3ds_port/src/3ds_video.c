@@ -2480,6 +2480,10 @@ static uint32_t sHudFailFrame;
 #define HUD_RETRY_FRAMES 120
 /* Whether a background in front of the boxes drew something last frame. */
 static bool sHudCovered;
+/* This frame's box of each OAM entry (HudBoxOfTile), or -1: read once in
+ * HudFrame, for every pass that asks (the 3D slider's slots compose the
+ * sprites once a group). */
+static int8_t sHudOamBox[128];
 
 static void HudRelease(void)
 {
@@ -2642,6 +2646,14 @@ static int HudBoxOfTile(unsigned tile)
     return -1;
 }
 
+/* Whether OAM entry `i` is a box's left half, where its picture is drawn. */
+static int HudLeftHalf(unsigned i)
+{
+    int k = sHudOamBox[i];
+
+    return k >= 0 && (sMemory.oam[i * 4 + 2] & 1023) == sHud[k].boxTile ? k : -1;
+}
+
 /* A visible OAM entry's place in GBA coordinates, wrapped as the battle reads
  * it: a sprite drawn, or with `window` one in the OBJ window's mode. */
 static bool OamPlace(unsigned i, bool window, unsigned *priority, int *x, int *y, int *w, int *h)
@@ -2725,9 +2737,9 @@ static bool HudCrispPossible(void)
     for (unsigned i = 0; i < 128; ++i)
     {
         unsigned p;
-        int x, y, w, h, k = HudBoxOfTile(sMemory.oam[i * 4 + 2] & 1023);
+        int x, y, w, h, k = HudLeftHalf(i);
 
-        if (k < 0 || (sMemory.oam[i * 4 + 2] & 1023) != sHud[k].boxTile || !HudEntry(i, &p, &x, &y, &w, &h))
+        if (k < 0 || !HudEntry(i, &p, &x, &y, &w, &h))
             continue;
         /* The picture's extent in GBA pixels. */
         w = (int)ceilf(CTR_HUD_W / CTR_BATTLE_ZOOM);
@@ -2738,7 +2750,7 @@ static bool HudCrispPossible(void)
             unsigned q;
             int ox, oy, ow, oh;
 
-            if (j == i || HudBoxOfTile(sMemory.oam[j * 4 + 2] & 1023) >= 0) continue;
+            if (j == i || sHudOamBox[j] >= 0) continue;
             if (!HudEntry(j, &q, &ox, &oy, &ow, &oh)) continue;
             if (q > p || (q == p && j > i)) continue;
             if (ox < x + w && ox + ow > x && oy < y + h && oy + oh > y) return false;
@@ -2759,9 +2771,9 @@ static void HudCoverUpdate(void)
     for (unsigned i = 0; i < 128; ++i)
     {
         unsigned p;
-        int x, y, w, h, k = HudBoxOfTile(sMemory.oam[i * 4 + 2] & 1023);
+        int x, y, w, h, k = HudLeftHalf(i);
 
-        if (k >= 0 && (sMemory.oam[i * 4 + 2] & 1023) == sHud[k].boxTile && HudEntry(i, &p, &x, &y, &w, &h)
+        if (k >= 0 && HudEntry(i, &p, &x, &y, &w, &h)
             && p < front)
             front = p;
     }
@@ -2775,6 +2787,7 @@ static void HudCoverUpdate(void)
 static void HudFrame(void)
 {
     sHud = NULL;
+    memset(sHudOamBox, -1, sizeof(sHudOamBox));
     if (!sBattle)
     {
         if (sHudTex[0][0].data || sHudTex[1][0].data || sHudTex[2][0].data || sHudTex[3][0].data)
@@ -2790,6 +2803,8 @@ static void HudFrame(void)
         if (sHudReady[k] && sHudVersion[k] == sHud[k].version) continue;
         sHudReady[k] = HudUpload(k, &sHud[k]);
     }
+    for (unsigned i = 0; i < 128; ++i)
+        sHudOamBox[i] = (int8_t)HudBoxOfTile(sMemory.oam[i * 4 + 2] & 1023);
 }
 
 /*
@@ -2829,10 +2844,10 @@ static void HudDrawCrisp(unsigned depth)
     for (int i = 127; i >= 0; --i)
     {
         unsigned p;
-        int x, y, w, h, k = HudBoxOfTile(sMemory.oam[i * 4 + 2] & 1023);
+        int x, y, w, h, k = HudLeftHalf((unsigned)i);
         float shift = 0;
 
-        if (k < 0 || (sMemory.oam[i * 4 + 2] & 1023) != sHud[k].boxTile || !HudEntry((unsigned)i, &p, &x, &y, &w, &h))
+        if (k < 0 || !HudEntry((unsigned)i, &p, &x, &y, &w, &h))
             continue;
         /* With the 3D slider up, this eye's: where the box's sprites would
          * be (BattleSpriteShift, as the slots place them), or the scenery's
@@ -5484,7 +5499,7 @@ static void DrawObjects(unsigned priority, bool effects)
         /* An info box drawn from its picture: its sprites are not drawn. */
         if (sHud && sBattle && sObjWinPass == OBJWIN_NONE)
         {
-            int box = HudBoxOfTile(attr2 & 1023);
+            int box = sHudOamBox[i];
 
             if (box >= 0)
             {

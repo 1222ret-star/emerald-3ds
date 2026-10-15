@@ -25,14 +25,14 @@ GPUMEM_WRAPPED := vramAlloc vramMemAlign vramAllocAt vramMemAlignAt vramRealloc 
 LDFLAGS += $(foreach f,$(GPUMEM_WRAPPED),-Wl,--wrap=$(f))
 LIBS := -lctru -lm
 TARGET := emerald3ds
-APP_TITLE := Pokemon Emerald 3Ds Dual Screen
+APP_TITLE := Emerald 3DS
 # File names of the release executable (no spaces).
 APP_FILE := Emerald3DS
 APP_DESCRIPTION := Dual-screen port for Nintendo 3DS
-APP_AUTHOR := ZallaxDev
+APP_AUTHOR := Zallax
 # The release this build is, shown under the title screen (3ds_bottom_ui.c);
 # tools/build_release.py refuses a --version that differs.
-APP_VERSION := 0.3.1
+APP_VERSION := 0.4.0
 # 1: this 3DSX carries its game data in its own RomFS (development builds).
 # The release target always builds an executable without it.
 EMBED_DATA ?= 1
@@ -52,6 +52,8 @@ SOURCES += src/3ds_local.c
 SOURCES += src/3ds_daynight.c
 SOURCES += src/3ds_clock_store.c
 SOURCES += src/3ds_encounters.c
+# The part of the overworld on screen, for the map objects.
+SOURCES += src/3ds_field_view.c
 LIBS := -lcitro2d -lcitro3d $(LIBS)
 OBJECTS := $(patsubst src/%.c,build/%.o,$(SOURCES))
 GAMEFLAGS := -DPORTABLE -DPLATFORM_3DS -D__3DS__ -DMODERN=1 -DUBFIX -D__INTELLISENSE__
@@ -264,6 +266,15 @@ verify: verify-clock-store
 verify: verify-night-windows
 verify: verify-night-lamps
 verify: verify-encounters
+verify: verify-field-view
+.PHONY: verify-field-view
+verify-field-view: build/field_view_test$(EXESUFFIX)
+	./build/field_view_test$(EXESUFFIX)
+
+build/field_view_test$(EXESUFFIX): tests/field_view_test.c src/3ds_field_view.c include/3ds_field_view.h
+	@mkdir -p build
+	$(HOSTCC) -std=c99 -O2 -Wall -Wextra -Werror -DCTR_FIELD_VIEW_HOST -Iinclude tests/field_view_test.c src/3ds_field_view.c -lm -o $@
+
 .PHONY: verify-encounters
 verify-encounters: build/encounters_test.exe
 	./build/encounters_test.exe

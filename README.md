@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="https://i.postimg.cc/Sxn0bM2v/logo.png" alt="Pokémon Emerald 3Ds Dual Screen" width="480">
+  <img src="https://i.postimg.cc/Sxn0bM2v/logo.png" alt="Emerald 3DS" width="480">
 </p>
 
-<h1 align="center">Pokémon Emerald 3Ds Dual Screen</h1>
+<h1 align="center">Emerald 3DS</h1>
 
 <p align="center">
   <strong>Rediscover Hoenn. Two screens. A new perspective.</strong><br>
@@ -35,7 +35,7 @@ The website includes the **complete installation and update instructions**, **so
 
 ---
 
-Pokémon Emerald 3Ds Dual Screen brings the adventure to Nintendo 3DS as
+Emerald 3DS brings the adventure to Nintendo 3DS as
 **native homebrew**. The game runs on the top screen, while a dedicated touch
 interface on the bottom screen replaces the START menu. Enable the optional
 **voxel overworld** to explore supported areas from a new angle.
@@ -278,12 +278,12 @@ or [contributing](CONTRIBUTING.md).
 
 ## Provenance and licences
 
-Only original Pokémon Emerald 3Ds Dual Screen code, tools and documentation are licensed by this
+Only original Emerald 3DS code, tools and documentation are licensed by this
 project ([LICENSE-PORT.md](LICENSE-PORT.md)). The decompilation, the game and
 third-party components keep their own terms; see [NOTICE.md](NOTICE.md) and
 [docs/PROVENANCE.md](docs/PROVENANCE.md). AI-assisted tooling was used during
 development: [AI_DISCLOSURE.md](AI_DISCLOSURE.md).
 
-Pokémon Emerald 3Ds Dual Screen is an unofficial fan project, not affiliated with or endorsed by
+Emerald 3DS is an unofficial fan project, not affiliated with or endorsed by
 Nintendo, Game Freak, Creatures or The Pokémon Company. Pokémon and Pokémon
 Emerald are trademarks of their respective owners.

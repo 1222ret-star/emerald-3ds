@@ -1,6 +1,6 @@
 # Pokémon Émeraude en français
 
-Pokémon Emerald 3Ds Dual Screen fonctionne avec la ROM française propre de
+Emerald 3DS fonctionne avec la ROM française propre de
 **Pokémon Émeraude (France, BPEF)**, avec ses textes et ses graphiques. La
 traduction n'est pas distribuée : elle vient de ta propre ROM, sur ton
 ordinateur ou dans ton navigateur.

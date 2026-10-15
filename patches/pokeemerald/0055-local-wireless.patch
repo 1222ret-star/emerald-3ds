@@ -1,4 +1,4 @@
-Pokémon Emerald 3Ds Dual Screen changes to pret/pokeemerald: local wireless play
+Emerald 3DS changes to pret/pokeemerald: local wireless play
 Applies after 0054-pokedex-capture-layout.patch; apply with tools/bootstrap.py.
 
 diff --git a/data/event_scripts.s b/data/event_scripts.s

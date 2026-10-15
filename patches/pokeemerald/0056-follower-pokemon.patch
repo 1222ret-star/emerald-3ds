@@ -263,7 +263,7 @@ diff --git a/src/follower_mon.c b/src/follower_mon.c
 new file mode 100644
 --- /dev/null
 +++ b/src/follower_mon.c
-@@ -0,0 +1,1572 @@
+@@ -0,0 +1,1575 @@
 +#include <stdio.h>
 +#include <stdlib.h>
 +#include <string.h>
@@ -867,11 +867,14 @@ new file mode 100644
 +
 +static struct ObjectEvent *SpawnFollower(struct ObjectEvent *player)
 +{
-+    u8 id = SpawnSpecialObjectEventParameterized(OBJ_EVENT_GFX_FOLLOWER, MOVEMENT_TYPE_NONE, LOCALID_FOLLOWER,
-+                                                 player->currentCoords.x, player->currentCoords.y,
-+                                                 player->currentElevation);
++    u8 id;
 +    struct ObjectEvent *follower;
 +
++    /* Every room taken by people further up the view: one of them makes way. */
++    FreeObjectEventSlotNearPlayer();
++    id = SpawnSpecialObjectEventParameterized(OBJ_EVENT_GFX_FOLLOWER, MOVEMENT_TYPE_NONE, LOCALID_FOLLOWER,
++                                              player->currentCoords.x, player->currentCoords.y,
++                                              player->currentElevation);
 +    if (id >= OBJECT_EVENTS_COUNT)
 +        return NULL;
 +    follower = &gObjectEvents[id];

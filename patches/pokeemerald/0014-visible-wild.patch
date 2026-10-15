@@ -1,4 +1,4 @@
-Pokémon Emerald 3Ds Dual Screen changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: visible wild Pokemon
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: visible wild Pokemon
 Applies after 0009-optional-settings.patch; apply with tools/bootstrap.py.
 
 diff --git a/src/overworld.c b/src/overworld.c

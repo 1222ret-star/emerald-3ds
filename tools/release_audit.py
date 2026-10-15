@@ -16,7 +16,7 @@ What fails the audit:
 * files larger than 1 MiB that are not listed in the allowlist;
 * media files (images, audio, tile data) with no provenance entry;
 * absolute paths of a local machine, tokens and private keys;
-* anything that looks like a GBA ROM (header, logo) or a Pokémon Emerald 3Ds Dual Screen data pack;
+* anything that looks like a GBA ROM (header, logo) or a Emerald 3DS data pack;
 * third_party/ directories without a licence and a provenance entry;
 * any pattern of the local denylist (`.public-denylist`, never versioned);
 * with --rom: any file that contains a run of the ROM's own bytes;

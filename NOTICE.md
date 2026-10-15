@@ -1,14 +1,14 @@
 # Notices
 
-Pokémon Emerald 3Ds Dual Screen combines original port code with the pret decompilation and a few
+Emerald 3DS combines original port code with the pret decompilation and a few
 third-party components. Each keeps its own terms; `LICENSE-PORT.md` covers
-only the original Pokémon Emerald 3Ds Dual Screen work.
+only the original Emerald 3DS work.
 
 ## Upstream decompilation
 
 - **pret/pokeemerald** — https://github.com/pret/pokeemerald, pinned in
   `upstream.lock`. Fetched by `tools/bootstrap.py`, never vendored here. The
-  repository does not state a licence; Pokémon Emerald 3Ds Dual Screen does not relicense it. The
+  repository does not state a licence; Emerald 3DS does not relicense it. The
   files in `patches/pokeemerald/` carry the port's changes and, as patch
   context, lines of the upstream files they modify.
 

@@ -1,4 +1,4 @@
-Pokémon Emerald 3Ds Dual Screen changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Italian layout, units, berry order and team EXP message
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Italian layout, units, berry order and team EXP message
 Applies after 0048-french-native-pokedex-units.patch; apply with tools/bootstrap.py.
 
 The Italian variant behaves like the French one where the retail ROM does: metric

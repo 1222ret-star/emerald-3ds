@@ -1,6 +1,6 @@
 # Pokémon Smeraldo in italiano
 
-Pokémon Emerald 3Ds Dual Screen funziona con la ROM italiana pulita di
+Emerald 3DS funziona con la ROM italiana pulita di
 **Pokémon Versione Smeraldo (Italia, BPEI)**, con i suoi testi e le sue grafiche. La
 traduzione non viene distribuita: arriva dalla tua ROM, sul tuo computer o nel browser.
 

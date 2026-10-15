@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write the recipe that lets the Pokémon Emerald 3Ds Dual Screen Builder rebuild the game data.
+"""Write the recipe that lets the Emerald 3DS Builder rebuild the game data.
 
 Run on the maintainer's machine after a build, with the supported ROM:
 

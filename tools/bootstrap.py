@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build a complete source tree: pinned upstream + Pokémon Emerald 3Ds Dual Screen patches + port.
+"""Build a complete source tree: pinned upstream + Emerald 3DS patches + port.
 
     python tools/bootstrap.py                 # -> build/upstream
     python tools/bootstrap.py --make -j8      # and build the 3DSX there

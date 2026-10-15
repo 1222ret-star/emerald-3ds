@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Assemble a Pokémon Emerald 3Ds Dual Screen release.
+"""Assemble a Emerald 3DS release.
 
     python tools/build_release.py --version 0.1.0 --rom baserom.gba \\
         --gba-elf path/to/pokeemerald.elf

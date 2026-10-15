@@ -1,4 +1,4 @@
-# Pokémon Emerald 3Ds Dual Screen Builder
+# Emerald 3DS Builder
 
 Turns the player's own Pokémon Emerald (USA, Europe), Pokémon Esmeralda
 (Spain) or Pokémon Émeraude (France) ROM into `emerald3ds.pak` and installs

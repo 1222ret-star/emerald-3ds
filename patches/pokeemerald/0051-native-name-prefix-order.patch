@@ -1,4 +1,4 @@
-Pokemon Emerald 3Ds Dual Screen changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: the translated ROMs keep their own name then prefix order
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: the translated ROMs keep their own name then prefix order
 Applies after 0050-italian-ending-tilemap.patch; apply with tools/bootstrap.py.
 
 --- a/src/battle_message.c

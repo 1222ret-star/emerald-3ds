@@ -1,4 +1,4 @@
-Pokémon Emerald 3Ds Dual Screen changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Spanish berry tag layout
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Spanish berry tag layout
 Applies after 0005-port-hooks.patch; apply with tools/bootstrap.py.
 
 diff --git a/src/berry_tag_screen.c b/src/berry_tag_screen.c

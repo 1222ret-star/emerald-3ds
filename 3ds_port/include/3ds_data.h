@@ -13,7 +13,7 @@
  *   loose  sdmc:/3ds/emerald3ds/devdata/<path>, for iterating on one
  *          generated file without rebuilding anything else;
  *   pak    sdmc:/3ds/emerald3ds/emerald3ds.pak, the single data pack the
- *          Pokemon Emerald 3Ds Dual Screen Builder generates from the player's own ROM.
+ *          Emerald 3DS Builder generates from the player's own ROM.
  *
  * Files that only describe the executable (asset index, relocation tables,
  * shaders, the engine ABI) are not game data and are always read from the
