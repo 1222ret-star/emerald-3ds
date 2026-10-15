@@ -269,7 +269,7 @@ build/root/data/maps.o: build/maps.s build/map_layouts.inc $(ROOT)/data/layouts/
 	@mkdir -p $(dir $@)
 	@$(call scan_data_deps,3ds_port/build/maps.s)
 	cd $(ROOT) && "$(PREPROC)" 3ds_port/build/maps.s charmap.txt | "$(CPPTOOL)" -Iinclude -I. - \
-		| "$(PREPROC)" -ie 3ds_port/build/maps.s charmap.txt | $(ASM_PSEUDO_OP_CONV) - \
+		| "$(PREPROC)" -ie 3ds_port/build/maps.s charmap.txt | $(ASM_PSEUDO_OP_CONV) \
 		| "$(AS)" $(ASFLAGS) -o $(CURDIR)/$@
 
 # What a data file .includes and #includes, listed by scaninc as the root
@@ -284,7 +284,7 @@ build/root/data/%.o: $(ROOT)/data/%.s Makefile full.mk
 	@mkdir -p $(dir $@)
 	@$(call scan_data_deps,data/$*.s)
 	cd $(ROOT) && "$(PREPROC)" data/$*.s charmap.txt | "$(CPPTOOL)" -Iinclude -I. - \
-		| "$(PREPROC)" -ie data/$*.s charmap.txt | $(ASM_PSEUDO_OP_CONV) - \
+		| "$(PREPROC)" -ie data/$*.s charmap.txt | $(ASM_PSEUDO_OP_CONV) \
 		| "$(AS)" $(ASFLAGS) -o $(CURDIR)/$@
 
 # The samples are .incbin'd from paths relative to the repository root, and the
@@ -297,7 +297,7 @@ SAMPLE_OVERLAY_SED := $(foreach f,$(SAMPLE_OVERLAY),-e 's\#"sound/direct_sound_s
 build/root/data/sound_data.o: $(ROOT)/data/sound_data.s $(ROOT_SOUND_BIN_SRCS) $(SAMPLE_OVERLAY) Makefile full.mk
 	@mkdir -p $(dir $@)
 	@$(call scan_data_deps,data/sound_data.s)
-	cd $(ROOT) && "$(PREPROC)" data/sound_data.s charmap.txt | "$(CPPTOOL)" -Iinclude -I. - 		| "$(PREPROC)" -ie data/sound_data.s charmap.txt | $(ASM_PSEUDO_OP_CONV) - 		| sed $(SAMPLE_OVERLAY_SED) | "$(AS)" $(ASFLAGS) -o $(CURDIR)/$@
+	cd $(ROOT) && "$(PREPROC)" data/sound_data.s charmap.txt | "$(CPPTOOL)" -Iinclude -I. - 		| "$(PREPROC)" -ie data/sound_data.s charmap.txt | $(ASM_PSEUDO_OP_CONV) 		| sed $(SAMPLE_OVERLAY_SED) | "$(AS)" $(ASFLAGS) -o $(CURDIR)/$@
 endif
 
 build/root/sound/songs/%.o: $(ROOT)/sound/songs/%.s
