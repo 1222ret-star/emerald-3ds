@@ -27,6 +27,42 @@ def encoded(data: bytes) -> str:
     return ",".join("0x%02X" % byte for byte in data)
 
 
+TEAM_EXP = "sText_PkmnTeamGainedEXP"
+TEAM_EXP_SPANISH = r'_("¡El resto del equipo ganó\npuntos de experiencia!\p")'
+
+
+def _directive_before(text: str, position: int) -> str:
+    """The preprocessor line closest above `position`, past comments."""
+    for line in reversed(text[:position].splitlines()):
+        line = line.strip()
+        if line.startswith("#"):
+            return line
+        if line and not line.startswith(("//", "/*", "*")):
+            return ""
+    return ""
+
+
+def localize_port_battle_text(text: str) -> str:
+    """The port's own battle line the retail Spanish ROM has no text for: the
+    rest of the party's EXP. French and Italian carry theirs in the source,
+    one branch each of a PORT_BRIDGE language conditional; Spanish gets the
+    default (#else) branch, or the only definition when there is no
+    conditional. The wild and foe prefixes stay the ROM's own (" salvaje",
+    after the name: 0051-native-name-prefix-order)."""
+    pattern = r"(static const u8 " + TEAM_EXP + r"\[\] = )[^;]+;"
+    matches = list(re.finditer(pattern, text))
+    if not matches:
+        raise ValueError("Missing battle text: " + TEAM_EXP)
+    match = matches[-1]
+    if len(matches) > 1:
+        branches = [_directive_before(text, m.start()) for m in matches]
+        language = re.compile(r"#(?:el)?if defined\(PORT_BRIDGE\) && GAME_LANGUAGE == LANGUAGE_[A-Z]+$")
+        if (branches[-1] != "#else" or not branches[0].startswith("#if ")
+                or not all(language.match(b) for b in branches[:-1])):
+            raise ValueError("Duplicate battle text outside its language conditional: " + TEAM_EXP)
+    return text[:match.start()] + match[1] + TEAM_EXP_SPANISH + ";" + text[match.end():]
+
+
 def stage(tree: Path, rom_path: Path) -> None:
     manifest = json.loads(gzip.decompress((ROOT / "tools/locales/spanish.json.gz").read_bytes()))
     rom = load_rom(rom_path)
@@ -81,6 +117,8 @@ def stage(tree: Path, rom_path: Path) -> None:
             else:
                 raise ValueError("Unknown edit kind: " + kind)
             text = text[:start] + replacement + text[end:]
+        if relative == "src/battle_message.c":
+            text = localize_port_battle_text(text)
         writes[path] = text.encode()
 
     for relative, offset, size in manifest["graphics"]:

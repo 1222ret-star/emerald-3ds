@@ -195,12 +195,14 @@ def backdrop():
     sd.rectangle(S(cx + 34, cy - band, cx + R, cy + band), fill=255)
     ring(36, 26)
     sd.ellipse(S(cx - 15, cy - 15, cx + 15, cy + 15), fill=255)
-    lower = pic.blank()
-    ImageDraw.Draw(lower).pieslice(S(cx - R, cy - R, cx + R, cy + R), 0, 180, fill=255)
-    pic.paint((30, 100, 88), lower, 0.30)
+    # the halves as a real ball has them: the top (red) one darker, the
+    # bottom (white) one lighter
     upper = pic.blank()
     ImageDraw.Draw(upper).pieslice(S(cx - R, cy - R, cx + R, cy + R), 180, 360, fill=255)
-    pic.paint((130, 220, 192), upper, 0.16)
+    pic.paint((30, 100, 88), upper, 0.30)
+    lower = pic.blank()
+    ImageDraw.Draw(lower).pieslice(S(cx - R, cy - R, cx + R, cy + R), 0, 180, fill=255)
+    pic.paint((130, 220, 192), lower, 0.16)
     lip_lo = ImageChops.subtract(ImageChops.offset(shapes, 0, SS), shapes)
     lip_hi = ImageChops.subtract(ImageChops.offset(shapes, 0, -SS), shapes)
     pic.paint_img(vgrad(pic, 0, H, [(0, (44, 130, 112)), (1, (34, 108, 94))]), shapes)

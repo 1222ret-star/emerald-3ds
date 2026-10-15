@@ -572,9 +572,13 @@ static int CompareWarmEntries(const void *a, const void *b)
     return x->idx < y->idx ? -1 : x->idx > y->idx;
 }
 
+/* Set at exit (CtrAssets_StopWarmup): the worker stops before the file
+ * system it reads from is closed. */
+static volatile bool sWarmStop, sWarmRunning;
+
 static bool WarmRoom(void)
 {
-    return sStats.bytes < sBudget / WARM_BUDGET_SHARE;
+    return !sWarmStop && sStats.bytes < sBudget / WARM_BUDGET_SHARE;
 }
 
 /* Claims the payloads [first, end) of the list that nobody holds yet. */
@@ -714,9 +718,20 @@ static void WarmWorker(void *arg)
     }
     free(run);
     free(list);
-    CtrLog_Write(CTR_LOG_FS, "assets warmed: %lu KiB of %lu payloads in %.0f ms (%s)",
-                 (unsigned long)(sStats.bytes >> 10), (unsigned long)sStats.loads,
-                 CtrPlatform_TickMs(CtrPlatform_Ticks() - begin), count ? "pack runs" : "file by file");
+    CtrLog_Write(CTR_LOG_FS, "assets warmed%s: %lu KiB of %lu payloads in %.0f ms (%s)",
+                 sWarmStop ? " until exit" : "", (unsigned long)(sStats.bytes >> 10),
+                 (unsigned long)sStats.loads, CtrPlatform_TickMs(CtrPlatform_Ticks() - begin),
+                 count ? "pack runs" : "file by file");
+    sWarmRunning = false;
+}
+
+/* Exiting with the warm-up under way, its reads failed in the log as the
+ * RomFS went away under them: it stops first, a payload at most later. */
+void CtrAssets_StopWarmup(void)
+{
+    sWarmStop = true;
+    for (unsigned waited = 0; sWarmRunning && waited < 200; ++waited)
+        CtrPlatform_SleepUs(5000);
 }
 
 void CtrAssets_StartWarmup(void)
@@ -727,6 +742,7 @@ void CtrAssets_StartWarmup(void)
         return;
     sWarming = calloc(sEntryCount, 1);
     list = malloc(sEntryCount * sizeof(*list));
+    sWarmRunning = true;
     if (sWarming == NULL || list == NULL
         /*
          * On the system core: on the application core, below the game, the
@@ -738,6 +754,7 @@ void CtrAssets_StartWarmup(void)
         || !CtrPlatform_StartThread(WarmWorker, list, 16 * 1024, 1))
     {
         free(list);
+        sWarmRunning = false;
         CtrLog_Write(CTR_LOG_ERROR, "assets: no warm-up worker; payloads load on demand");
     }
 }

@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import __version__, pak
+from . import __version__, followers, pak
 from .build import Payload, build_pack
 from .errors import BuilderError
 from .recipe import RecipeError
@@ -33,6 +33,9 @@ STAGES = {
     "Extracting game data": "data",
     "Preparing the 3D scenery inputs": "scenery",
     "Generating the 3D scenery": "scenery",
+    # Under "scenery": pages before followers map an unknown stage to their
+    # first phase, which would step their indicator back.
+    "Fetching the follower sprites": "scenery",
     "Writing the data pack": "verify",
     "Verifying the data pack": "verify",
     "Done": "verify",
@@ -50,7 +53,9 @@ def build_pack_for_web(rom_path, payload_path, output_path, progress_callback=No
     """ROM -> emerald3ds.pak with in-process generators.
 
     progress_callback(stage, fraction, message): stage is one of "rom", "data",
-    "scenery", "verify"; fraction is the overall position (0..1)."""
+    "scenery", "verify"; fraction is the overall position (0..1). The follower
+    sprites come from jsDelivr one by one (followers.py), the one host the
+    site's Content-Security-Policy lets the page reach besides its own."""
     manifest = None
     if manifest_path is not None:
         try:
@@ -65,8 +70,10 @@ def build_pack_for_web(rom_path, payload_path, output_path, progress_callback=No
             progress_callback(STAGES.get(message.split(": ", 1)[0], "data"), fraction, message)
 
     rom = load_rom(Path(rom_path), supported_sha1s(manifest))
+    fetcher = followers.Fetcher(followers.load_sources(), fetch=followers.xhr_fetch, workers=1,
+                                hosts=followers.HOSTS[1:])
     info = build_pack(Path(rom_path), Payload(Path(payload_path)), Path(output_path), report,
-                      runner="inprocess", rom=rom)
+                      runner="inprocess", rom=rom, follower_fetcher=fetcher)
     info.pop("payload")
     expected = next((v["dataAbi"] for v in rom_variants(manifest) if v["rom"]["sha1"] == rom.sha1),
                     None) if manifest is not None else None

@@ -21,6 +21,9 @@
 void CtrBottom_Blit(const uint16_t *canvas, int x0, int x1);
 /* Same, restricted to rows [y0, y1) of those columns. */
 void CtrBottom_BlitRect(const uint16_t *canvas, int x0, int y0, int x1, int y1);
+/* What the last Blit or BlitRect spent copying to the screen and flushing the
+ * data cache, in system ticks (0 if nothing was sent): the slow-redraw log. */
+void CtrBottom_LastBlitTicks(uint64_t *copy, uint64_t *flush);
 /* The whole canvas at level/4 of its brightness (0..4), for fades. */
 void CtrBottom_BlitDim(const uint16_t *canvas, int level);
 
@@ -28,6 +31,9 @@ void CtrBottom_BlitDim(const uint16_t *canvas, int level);
  * scanned and before the game reads its keys. */
 void CtrBottom_Init(void);
 void CtrBottom_Frame(void);
+/* The game's soft reset: forget the game it was in (back to the title's
+ * screen, no menu session, plan or focus) and let the top screen go. */
+void CtrBottom_SoftReset(void);
 /* Keys the bottom screen presses on the player's behalf this frame. */
 uint16_t CtrBottom_InjectedKeys(void);
 /* The player's keys as the game should see them: none while the button
@@ -48,7 +54,7 @@ uint16_t CtrBottom_FilterKeys(uint16_t held);
 #define CTR_SECTION_BALL_TOP CTR_SECTION_RGB(22, 28, 23)
 #define CTR_SECTION_BALL_RADIUS 64
 /* The Poké Ball, 2R x 2R from the section's centre minus R: 0 nothing, 1
- * the line colour, 2 the top half's. Ready after CtrBottom_Init. */
+ * the line colour, 2 the bottom (lighter) half's. Ready after CtrBottom_Init. */
 const uint8_t *CtrBottom_BallMask(void);
 
 #endif

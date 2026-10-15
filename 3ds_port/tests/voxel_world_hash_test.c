@@ -44,9 +44,13 @@ const struct MapHeader *const GetMapHeaderFromConnection(const struct MapConnect
 unsigned VoxelRegions_RoleAt(unsigned id, int x, int y)
 { (void)id; (void)x; (void)y; return VOXEL_ROLE_FLOOR; }
 VoxelVisualShape Voxel_BehaviorShape(unsigned b) { (void)b; return VOXEL_SHAPE_COUNT; }
-int VoxelTree_Part(int id) { (void)id; return -1; }
-int VoxelTree_GroundMetatile(int id) { return id; }
+int VoxelTree_Part(const void *secondaryTileset, int metatileId)
+{ (void)secondaryTileset; (void)metatileId; return -1; }
+int VoxelTree_GroundMetatile(const void *secondaryTileset, int metatileId)
+{ (void)secondaryTileset; return metatileId; }
 bool VoxelRelief_IsDrawn(const VoxelMapInstance *inst) { (void)inst; return false; }
+const u16 *MapGridGetCameraBorderAt(int x, int y, u8 *index)
+{ (void)x; (void)y; *index = 0; return NULL; }
 
 static void Check(int x0, int y0, int x1, int y1)
 {

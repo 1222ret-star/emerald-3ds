@@ -1,4 +1,4 @@
-Pokémon Emerald 3Ds Dual Screen changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Trainer Hill floor tables copied by name
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Trainer Hill floor tables copied by name
 Applies after 0005-port-hooks.patch; apply with tools/bootstrap.py.
 
 diff --git a/src/trainer_hill.c b/src/trainer_hill.c

@@ -10,7 +10,7 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import pak
+from . import followers, pak
 from .errors import BuilderError
 from .recipe import Recipe, RecipeError, build_entry, recipe_rom_sha1
 from .rom import Rom, load_rom
@@ -96,12 +96,18 @@ class Progress:
 
 
 def build_pack(rom_path: Path, payload: Payload, out_pak: Path, progress=None,
-               keep_workdir: bool = False, runner: str = "subprocess", rom: Rom | None = None) -> dict:
+               keep_workdir: bool = False, runner: str = "subprocess", rom: Rom | None = None,
+               follower_fetcher: "followers.Fetcher | None | bool" = True) -> dict:
     """Generate emerald3ds.pak from the ROM. Returns a summary.
 
     `runner` picks how the voxel generators run (see voxel.py); `rom` lets a
     caller that already holds the checked ROM in memory skip reading it again.
-    The summary's `timings` holds (step, seconds) for the slow parts."""
+    The summary's `timings` holds (step, seconds) for the slow parts.
+
+    `follower_fetcher` gets the optional follower sprites (followers.py): True
+    for the default one (local copies, the cache, the network), False for
+    none, or a Fetcher. They go into the pack but not into its ABI; what
+    cannot be had is left out and the build goes on."""
     report = Progress(progress)
     timings: list[tuple[str, float]] = []
     payload.check(need_executables=False)
@@ -153,12 +159,24 @@ def build_pack(rom_path: Path, payload: Payload, out_pak: Path, progress=None,
     if abi != recipe.engine_abi:
         raise BuilderError("The generated data does not match this release (ABI %08x, expected %08x)."
                            % (abi, recipe.engine_abi), code="abi_mismatch")
+
+    optional: dict[str, bytes] = {}
+    follower_info = None
+    if follower_fetcher is True:
+        follower_fetcher = followers.default_fetcher()
+    if follower_fetcher:
+        report(0.9, "Fetching the follower sprites")
+        start = time.perf_counter()
+        optional, follower_info = followers.build_section(
+            follower_fetcher, report.span(0.9, 0.92, "Fetching the follower sprites"),
+            languages=[followers.ROM_LANGUAGES.get(rom.code[3:4], "en")])
+        timings.append(("followers", time.perf_counter() - start))
     report(0.92, "Writing the data pack")
-    info = pak.write_pak(out_pak, sorted(files.items()), abi, bytes.fromhex(rom.sha1))
+    info = pak.write_pak(out_pak, sorted({**files, **optional}.items()), abi, bytes.fromhex(rom.sha1))
     report(0.96, "Verifying the data pack")
     with pak.PakReader(out_pak) as reader:
         reader.verify()
     report(1.0, "Done")
     return {"entries": info["entries"], "bytes": info["bytes"], "abi": abi, "release": recipe.release,
             "rom": rom.code, "timings": [(name, round(sec, 2)) for name, sec in timings],
-            "payload": payload}
+            "followers": follower_info, "payload": payload}

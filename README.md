@@ -1,8 +1,8 @@
 <p align="center">
-  <img src="https://i.postimg.cc/Sxn0bM2v/logo.png" alt="Pokémon Emerald 3Ds Dual Screen" width="480">
+  <img src="https://i.postimg.cc/Sxn0bM2v/logo.png" alt="Emerald 3DS" width="480">
 </p>
 
-<h1 align="center">Pokémon Emerald 3Ds Dual Screen</h1>
+<h1 align="center">Emerald 3DS</h1>
 
 <p align="center">
   <strong>Rediscover Hoenn. Two screens. A new perspective.</strong><br>
@@ -35,7 +35,7 @@ The website includes the **complete installation and update instructions**, **so
 
 ---
 
-Pokémon Emerald 3Ds Dual Screen brings the adventure to Nintendo 3DS as
+Emerald 3DS brings the adventure to Nintendo 3DS as
 **native homebrew**. The game runs on the top screen, while a dedicated touch
 interface on the bottom screen replaces the START menu. Enable the optional
 **voxel overworld** to explore supported areas from a new angle.
@@ -89,6 +89,7 @@ interface on the bottom screen replaces the START menu. Enable the optional
 | **Native 3DS homebrew** | Runs directly on the console's ARM11 using libctru, Citro2D and Citro3D, without an emulator. |
 | **Two screens, one adventure** | The game on top, with a dedicated touch interface below in place of the START menu. |
 | **Optional voxel overworld** | Modelled buildings, trees, signposts and terrain relief, with adjustable camera angle and zoom. |
+| **Optional day/night lighting** | Eased morning, daylight, sunset and night outdoors in both 2D and voxel mode, an independently adjustable visual clock, and experimental moving solar shadows, warm glass on supported voxel buildings and original Rustboro lamps. |
 | **Built from your own cartridge** | The builder generates the game data locally from your own dump. No ROM content is distributed. |
 
 ### A new perspective on Hoenn
@@ -103,6 +104,56 @@ set your camera.
 > project moves forward.
 
 ## Getting started
+
+### Day/night and clock speed
+
+In **OPTION → ENHANCEMENTS**, set **DAY / NIGHT** to **AUTO** to enable
+outdoor lighting inspired by HeartGold/SoulSilver. It is **OFF by default**;
+indoors, caves, underwater areas, menus and classic battles retain their
+original colours. Voxel battle scenery follows the outdoor lighting.
+
+The moonlight refinement adds a restrained blue ambience instead of only
+darkening the world. Night colours remain more readable, while supported voxel
+windows and street lamps retain their warm emission. It uses the same AUTO
+setting and eased transitions and has user-reported physical-console acceptance.
+
+**CLOCK SPEED** selects **1X, 6X, 12X, 24X, 60X or 120X**. At 1X, lighting
+follows Emerald's local clock, including the time set at the start of the
+game. Higher speeds advance a separate feature clock: 60X completes a day
+in 24 real minutes and 120X in 12 minutes. Game speed does not accelerate
+this clock. The experimental follow-up also accelerates berry growth;
+daily events and the GBA save format remain original.
+
+The settings survive a restart. Initially, the accelerated clock starts from
+the game's local time. Saving also preserves its accumulated offset and pending
+berry fractions in an auxiliary file. Changing speeds, returning to 1X or
+disabling the visual consumers keeps the offset instead of resetting it.
+Console sleep and offline time advance at 1X, not the selected accelerated rate.
+
+**WILD POKEMON → TIMED** optionally changes selected grass slots by morning,
+day and night on routes 101–104, 110, 116–117, 119–121 and 123.
+**ORIGINAL** is the default and preserves the original tables. Levels, rates,
+rare slots, water, fishing, caves and special encounters stay unchanged.
+Random encounters, Sweet Scent and new visible Pokémon share the schedule.
+
+**SHOW CLOCK → ON** adds `HH:MM`, the time band and rate below the location
+name on the bottom MAP screen. It is OFF by default. The clock, encounters
+and lighting work independently and share the selected clock speed.
+See the [day/night test guide](docs/DAY_NIGHT.md) before publishing a build.
+The [city-lighting extension](docs/CITY_LIGHTS.md) extends voxel emission to
+shared Pokémon Centers, marts, gyms, Rustboro apartment blocks and Devon,
+plus the original street lamps and small ground-light pools. It follows
+the same clock without a separate setting and has user-reported 3DS acceptance.
+Unmodelled buildings and classic 2D windows do not receive local emission.
+The follow-up adds [Dewford exterior models](docs/DEWFORD_3D.md) and
+isolates the [caught-mon Pokédex layout](docs/POKEDEX_CAPTURE.md) from voxel
+battles. Its window masks use a fixed startup pool; the user confirms lights
+and Dewford models on a physical 3DS, followed by acceptance of the gym-side sign
+and caught-mon Pokédex clipping/scroll corrections on October 12, 2026.
+The experimental follow-up also accelerates berry growth and preserves the
+clock offset and pending fractions alongside the save. Daily events remain
+on the original RTC; sleep/offline time advances at 1X. Back up the auxiliary
+`emerald3ds.clock` and `.clock.bak` files together with `emerald3ds.sav`.
 
 ### Recommended: use the website
 
@@ -167,10 +218,15 @@ in the releases.
 python tools/bootstrap.py        # pinned upstream + patches + port -> build/upstream
 python tools/bootstrap.py --make # also builds the 3DSX there
 python tools/bootstrap.py --make --spanish-rom esmeralda.gba  # Spanish build
+python tools/bootstrap.py --make --french-rom emeraude.gba    # French build
+python tools/bootstrap.py --make --italian-rom smeraldo.gba   # Italian build
 ```
 
-The Spanish build takes its texts and graphics from your own clean Spanish
-(BPES) ROM; see [Pokémon Esmeralda en español](docs/SPANISH.md).
+The Spanish, French and Italian builds take their texts and graphics from your own
+clean Spanish (BPES), French (BPEF) or Italian (BPEI) ROM; see
+[Pokémon Esmeralda en español](docs/SPANISH.md),
+[Pokémon Émeraude en français](docs/FRENCH.md) and
+[Pokémon Smeraldo in italiano](docs/ITALIAN.md).
 
 Start with the [development guide](docs/DEVELOPMENT.md) for requirements,
 the development loop, loose data, data packs and host tests.
@@ -184,6 +240,8 @@ the development loop, loose data, data packs and host tests.
 | [Install and update](docs/INSTALLATION.md) | Installation, sound setup and updating an existing installation. |
 | [Development](docs/DEVELOPMENT.md) | Build requirements, workflow and tests. |
 | [Spanish build](docs/SPANISH.md) | Playing in Spanish with your own Pokémon Esmeralda (Spain) ROM. |
+| [French build](docs/FRENCH.md) | Playing in French with your own Pokémon Émeraude (France) ROM. |
+| [Italian build](docs/ITALIAN.md) | Playing in Italian with your own Pokémon Versione Smeraldo (Italy) ROM. |
 | [Architecture](docs/ARCHITECTURE.md) | How the engine and the 3DS backend fit together. |
 | [Asset pipeline](docs/ASSET_PIPELINE.md) | How game data is prepared for the port. |
 | [Releasing](docs/RELEASING.md) | Building and packaging a release. |
@@ -220,12 +278,12 @@ or [contributing](CONTRIBUTING.md).
 
 ## Provenance and licences
 
-Only original Pokémon Emerald 3Ds Dual Screen code, tools and documentation are licensed by this
+Only original Emerald 3DS code, tools and documentation are licensed by this
 project ([LICENSE-PORT.md](LICENSE-PORT.md)). The decompilation, the game and
 third-party components keep their own terms; see [NOTICE.md](NOTICE.md) and
 [docs/PROVENANCE.md](docs/PROVENANCE.md). AI-assisted tooling was used during
 development: [AI_DISCLOSURE.md](AI_DISCLOSURE.md).
 
-Pokémon Emerald 3Ds Dual Screen is an unofficial fan project, not affiliated with or endorsed by
+Emerald 3DS is an unofficial fan project, not affiliated with or endorsed by
 Nintendo, Game Freak, Creatures or The Pokémon Company. Pokémon and Pokémon
 Emerald are trademarks of their respective owners.

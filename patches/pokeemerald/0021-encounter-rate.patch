@@ -1,4 +1,4 @@
-Pokémon Emerald 3Ds Dual Screen changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: wild encounter rate
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: wild encounter rate
 Applies after 0009-optional-settings.patch; apply with tools/bootstrap.py.
 
 diff --git a/src/wild_encounter.c b/src/wild_encounter.c

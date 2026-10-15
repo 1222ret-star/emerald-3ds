@@ -307,6 +307,8 @@ u16 Port_FontProbe_CompareNormalLatinGlyph(u16 glyphId)
 #define CTR_SAVE_PATH CTR_DATA_DIR "emerald3ds.sav"
 /* Where earlier builds kept the save; moved once on first start. */
 #define CTR_OLD_SAVE_PATH "sdmc:/3ds/pokeemerald/pokeemerald.sav"
+/* Bytes accepted after the 128 KiB flash: mGBA's clock footer is 16. */
+#define SAVE_TRAILER_MAX 512
 
 static bool sSaveAvailable;
 
@@ -326,14 +328,17 @@ static void MigrateOldSave(void)
 void Port_SaveInit(void)
 {
     FILE *file;
-    long size;
+    long size, flashBytes;
     bool loaded;
+    /* A measured scenario plays from the save it was recorded with. */
+    const char *path = CtrScenario_SavePath() ? CtrScenario_SavePath() : CTR_SAVE_PATH;
 
     memset(FLASH_BASE, 0xFF, sizeof(FLASH_BASE));
     sSaveAvailable = false;
 
-    MigrateOldSave();
-    file = fopen(CTR_SAVE_PATH, "rb");
+    if (!CtrScenario_SavePath())
+        MigrateOldSave();
+    file = fopen(path, "rb");
     if (file == NULL)
     {
         /* Created by the first real save, not while starting a new game. */
@@ -341,28 +346,44 @@ void Port_SaveInit(void)
         CtrLog_Write(sSaveAvailable ? CTR_LOG_FS : CTR_LOG_ERROR,
                      "save %s: %s (errno=%d)",
                      sSaveAvailable ? "will be created" : "unavailable",
-                     CTR_SAVE_PATH, errno);
+                     path, errno);
         return;
     }
 
     size = -1;
     if (fseek(file, 0, SEEK_END) == 0)
         size = ftell(file);
-    loaded = size >= 0 && (u32)size <= sizeof(FLASH_BASE)
+    /* Much longer than the flash plus a trailer is not an Emerald save (a
+     * 256 KiB or 1 MiB image of another game): refused and never written. */
+    if (size > (long)(sizeof(FLASH_BASE) + SAVE_TRAILER_MAX))
+    {
+        fclose(file);
+        CtrLog_Write(CTR_LOG_ERROR, "save refused: %s is %ld bytes, not a 128 KiB flash image",
+                     path, size);
+        return;
+    }
+    /* A save from a cartridge dump or another emulator can carry more than
+     * the flash: mGBA appends its 16 bytes of clock state. The flash is the
+     * first 128 KiB, and whatever follows it is left in the file as it is. */
+    flashBytes = size > (long)sizeof(FLASH_BASE) ? (long)sizeof(FLASH_BASE) : size;
+    loaded = size >= 0
           && fseek(file, 0, SEEK_SET) == 0
-          && fread(FLASH_BASE, 1, (size_t)size, file) == (size_t)size && !ferror(file);
+          && fread(FLASH_BASE, 1, (size_t)flashBytes, file) == (size_t)flashBytes && !ferror(file);
     if (fclose(file) != 0)
         loaded = false;
     if (!loaded)
     {
         memset(FLASH_BASE, 0xFF, sizeof(FLASH_BASE));
-        CtrLog_Write(CTR_LOG_ERROR, "save read failed: %s (size=%ld)", CTR_SAVE_PATH, size);
+        CtrLog_Write(CTR_LOG_ERROR, "save read failed: %s (size=%ld)", path, size);
         return;
     }
 
     /* A short file still holds whole sectors; Emerald recovers the older slot. */
     sSaveAvailable = true;
-    CtrLog_Write(CTR_LOG_FS, "save loaded: %s (%ld bytes)", CTR_SAVE_PATH, size);
+    CtrLog_Write(CTR_LOG_FS, "save loaded: %s (%ld bytes)", path, size);
+    if (size > flashBytes)
+        CtrLog_Write(CTR_LOG_FS, "save: %ld bytes after the flash image kept as they are",
+                     size - flashBytes);
 }
 
 bool Port_SaveIsAvailable(void)
@@ -379,6 +400,12 @@ u16 Port_WriteFlash(u32 offset, const void *data, u32 size)
     if (!sSaveAvailable || data == NULL || offset > sizeof(FLASH_BASE)
      || size > sizeof(FLASH_BASE) - offset)
         return 1;
+    /* A scenario being played saves into memory only. */
+    if (!CtrScenario_SaveWrites())
+    {
+        memmove(FLASH_BASE + offset, data, size);
+        return 0;
+    }
 
     file = fopen(CTR_SAVE_PATH, "r+b");
     if (file == NULL && errno == ENOENT)
@@ -390,7 +417,8 @@ u16 Port_WriteFlash(u32 offset, const void *data, u32 size)
      * grown from the mirror first and only then is the range written. */
     ok = fseek(file, 0, SEEK_END) == 0;
     fileSize = ok ? ftell(file) : -1;
-    ok = fileSize >= 0 && (u32)fileSize <= sizeof(FLASH_BASE);
+    /* longer than the flash: the trailer after it (Port_SaveInit) stays */
+    ok = fileSize >= 0 && (u32)fileSize <= sizeof(FLASH_BASE) + SAVE_TRAILER_MAX;
     if (ok && (u32)fileSize < sizeof(FLASH_BASE))
     {
         u32 remaining = sizeof(FLASH_BASE) - (u32)fileSize;

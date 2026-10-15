@@ -18,7 +18,7 @@ def load(path):
             x, y = b[o], b[o + 1]
             vals = struct.unpack_from("<%db" % G, b, o + 2)
             grids[(x, y)] = [[vals[j * side + i] * unit for i in range(side)] for j in range(side)]
-        out[lid] = dict(base=base, w=w, h=h & 0x3FFF, grids=grids)
+        out[lid] = dict(base=base, w=w & 0x03FF, h=h & 0x03FF, level=bool(w & 0x8000), grids=grids)
     at = struct.unpack_from("<I", b, len(b) - 8)[0]
     nv, nc = struct.unpack_from("<HH", b, at)
     variants = [struct.unpack_from("<HH16H", b, at + 4 + 36 * k) for k in range(nv)]

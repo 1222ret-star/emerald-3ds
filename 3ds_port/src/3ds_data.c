@@ -33,6 +33,20 @@ static const uint8_t sSupportedRomSha1[20] = {
 };
 #define SUPPORTED_ROM_DETAIL "Usa la ROM de Pokemon Esmeralda\n" \
                              "(Espana, BPES) con este cliente."
+#elif GAME_LANGUAGE == LANGUAGE_FRENCH
+static const uint8_t sSupportedRomSha1[20] = {
+    0xca, 0x66, 0x66, 0x51, 0x37, 0x4d, 0x89, 0xca, 0x43, 0x90,
+    0x07, 0xbe, 0xd5, 0x4d, 0x83, 0x9e, 0xb7, 0xbd, 0x14, 0xd0,
+};
+#define SUPPORTED_ROM_DETAIL "Utilise la ROM de Pokemon Emeraude\n" \
+                             "(France, BPEF) avec ce client."
+#elif GAME_LANGUAGE == LANGUAGE_ITALIAN
+static const uint8_t sSupportedRomSha1[20] = {
+    0x16, 0x92, 0xdb, 0x32, 0x24, 0x00, 0xc3, 0x14, 0x1c, 0x5d,
+    0xe2, 0xdb, 0x38, 0x46, 0x99, 0x13, 0xce, 0xb1, 0xf4, 0xd4,
+};
+#define SUPPORTED_ROM_DETAIL "Usa la ROM di Pokemon Smeraldo\n" \
+                             "(Italia, BPEI) con questo client."
 #else
 static const uint8_t sSupportedRomSha1[20] = {
     0xf3, 0xae, 0x08, 0x81, 0x81, 0xbf, 0x58, 0x3e, 0x55, 0xda,
@@ -84,6 +98,24 @@ static void ReadEngineAbi(void)
                        | ((uint32_t)raw[3] << 24);
         fclose(file);
     }
+}
+
+/* The ABI `staging.py devdata` writes into the loose data's marker
+ * ("abi %08x"); false when it has none (older tooling, or a forced loose
+ * backend without a marker). */
+static bool ReadLooseAbi(uint32_t *abi)
+{
+    FILE *file = fopen(CTR_DATA_LOOSE_MARKER, "r");
+    unsigned long value;
+    bool found;
+
+    if (file == NULL)
+        return false;
+    found = fscanf(file, " abi %lx", &value) == 1;
+    fclose(file);
+    if (found)
+        *abi = (uint32_t)value;
+    return found;
 }
 
 static const CtrPakEntry *FindEntry(const char *path)
@@ -201,8 +233,22 @@ bool CtrData_Init(void)
         sBackend = CTR_DATA_ROMFS;
         break;
     case 2:
+    {
+        uint32_t looseAbi;
+
+        /* Only reported: the ABI covers every data file, so it also changes
+         * when one generator's output is copied over during development,
+         * which is what the loose backend is for. After an engine change a
+         * mismatch here explains the crash that follows. */
+        if (!ReadLooseAbi(&looseAbi) || sEngineAbi == 0)
+            CtrLog_Write(CTR_LOG_FS, "data: loose data ABI not checked (unknown)");
+        else if (looseAbi != sEngineAbi)
+            CtrLog_Write(CTR_LOG_ERROR, "data: loose data staged for ABI %08lX, engine is %08lX "
+                         "(make devdata again if the engine changed)",
+                         (unsigned long)looseAbi, (unsigned long)sEngineAbi);
         sBackend = CTR_DATA_LOOSE;
         break;
+    }
     default:
         if (!OpenPak())
             return false;

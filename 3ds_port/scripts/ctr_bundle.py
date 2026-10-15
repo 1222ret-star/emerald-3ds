@@ -97,9 +97,15 @@ def relocations(obj: Path, section: str) -> list[tuple[int, str]]:
 
 
 def dump_section(obj: Path, section: str, tmp: Path) -> bytearray:
-    subprocess.check_call([tool("arm-none-eabi-objcopy"),
-                           "--dump-section", "%s=%s" % (section, tmp), str(obj)])
-    return bytearray(tmp.read_bytes())
+    import tempfile
+    with tempfile.NamedTemporaryFile(prefix="ctr_dump_", suffix=".bin", delete=False) as f:
+        tmp_path = Path(f.name)
+    try:
+        subprocess.check_call([tool("arm-none-eabi-objcopy"),
+                               "--dump-section", "%s=%s" % (section, tmp_path), str(obj)])
+        return bytearray(tmp_path.read_bytes())
+    finally:
+        tmp_path.unlink(missing_ok=True)
 
 
 class Bundle:

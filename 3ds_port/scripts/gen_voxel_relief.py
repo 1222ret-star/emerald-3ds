@@ -403,17 +403,25 @@ def solve(layout):
 _ART = {}
 
 # Secondary tilesets whose mountains are the General tileset's rock drawn
-# again in their own colours (Jagged Pass, Mt Chimney: Lavaridge's red rock).
+# again in their own colours (Jagged Pass, Mt Chimney: Lavaridge's red rock;
+# Route 115: Fallarbor's beige rock).
 # The analysis reads them as the General rock - each of their tiles that is
 # a General rock tile recoloured stands for it, every other tile is seen in
 # the General colours - and the export writes their own ids back, so the
 # console draws their own drawing on the relief read off its twin.
-ALIAS_TILESETS = {"gTileset_Lavaridge"}
+ALIAS_TILESETS = {"gTileset_Lavaridge", "gTileset_Fallarbor"}
 # the maps read so, each checked by the line check (voxel_relief_lines.py);
 # Route 112's red mountain, trees on every terrace, is not yet
 ALIAS_LAYOUTS = {"LAYOUT_JAGGED_PASS", "LAYOUT_MT_CHIMNEY", "LAYOUT_LAVARIDGE_TOWN"}
+# Maps whose recoloured rock only the terraces read (voxel_terraces.py,
+# terrace_art): the world is placed as it was before (read by the world's
+# solve, Route 115's mountain moved Route 114 48 px, Fortree 64 px and left a
+# step at the seam with Rustboro), and the terraces stand on it. Route 114's
+# south is the same beige mountain as Route 115's (voxel_terraces.JOIN).
+ALIAS_TERRACES = {"LAYOUT_ROUTE115", "LAYOUT_ROUTE114"}
 ALIAS_REFERENCE = "LAYOUT_ROUTE116"     # a layout over the General tileset
 _ALIAS = {}
+_TERRACE_ART = {}
 
 
 def _drawing(img):
@@ -422,15 +430,18 @@ def _drawing(img):
     return tuple(lab.setdefault(p, len(lab)) for p in img.convert("RGB").getdata())
 
 
-def alias_of(lid):
+def alias_of(lid, layouts=ALIAS_LAYOUTS):
     """({own id: General id}, {General id: own id}, {own colour: General
-    colour}) of a layout drawn with an ALIAS_TILESETS tileset, else None."""
+    colour}) of a layout drawn with an ALIAS_TILESETS tileset, else None.
+    `layouts`: the maps read so (the world's solve: ALIAS_LAYOUTS)."""
+    if lid not in layouts:
+        return None
     if lid in _ALIAS:
         return _ALIAS[lid]
     _ALIAS[lid] = None
     e = next((e for e in json.load(open(os.path.join(vb.ROOT, "data", "layouts", "layouts.json"),
                                         encoding="utf-8"))["layouts"] if e.get("id") == lid), None)
-    if e is None or e.get("secondary_tileset") not in ALIAS_TILESETS or lid not in ALIAS_LAYOUTS:
+    if e is None or e.get("secondary_tileset") not in ALIAS_TILESETS:
         return None
     art, ref = vb.LayoutArt(lid), vb.LayoutArt(ALIAS_REFERENCE)
     roles = ROCK_TILES | SIDE_WEST | SIDE_EAST | SEA_CAPS | BOULDER
@@ -449,6 +460,17 @@ def alias_of(lid):
         alias[m] = g
         for a, b in zip(art.cell_image(m).convert("RGB").getdata(), ref.cell_image(g).convert("RGB").getdata()):
             votes[a][b] += n
+    # a boulder's head is drawn as a band's head turning the corner under a
+    # rim is (093 is 06b's drawing): it is the boulder only where the map
+    # draws it over the boulder's foot (Route 115's mounds); elsewhere it is
+    # left to the analysis, which reads it as the corner it is (23b/23d)
+    for m, g in list(alias.items()):
+        if g not in BOULDER_HEADS:
+            continue
+        over = sum(1 for y in range(art.h - 1) for x in range(art.w)
+                   if art.metatile(x, y) == m and alias.get(art.metatile(x, y + 1)) == BOULDER_HEADS[g])
+        if 2 * over < used[m]:
+            del alias[m]
     if not alias:
         return None
     colour = {a: c.most_common(1)[0][0] for a, c in votes.items()}
@@ -491,6 +513,16 @@ class AliasArt(vb.LayoutArt):
         return self._images[key]
 
 
+def reading(art):
+    """What a cache of a tile read off `art` must be keyed by besides its
+    tilesets: an alias reading recolours its secondary tileset's tiles, so
+    another map with the same tilesets read plainly sees other pixels (Route
+    113 and Route 114 share Fallarbor's; keyed by the tilesets alone, the
+    first map read decided the other's tiles, and the terraces of both groups
+    changed with the order the groups were solved in)."""
+    return art.id if isinstance(art, AliasArt) else None
+
+
 def layout_art(lid):
     """The layout's drawing for the analysis (cached)."""
     if lid not in _ART:
@@ -499,10 +531,36 @@ def layout_art(lid):
     return _ART[lid]
 
 
-def own_id(lid, m):
+def own_id(lid, m, layouts=ALIAS_LAYOUTS):
     """The metatile the console has for an id the analysis read (alias_of)."""
-    a = alias_of(lid)
+    a = alias_of(lid, layouts)
     return a[1].get(m, m) if a else m
+
+
+def terrace_art(lid):
+    """The layout's drawing as voxel_terraces reads it: layout_art, or the
+    alias reading of an ALIAS_TERRACES map (the world's solve keeps its own)."""
+    if lid not in ALIAS_TERRACES:
+        return layout_art(lid)
+    if lid not in _TERRACE_ART:
+        a = alias_of(lid, ALIAS_TERRACES)
+        _TERRACE_ART[lid] = AliasArt(lid, a) if a else vb.LayoutArt(lid)
+    return _TERRACE_ART[lid]
+
+
+_OWN_ART = {}
+
+
+def own_art(lid):
+    """The layout's own drawing, its own ids and colours (cached)."""
+    if lid not in _OWN_ART:
+        _OWN_ART[lid] = vb.LayoutArt(lid)
+    return _OWN_ART[lid]
+
+
+def terrace_own_id(lid, m):
+    """own_id for the terraces' reading (terrace_art)."""
+    return own_id(lid, m, ALIAS_LAYOUTS | ALIAS_TERRACES)
 
 
 # ── mountains read off the drawing ──────────────────────────────────────────
@@ -572,6 +630,7 @@ GOES_ON = 2
 DIRT = {0x113, 0x114, 0x115, 0x14b, 0x14c, 0x14d}
 # A boulder drawn two cells tall sits on its terrace: all of it is top.
 BOULDER = {0x93, 0x94, 0x9b, 0x9c}
+BOULDER_HEADS = {0x93: 0x9b, 0x94: 0x9c}    # its upper half: the lower half under it
 # West and east faces are drawn as bands down the side of the higher terrace,
 # one band a level: the face on the left of the cell and the top on its right
 # faces west, and the other way round east. Nothing in a 45-degree drawing
@@ -773,6 +832,8 @@ _WORLD = {}
 # Groups that pass but were seen wrong in their camera proofs, and why.
 DRAWN_EXCLUDED = {
     "route122": "Mt Pyre's island is a massif of one band tile: counted a level a band it spikes",
+    "ever_grande_city": "the cliff and the fall under the League, ten cells of band tiles tall: "
+                        "a level a cell, slabs with gaps between them and the fall a stack of walls",
 }
 
 
@@ -808,6 +869,32 @@ STEP_SEAMS = {
         "the wood and the beach they share",
 }
 STEP_SEAM_WEIGHT = 1
+# The level a step seam gives up, laid over a whole map of open sea as a
+# slope instead of standing at the seam as a wall of water a level tall (seen
+# from Route 107 and from Route 108 alike, and walked through on the crossing).
+# The map keeps its base, where the world placed it; its sea leans from the
+# level its neighbour on one side has at the seam to the level of the one on
+# the other side - a level over its sixty cells, a pixel every four, so every
+# seam it has meets and nothing between Dewford and Slateport steps. Its
+# heights have no depth (level, in relief.bin): they lift it straight up, as
+# the bases either side of it do. As far south as high, its west edge stood a
+# row north of Route 107's and the player jumped a row on the crossing.
+SEA_RAMPS = {
+    "LAYOUT_ROUTE108": "open sea between the Dewford side (a level under) and "
+                       "Slateport's (Route 107 / Route 108, the step seam above)",
+}
+# Groups the world places by voxel_terraces.py's count of their levels
+# (region_ties) instead of this file's solve, and why. Only these: every
+# group read anew moves the world (all of them at once put steps at
+# Rustboro's seams with Routes 115 and 116).
+COUNTED_GROUPS = {
+    "route111": "the harmonic solve put three levels between the hollow at "
+                "Mauville and the plateau its two flights of stairs climb to: "
+                "pinned at Fallarbor and Lavaridge, the world left the terraces "
+                "a level off Mauville's seam (the step goes to Fallarbor / Route "
+                "114's, given up already)",
+    "route111_no_mirage_tower": "the same, the layout without the Mirage Tower",
+}
 HARD_WEIGHT = 1e6    # ground walked from one to the other
 LOOSE_WEIGHT = 0.01  # a block nothing places: kept near its group's ground
 WORLD_ROOT = "LAYOUT_LITTLEROOT_TOWN"
@@ -943,14 +1030,18 @@ def _give_up_seams(n, samples, fixed):
         del pairs[worst]
 
 
-def _blocks(prep):
+def _blocks(prep, counted=None):
     """A group's terraces solved against each other: (levels relative to
     their block's first terrace, block of each terrace). A terrace nothing
-    joins to another is a block of its own."""
+    joins to another is a block of its own. `counted`: {(a, b): d} drops
+    between regions that hold whatever the drawing's runs say (the count of
+    voxel_terraces.py, for the groups built that way)."""
     sizes, runs = prep["sizes"], prep["runs"]
+    if counted:
+        runs = {k: v for k, v in runs.items() if k not in counted and k[::-1] not in counted}
     n = len(sizes)
     adj = [set() for _ in range(n)]
-    for (a, b) in runs:
+    for (a, b) in list(runs) + list(counted or ()):
         adj[a].add(b)
         adj[b].add(a)
     block, anchors = [-1] * n, {}
@@ -966,8 +1057,9 @@ def _blocks(prep):
                 if block[o] < 0:
                     block[o] = k
                     stack.append(o)
-    level, _ = _robust(n, {k: [(d, 1) for d in v] for k, v in runs.items()}, anchors,
-                       prep.get("ties", ()))
+    samples = {k: [(d, 1) for d in v] for k, v in runs.items()}
+    samples.update({k: [(d, HARD_WEIGHT)] for k, d in (counted or {}).items()})
+    level, _ = _robust(n, samples, anchors, prep.get("ties", ()))
     return level, block
 
 
@@ -983,9 +1075,14 @@ def world_levels():
                                     encoding="utf-8"))["layouts"] if e.get("id")}
     links = map_links()
     candidates = [g for g in DRAWN if g not in DRAWN_EXCLUDED]
+    # the groups placed by voxel_terraces.py's count of their levels
+    import voxel_terraces
+    terraced = {g for g in candidates if g in COUNTED_GROUPS
+                and set(DRAWN[g]) & set(voxel_terraces.chosen_layouts())}
     local = {}
     for g in candidates:
-        local[g] = _blocks(drawn_prepare(g))
+        prep = drawn_prepare(g)
+        local[g] = _blocks(prep, voxel_terraces.region_ties(g, prep) if g in terraced else None)
 
     def solve(groups):
         owner = {}
@@ -1102,6 +1199,85 @@ def world_levels():
     return _WORLD
 
 
+def sea_ramps(relief, quiet=False):
+    """SEA_RAMPS over a parsed relief.bin (voxel_relief_fixes.parse), in
+    place: each map's sea leans from the level of its west (north) neighbour
+    at their seam to that of its east (south) one, every lattice point by its
+    distance across the map, with no depth (level). The levels are read off
+    the neighbours as the file has them - after the terraces, whose blocks
+    keep the world's seams - the commonest height along the seam, each of its
+    cells' edge points over the base. Returns the maps changed."""
+    size = {e["id"]: (e["width"], e["height"])
+            for e in json.load(open(os.path.join(vb.ROOT, "data", "layouts", "layouts.json"),
+                                    encoding="utf-8"))["layouts"] if e.get("id")}
+    links = map_links()
+    side = PER_CELL + 1
+    edge_points = {"left": [j * side for j in range(side)],
+                   "right": [j * side + side - 1 for j in range(side)],
+                   "up": list(range(side)),
+                   "down": [(side - 1) * side + i for i in range(side)]}
+
+    def edge_cell(lid, edge, i):
+        w, h = size[lid]
+        return {"down": (i, h - 1), "up": (i, 0), "right": (w - 1, i), "left": (0, i)}[edge]
+
+    def level_at(lid, direction):
+        """The commonest height of the neighbour `direction` of lid along
+        their seam, pixels in the world; None if there is none."""
+        found = collections.Counter()
+        for (a, b, d, off) in links:
+            if a != lid or d != direction:
+                continue
+            t = relief["layouts"].get(voxel_relief_fixes.layout_index(b))
+            base = t["base"] if t else 0
+            for (_, _, eb, ib) in _seam_cells(a, b, d, off, size):
+                g = t["cells"].get(edge_cell(b, eb, ib)) if t else None
+                for k in edge_points[eb]:
+                    found[base + (g[k] if g else 0)] += 1
+        return found.most_common(1)[0][0] if found else None
+
+    changed = []
+    for lid in sorted(SEA_RAMPS):
+        index = voxel_relief_fixes.layout_index(lid)
+        w, h = size[lid]
+        for (lo, hi, across) in (("left", "right", True), ("up", "down", False)):
+            start, end = level_at(lid, lo), level_at(lid, hi)
+            if start is not None and end is not None and start != end:
+                break
+        else:
+            continue
+        t = relief["layouts"].setdefault(index, {"w": w, "h": h, "flags": 0, "base": 0, "belt": 0,
+                                                 "cells": {}})
+        if t["flags"] & (voxel_relief_fixes.UNIT2 | voxel_relief_fixes.DRAWN):
+            raise ValueError("%s: a sea ramp over a drawn map's relief" % lid)
+        if t["cells"]:
+            # a ledge's berm would lose its depth with the map's
+            raise ValueError("%s: a sea ramp over a map with relief of its own" % lid)
+        t["level"] = True
+        span = float(w if across else h)
+        for y in range(h):
+            for x in range(w):
+                g = [0] * (side * side)
+                for j in range(side):
+                    for i in range(side):
+                        f = ((x + i / float(PER_CELL)) if across else (y + j / float(PER_CELL))) / span
+                        v = start + (end - start) * f - t["base"]
+                        g[j * side + i] += int(math.floor(v + 0.5))
+                if any(g):
+                    t["cells"][(x, y)] = g
+        changed.append(lid)
+        if not quiet:
+            print("sea ramp %-30s %+d px at its %s seam to %+d px at its %s one, on a base of %+d px"
+                  % (lid, start, lo, end, hi, t["base"]))
+    return changed
+
+
+def apply_sea_ramps(path, quiet=False):
+    relief = voxel_relief_fixes.parse(open(path, "rb").read())
+    if sea_ramps(relief, quiet):
+        open(path, "wb").write(voxel_relief_fixes.pack(relief))
+
+
 def drawn_canvas(name):
     """The group's canvas: (layouts, width, height, per-pixel kind, per-cell
     hiding - a roof or a tree a face can go down behind -, per-cell side: +1
@@ -1195,7 +1371,7 @@ def drawn_canvas(name):
                         kind[(oy + cy) * 16 + j][(ox + cx) * 16:(ox + cx + 1) * 16] = [GROUND] * 16
                     continue
                 # the same metatile reads the same: its rows, worked out once
-                key = (A.primary, A.secondary, m, layers, stair)
+                key = (A.primary, A.secondary, m, layers, stair, reading(A))
                 rows = tile_kinds.get(key)
                 if rows is None:
                     img = A.cell_image(m, layers=layers).load()
@@ -1300,7 +1476,7 @@ def _rock_pixels(art, m, layers=(0, 1)):
 def drawn_role(art, m):
     """(role, lower layer only) of metatile m as drawn: role "face",
     "west", "east" or None (a corner, a top, ground)."""
-    key = (art.primary, art.secondary, m)
+    key = (art.primary, art.secondary, m, reading(art))
     if key in _ROLES_DRAWN:
         return _ROLES_DRAWN[key]
     out = (None, False)
@@ -2495,8 +2671,20 @@ def ledge_berms(layout, art, h):
         touching = [(cx, cy) for cx in {(gx - 1) // PER_CELL, gx // PER_CELL}
                     for cy in {(gy - 1) // PER_CELL, gy // PER_CELL}
                     if 0 <= cx < layout.w and 0 <= cy < layout.h]
-        if all(c in cells for c in touching):
-            h[gy][gx] += v
+        if not all(c in cells for c in touching):
+            raised[(gx, gy)] = 0.0
+    # nor does the berm fall south faster than its lip does: where a run
+    # going north and south ends at a cell that is no ledge, its last point
+    # stays on the ground, and a lip still LIP pixels up a step north of it
+    # fell further than the step - (u, h, v + h) folded back over itself and
+    # opened a hole in the ground. It comes down at the lip's own slope.
+    fall = LIP * STEP / float(LIP_WIDTH)
+    for (gx, gy) in sorted(raised, key=lambda k: -k[1]):
+        south = raised.get((gx, gy + 1))
+        if south is not None and raised[(gx, gy)] > south + fall:
+            raised[(gx, gy)] = south + fall
+    for (gx, gy), v in raised.items():
+        h[gy][gx] += v
     return len(cells)
 
 
@@ -2578,12 +2766,78 @@ def flat_lattice(layout):
     return [[0.0] * (layout.w * PER_CELL + 1) for _ in range(layout.h * PER_CELL + 1)]
 
 
+def raise_pits(h):
+    """A boulder standing in open ground, as a mound and not a pit.
+
+    Every rock cell of a drawn solve hangs a level under the ground it hangs
+    from. A boulder with ground on every side (Route 120's, among its ponds)
+    has nothing to hang over, so its lattice dipped a level into the ground:
+    the rock sat sunk in a hole, and past the hole's back rim the camera saw
+    the clear colour. A dip closed all round by ground at one level, two cells
+    across at most and exactly a level deep, is mirrored up - the shape a
+    rock at sea is given. Larger dips are something else (Mt Chimney's ash
+    pile raised is a spike) and stay. Returns how many were raised.
+    """
+    LH, LW = len(h), len(h[0])
+    span = 2 * PER_CELL
+    raised = 0
+    done = [[False] * LW for _ in range(LH)]
+    for j0 in range(1, LH - 1):
+        for i0 in range(1, LW - 1):
+            if done[j0][i0]:
+                continue
+            # the rim's level: the highest of the points round this one
+            rim = max(h[j0 + b][i0 + a] for a in (-1, 0, 1) for b in (-1, 0, 1))
+            if h[j0][i0] >= rim - 0.5:
+                continue
+            body, stack, ok = [(i0, j0)], [(i0, j0)], True
+            seen = {(i0, j0)}
+            lo_i = hi_i = i0
+            lo_j = hi_j = j0
+            while stack and ok:
+                i, j = stack.pop()
+                for a in (-1, 0, 1):
+                    for b in (-1, 0, 1):
+                        q = (i + a, j + b)
+                        if q in seen:
+                            continue
+                        if not (0 <= q[0] < LW and 0 <= q[1] < LH):
+                            ok = False
+                            break
+                        v = h[q[1]][q[0]]
+                        if v < rim - 0.5:
+                            seen.add(q)
+                            body.append(q)
+                            stack.append(q)
+                            lo_i, hi_i = min(lo_i, q[0]), max(hi_i, q[0])
+                            lo_j, hi_j = min(lo_j, q[1]), max(hi_j, q[1])
+                            if hi_i - lo_i >= span or hi_j - lo_j >= span:
+                                ok = False
+                                break
+                        elif abs(v - rim) > 0.5:
+                            ok = False      # the rim is not one level: a terrace's edge
+                            break
+                    if not ok:
+                        break
+            if not ok:
+                continue
+            for (i, j) in body:
+                done[j][i] = True
+            if abs(min(h[j][i] for (i, j) in body) - (rim - LEVEL)) > 0.5:
+                continue
+            for (i, j) in body:
+                h[j][i] = 2 * rim - h[j][i]
+            raised += 1
+    return raised
+
+
 def layout_heights(layout_id):
     """The lattice of a layout: its relief where it is solved, its ledges."""
     roles_layout = open_roles(layout_id)
     group = drawn_group(layout_id)
     if group:
         h = [row[:] for row in solve_drawn(group)[layout_id]]
+        raise_pits(h)
         ledges_on_ground(roles_layout, h)
         pier_ends(group, layout_id, roles_layout, h)
     elif layout_id in ENABLED:
@@ -2927,9 +3181,6 @@ def cut_cells(lid, roles_layout, h):
     return out
 
 
-_PLAIN = {}
-
-
 _SIDE_PIXELS = {      # the part of a tile that faces the rock: its south rows, east or west columns
     None: lambda i, j: True,
     "S": lambda i, j: j >= 10,
@@ -2938,21 +3189,28 @@ _SIDE_PIXELS = {      # the part of a tile that faces the rock: its south rows, 
 }
 
 
-def plain_ground(art, layout, content, x, y, side=None, kind=None):
+def plain_ground(art, layout, content, x, y, side=None, kind=None, half=False):
     """The plainest drawing of the ground at (x, y), as a metatile: what
     runs on under a rock or a rim is the ground itself, not its shore or
     its edge, which tiled again would show seams. Of the ground round it
     whose commonest colour is this one's, the tile most of that colour (the
-    plain sand of a shore, never the sea beyond it)."""
+    plain sand of a shore, never the sea beyond it).
+    `half`: only a tile that colour at least half over (voxel_terraces, a
+    map read in its own colours: Route 114's dirt edged half in orange has
+    fewer far colours than its plain dirt, flecked darker)."""
     def main(m):
         """(its commonest colour, how many pixels of it, how many pixels are
-        another colour altogether - a shore's few drops of the sea on a sand)"""
-        if m not in _PLAIN:
+        another colour altogether - a shore's few drops of the sea on a sand)
+        Cached on the art: an id over 0x200 is its secondary tileset's own
+        (keyed by the id alone, Route 114's Fallarbor tiles gave Pacifidlog
+        its ground)."""
+        known = art.__dict__.setdefault("_plain", {})
+        if m not in known:
             px = list(art.cell_image(m).convert("RGB").getdata())
             c = commonest(px)
             foreign = sum(1 for p in px if sum(abs(p[i] - c[i]) for i in range(3)) > 150)
-            _PLAIN[m] = (c, px.count(c), foreign)
-        return _PLAIN[m]
+            known[m] = (c, px.count(c), foreign)
+        return known[m]
     m0 = art.metatile(x, y)
     forced = kind is not None
     if forced:
@@ -2972,7 +3230,7 @@ def plain_ground(art, layout, content, x, y, side=None, kind=None):
             if c in content or not (0 <= c[0] < layout.w and 0 <= c[1] < layout.h):
                 continue
             m = art.metatile(*c)
-            if main(m)[0] != kind:
+            if main(m)[0] != kind or (half and 2 * main(m)[1] < 256):
                 continue
             k = (main(m)[2], -main(m)[1], abs(dx) + abs(dy))
             if best is None or k < best[0]:
@@ -2984,13 +3242,13 @@ def plain_ground(art, layout, content, x, y, side=None, kind=None):
 
 def _plain_tile(art, m):
     """Is metatile m ground with no rock drawn on it (under a tenth)?"""
-    if (id(art), m) not in _PLAIN_TILE:
+    # cached on the art itself: keyed by id(art), a short-lived art (the
+    # ledges' own reading of an aliased map) could reuse a freed one's id
+    known = art.__dict__.setdefault("_plain_tile", {})
+    if m not in known:
         px = list(art.cell_image(m).convert("RGB").getdata())
-        _PLAIN_TILE[(id(art), m)] = sum(1 for p in px if p in ROCK_ALL) < len(px) // 10
-    return _PLAIN_TILE[(id(art), m)]
-
-
-_PLAIN_TILE = {}
+        known[m] = sum(1 for p in px if p in ROCK_ALL) < len(px) // 10
+    return known[m]
 
 
 def _plain_background(art, m, mask, ground):
@@ -3009,7 +3267,7 @@ def _plain_background(art, m, mask, ground):
     return near >= 0.9 * len(bg)
 
 
-def _behind(art, layout, x, y, rock, mask=None):
+def _behind(art, layout, x, y, rock, mask=None, half=False):
     """The ground a cut tile is drawn over, as a metatile: what lies north of
     it, or beside it. It runs on under the rock south of the tile - never
     drawn, the rock covers it at 45 degrees - where, seen from above, the
@@ -3026,13 +3284,13 @@ def _behind(art, layout, x, y, rock, mask=None):
             for (dx, dy, side) in ((0, -1, "S"), (-1, 0, "E"), (1, 0, "W"), (0, 0, None)):
                 nx, ny = x + dx, y + dy
                 if 0 <= nx < layout.w and 0 <= ny < layout.h and (nx, ny) not in rock or (dx, dy) == (0, 0):
-                    m = plain_ground(art, layout, rock, nx, ny, side, kind)
+                    m = plain_ground(art, layout, rock, nx, ny, side, kind, half)
                     if m is not None:
                         return m
     for (dx, dy, side) in ((0, -1, "S"), (-1, 0, "E"), (1, 0, "W")):
         nx, ny = x + dx, y + dy
         if 0 <= nx < layout.w and 0 <= ny < layout.h and (nx, ny) not in rock:
-            return plain_ground(art, layout, rock, nx, ny, side)
+            return plain_ground(art, layout, rock, nx, ny, side, half=half)
     return None
 
 
@@ -3221,6 +3479,17 @@ def cell_shapes(lid, roles_layout, h, cut):
     berry = vc.behaviours().get("MB_BERRY_TREE_SOIL")
     keep_out |= {(x, y) for y in range(Hh) for x in range(W)
                  if art.metatile(x, y) in DIRT or roles_layout.behaviour(x, y) == berry}
+    rock_cells = content - keep_out
+
+    def rock_point(c, i, j):
+        """A point the rules for rock may move: any of the rock's, and of
+        a ledge or berry soil only one it shares with rock, which they move
+        too (a crack opens there otherwise). Its others are its own."""
+        if c not in keep_out:
+            return True
+        X, Y = c[0] * P + i, c[1] * P + j
+        return any((cx, cy) in rock_cells for cx in {(X - 1) // P, X // P}
+                   for cy in {(Y - 1) // P, Y // P})
 
     def grid(c):
         return grids.get(c) or cell_grid(h, *c)
@@ -3327,14 +3596,16 @@ def cell_shapes(lid, roles_layout, h, cut):
             return abs(a - b) > LEVEL + 0.01
         for j in range(P + 1):
             for (e, n) in ((0, 1), (P, P - 1)):
-                if not seam(c, e, j) and drawn(c, min(e, n), min(j, P - 1)) and far(g[j][e], g[j][n]):
+                if (not seam(c, e, j) and rock_point(c, e, j) and drawn(c, min(e, n), min(j, P - 1))
+                        and far(g[j][e], g[j][n])):
                     g[j][e] = min(max(g[j][e], g[j][n] - T), g[j][n] + T)
         for i in range(P + 1):
             # north: no lower than the row south of it, a pixel a pixel at
             # most higher; south: the other way round
-            if not seam(c, i, 0) and drawn(c, min(i, P - 1), 0) and far(g[0][i], g[1][i]):
+            if not seam(c, i, 0) and rock_point(c, i, 0) and drawn(c, min(i, P - 1), 0) and far(g[0][i], g[1][i]):
                 g[0][i] = min(max(g[0][i], g[1][i]), g[1][i] + T)
-            if not seam(c, i, P) and drawn(c, min(i, P - 1), P - 1) and far(g[P][i], g[P - 1][i]):
+            if (not seam(c, i, P) and rock_point(c, i, P) and drawn(c, min(i, P - 1), P - 1)
+                    and far(g[P][i], g[P - 1][i])):
                 g[P][i] = min(max(g[P][i], g[P - 1][i] - T), g[P - 1][i])
         if g != grid(c):
             grids[c] = g
@@ -3345,6 +3616,9 @@ def cell_shapes(lid, roles_layout, h, cut):
         band across or a face down lifts its low point. Raising only, it
         comes to rest."""
         g = [row[:] for row in grid(c)]
+
+        def free(p):
+            return not seam(c, *p) and rock_point(c, *p)
         moved = True
         while moved:
             moved = False
@@ -3357,17 +3631,17 @@ def cell_shapes(lid, roles_layout, h, cut):
                         h0, h1 = g[p0[1]][p0[0]], g[p1[1]][p1[0]]
                         T = STEP * SPREAD
                         if d == "u":
-                            if h1 < h0 - T - 0.01 and not seam(c, *p1):
+                            if h1 < h0 - T - 0.01 and free(p1):
                                 g[p1[1]][p1[0]] = h0 - T
                                 moved = True
-                            elif h0 < h1 - T - 0.01 and not seam(c, *p0):
+                            elif h0 < h1 - T - 0.01 and free(p0):
                                 g[p0[1]][p0[0]] = h1 - T
                                 moved = True
                         else:
-                            if h1 > h0 + 0.01 and not seam(c, *p0):
+                            if h1 > h0 + 0.01 and free(p0):
                                 g[p0[1]][p0[0]] = h1          # rising south: its back
                                 moved = True
-                            elif h1 < h0 - T - 0.01 and not seam(c, *p1):
+                            elif h1 < h0 - T - 0.01 and free(p1):
                                 g[p1[1]][p1[0]] = h0 - T      # falling faster than a face
                                 moved = True
         if g != grid(c):
@@ -3553,10 +3827,13 @@ def cell_shapes(lid, roles_layout, h, cut):
         return best
 
     flank_frac = {}
+    # a ledge's berm is no flank: brought down across its lip, the run of
+    # ledge cells read as rock lay flat while the end of the run, no rock,
+    # kept its berm, and the step between them opened a hole
     for c in content:
         for j in range(P + 1):
             for i in range(P + 1):
-                if seam(c, i, j):
+                if seam(c, i, j) or not rock_point(c, i, j):
                     continue
                 X, Y = c[0] * 16 + i * STEP, c[1] * 16 + j * STEP
                 around = [crossed(X, row) for row in (Y - 2, Y - 1, Y, Y + 1)]
@@ -3765,7 +4042,9 @@ def export(layout_ids, path):
     a map read off its drawing (DRAWN): its relief is the whole of the terrain,
     and every blocked cell of rock is written, level or not. Bit 14 says its
     heights are in units of HEIGHT_UNIT pixels (a mountain stands taller than
-    a byte of pixels). A point's depth is its height, so it is not written."""
+    a byte of pixels). A point's depth is its height, so it is not written;
+    bit 15 of the width (set by sea_ramps) says it has none, the heights
+    lifting the map straight up as its base does."""
     layouts = json.load(open(os.path.join(vb.ROOT, "data", "layouts", "layouts.json"),
                              encoding="utf-8"))["layouts"]
     index = {e["id"]: i + 1 for i, e in enumerate(layouts)}
@@ -3867,10 +4146,12 @@ def export(layout_ids, path):
     # layout drawing its tileset, u16 metatile, u16 rows[16], bit set where
     # the background is); cells x (u16 layout, u8 x, u8 y, u16 variant, s16
     # foot in pixels over the base, u16 the metatile of the ground behind it
-    # or 0xFFFF, u16 the metatile its cliff walls are drawn with or 0xFFFF),
-    # by layout, x and y; variant 0xFFFF is no cut: a cell under which the
-    # ground behind a terrace's rim runs on (rim_cells), or one with cliffs
-    # only (cell_shapes). Then u32 the table's offset and "CUTS"
+    # or 0xFFFF, u16 the metatile its cliff walls are drawn with or 0xFFFF,
+    # u8 sides, u8 flags: voxel_relief.c has their bits; 1, plain ground
+    # behind, is no longer read), by layout, x and y; variant 0xFFFF is no
+    # cut: a cell under which the ground behind a terrace's rim runs on
+    # (rim_cells), or one with cliffs only (cell_shapes). Then u32 the
+    # table's offset and "CUTS"
     cuts = [c + ((0xFFFF, 0xFF, 0)[len(c) - 6:] if len(c) < 9 else ()) for c in cuts]
     table = struct.pack("<HH", len(variants), len(cuts))
     for (pair, m, mask), (k, lay) in sorted(variants.items(), key=lambda kv: kv[1][0]):
@@ -3920,6 +4201,8 @@ def main():
         # (voxel_terraces.py) over the solve, in the world it placed
         import voxel_terraces
         voxel_terraces.apply_file(args.output)
+        # the level a step seam gives up, as a slope across the open sea
+        apply_sea_ramps(args.output)
         # the hand corrections (assets/voxel/relief_fixes.json) over the drawing's
         if not os.environ.get("VOXEL_RELIEF_NO_FIXES"):
             voxel_relief_fixes.apply_file(args.output)

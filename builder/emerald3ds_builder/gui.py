@@ -15,7 +15,7 @@ from .errors import BuilderError
 from .install import APP_DIR, find_sd_cards, install
 from .rom import load_rom
 
-TITLE = "Pokémon Emerald 3Ds Dual Screen Builder"
+TITLE = "Emerald 3DS Builder"
 
 
 class App:
@@ -113,7 +113,7 @@ class App:
             messagebox.showwarning(TITLE, "Choose the ROM and the destination first.")
             return
         dest = Path(sd) / APP_DIR
-        if not messagebox.askokcancel(TITLE, "Pokémon Emerald 3Ds Dual Screen will be installed to:\n\n%s\n\nContinue?" % dest):
+        if not messagebox.askokcancel(TITLE, "Emerald 3DS will be installed to:\n\n%s\n\nContinue?" % dest):
             return
         self.busy = True
         self.button.state(["disabled"])
@@ -145,7 +145,7 @@ class App:
                     self.step.config(text=event[2])
                 elif event[0] == "done":
                     self.finish()
-                    messagebox.showinfo(TITLE, "Done. Pokémon Emerald 3Ds Dual Screen is installed in\n%s\n\n"
+                    messagebox.showinfo(TITLE, "Done. Emerald 3DS is installed in\n%s\n\n"
                                                "Start it from the Homebrew Launcher." % event[1])
                 elif event[0] == "error":
                     self.finish()

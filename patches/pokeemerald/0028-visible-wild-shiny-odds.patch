@@ -1,4 +1,4 @@
-Pokémon Emerald 3Ds Dual Screen changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: shiny odds for visible wild Pokemon
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: shiny odds for visible wild Pokemon
 Applies after 0014-visible-wild.patch and 0022-shiny-odds.patch; apply with tools/bootstrap.py.
 
 diff --git a/src/pokemon.c b/src/pokemon.c

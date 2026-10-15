@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""A spot of a map as the game shows it, and what builds it: the tools of the
-mountain loop (docs/internal/3ds_port/MONTANAS_TERRAZAS.md, "Metodología").
+"""A spot of a map as the game shows it, and what builds it: the tools for
+working on the mountains (a trial relief, the game's view of a cell, what
+draws a pixel, the cells' readings).
 
     python voxel_scene.py trial OUT.bin [LAYOUT ...]
         build/relief_old.bin with voxel_terraces over the given groups (all

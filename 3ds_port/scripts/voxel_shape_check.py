@@ -102,7 +102,16 @@ def _setup(layout, trial):
         prop = vl.METATILE_REAL <= vl.atlas_id(t) < vl.CUT_FIRST
         kinds.append(None if prop else surface(t))
         cells.append(gc.cell_of(t))
-    _S.update(tris=tris, floor=floor, w=A.w, h=A.h, hidden=hidden, mine=mine, kinds=kinds, cells=cells)
+    # a cut tile's clear texels let the eye through, as the console's alpha
+    # test does: judged by its geometry alone, a cut drawn by its texels was
+    # whole (no hole, no tooth seen), and one cut along its straight sides
+    # (voxel_mesh_builder.c) was not comparable with it
+    atlas = vl.Atlas(layout)
+    for t in tris:
+        if vl.atlas_id(t) >= vl.CUT_FIRST:
+            atlas.need(vl.atlas_id(t))
+    _S.update(tris=tris, floor=floor, w=A.w, h=A.h, hidden=hidden, mine=mine, kinds=kinds, cells=cells,
+              atlas=atlas)
 
 
 def shoot(at, yaw):
@@ -113,6 +122,9 @@ def shoot(at, yaw):
     ras = vl.Raster(cam.width, cam.height, bg=(0, 0, 0))
     tex = Image.new("RGBA", (1, 1), (255, 255, 255, 255))
     tpx = tex.load()
+    atlas = _S["atlas"]
+    apx = atlas.img.load()
+    S = vl.GRID * 16
     reach = cam.distance * 2.2
     n = len(tris)
     for k, tri in enumerate(list(tris) + [t for _, t in floor]):
@@ -120,15 +132,19 @@ def shoot(at, yaw):
         mz = sum(p[2] - p[1] for p in tri) / 3 - at[1]
         if abs(mx) > reach or abs(mz) > reach:
             continue
+        cut = k < n and vl.atlas_id(tri) >= vl.CUT_FIRST
         vs = []
         for (x, y, z, u, v, sh) in tri:
             pr = cam.project((x, y, z))
             if pr is None:
                 break
             sx, sy, d, iw = pr
-            vs.append((sx, sy, d, iw, 0.0, 0.0))
+            vs.append((sx, sy, d, iw, u * S * iw, v * S * iw) if cut else (sx, sy, d, iw, 0.0, 0.0))
         else:
-            ras.draw(vs, tex, tpx, 1.0, k)
+            if cut:
+                ras.draw(vs, atlas.img, apx, 1.0, k)
+            else:
+                ras.draw(vs, tex, tpx, 1.0, k)
     return cam, ras, n
 
 

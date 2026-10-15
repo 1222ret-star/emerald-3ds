@@ -76,18 +76,31 @@ FLECK = gr.ROCK_FLECK
 BAND_WEST = {0x070, 0x073, 0x088, 0x06b, 0x080, 0x083, 0x068,     # high side east
              0x172, 0x175, 0x177, 0x17a}
 BAND_EAST = {0x072, 0x075, 0x0a2, 0x08a, 0x06d, 0x082, 0x084, 0x06a,  # high side west
-             0x174, 0x176, 0x17c}
+             0x174, 0x176, 0x17c,
+             0x0a4}     # (080 mirrored: the outer flank over sand - Route 111's cave mound)
+# A band's head over the ground behind it (over grass, over sand): its
+# diagonal is the end of what stands under it. Over a band of its side (or
+# over the ground) it is that band's head; over a terrace's top it is the
+# corner where that terrace's back turns (Route 116's back stepping north a
+# row: the corner read as a band rose out of the terrace's outline as a
+# ramp) - a top, the ground behind cut off along the diagonal.
+HEADS = {0x068: "W", 0x083: "W", 0x080: "W", 0x06a: "E", 0x084: "E", 0x082: "E"}
 # Drawn whole on a terrace: a boulder's two halves are its top.
 ON_TOP = gr.BOULDER
 BOULDER_FOOT = {0x09b, 0x09c}
 BOULDER_HEAD = {0x093, 0x094}
 # Boulders drawn on whatever ground they stand on: the ground round them.
 LOOSE = {0x0df, 0x0e0, 0x0e1, 0x0e2}
+# The General tileset's steps carved in a face (Route 111's flights through
+# its two-level cliffs): the regions read them as floor, their bands too
+# soft for treads, and as ground they sank to the foot of the face, a notch
+# with walls either side.
+CARVED_STEPS = {0x0e8, 0x0e9, 0x0ea, 0x0eb}
 # A diagonal edge is drawn as a staircase of face ends: the end of one
 # row's face over the other end of the next row's. Down a column the two are
 # one wall, one level - not two faces.
 UPPER_END = {0x074, 0x089}
-LOWER_END = {0x07d, 0x07b, 0x078}
+LOWER_END = {0x07d, 0x07b, 0x078, 0x092, 0x090}
 
 # The mountain's own tiles (the General tileset's rock, its rock over the
 # sea, faces with doors and caves): nothing else is ever rock, whatever
@@ -110,20 +123,29 @@ def pixel_classes(art, m):
     """16 x 16 of 'T' (top or rim), 'F' (face) or 'G' (anything else) for
     metatile m; a fleck (a colour of both) goes with the most of its
     neighbours."""
-    key = (art.primary, art.secondary, m)
+    key = (art.primary, art.secondary, m, gr.reading(art))
     if key in _CLASSES:
         return _CLASSES[key]
     img = art.cell_image(m).load()
     cls = [["G"] * 16 for _ in range(16)]
+    # a tile of one flat colour is no face (a face is always textured):
+    # a flat floor - the dark floor of Sootopolis's crater seen from Route
+    # 126 shares the General face's darkest colour
+    if m >= 0x200 and len({img[x, y][:3] for y in range(16) for x in range(16)}) == 1:
+        if img[0, 0][:3] in FACE_COLOURS:
+            cls = [["T"] * 16 for _ in range(16)]
+        _CLASSES[key] = cls
+        return cls
     flecks = []
+    top, face, fleck = TOP_COLOURS, FACE_COLOURS, FLECK
     for y in range(16):
         for x in range(16):
             c = img[x, y][:3]
-            if c in TOP_COLOURS:
+            if c in top:
                 cls[y][x] = "T"
-            elif c in FACE_COLOURS:
+            elif c in face:
                 cls[y][x] = "F"
-            elif c in FLECK:
+            elif c in fleck:
                 flecks.append((x, y))
     for x, y in flecks:
         votes = collections.Counter(cls[ny][nx] for ny in range(max(0, y - 1), min(16, y + 2))
@@ -142,6 +164,7 @@ def rim_pixels(art, m):
 
 _TWINS = {}
 TWIN_MATCH = 0.85       # share of rock pixels (and their kind) that must agree
+HEAD_MATCH = 0.6        # share of a band head's face pixels (twin, maps read in alias)
 
 
 def twin(art, m):
@@ -149,12 +172,21 @@ def twin(art, m):
     copy in its secondary tileset: Dewford's bands), or m itself."""
     if m < 0x200:
         return m
-    key = (art.primary, art.secondary, m)
+    key = (art.primary, art.secondary, m, gr.reading(art))
     if key not in _TWINS:
         mine = pixel_classes(art, m)
         rock = {(x, y) for y in range(16) for x in range(16) if mine[y][x] != "G"}
         best, score = m, 0.0
-        if len(rock) >= 64 and art.primary == "gTileset_General":
+        # the very drawing of one first (a tile recoloured, read in the
+        # General's colours: gen_voxel_relief.alias_of): pixel classes alone
+        # cannot tell a terrace's top from its rim (both all top), and
+        # Route 115's tops were read as rims, every row a terrace of its own
+        drawing = art.cell_image(m).convert("RGB").tobytes()
+        exact = [r for r in sorted(MOUNTAIN) if r < 0x200
+                 and art.cell_image(r).convert("RGB").tobytes() == drawing]
+        if exact and art.primary == "gTileset_General":
+            best, score = exact[0], 1.0
+        elif len(rock) >= 64 and art.primary == "gTileset_General":
             for r in sorted(MOUNTAIN):
                 if r >= 0x200:
                     continue
@@ -162,6 +194,17 @@ def twin(art, m):
                 both = {(x, y) for y in range(16) for x in range(16) if theirs[y][x] != "G"} | rock
                 same = sum(1 for (x, y) in both if theirs[y][x] == mine[y][x]) / len(both)
                 if same > score and same >= TWIN_MATCH:
+                    best, score = r, same
+        if best == m and hasattr(art, "own_metatile"):
+            # a band's head drawn over the map's own ground (Route 114's
+            # 220/222 over Fallarbor's dirt, a rim along their top): its
+            # face is the head's, the rest of it is not to be matched
+            face = {(x, y) for y in range(16) for x in range(16) if mine[y][x] == "F"}
+            for r in sorted(HEADS):
+                cls = pixel_classes(art, r)
+                theirs = {(x, y) for y in range(16) for x in range(16) if cls[y][x] == "F"}
+                same = len(face & theirs) / float(len(face | theirs) or 1)
+                if same > score and same >= HEAD_MATCH:
                     best, score = r, same
         _TWINS[key] = best
     return _TWINS[key]
@@ -180,14 +223,41 @@ class Cells:
         self.src = {}                       # canvas cell -> (layout, x, y)
         self.kind, self.band, self.rim = {}, {}, set()
         self.ledges, self.keep = set(), set()
+        self.props = set()                  # cells a modelled object stands on (voxel_props)
+        self.prop_of = {}                   # cell -> the object placed over it
+        self.walked_tops = set()            # tops of a map's own tileset, walked (read as ground)
         self._over_water = {}
         berry = vc.behaviours().get("MB_BERRY_TREE_SOIL")
+        # a bridge over a pond or the sea: a deck, flat at the banks it
+        # joins (walked, so one level with them) - never rock, though its
+        # ends are drawn over a band's head (read as the band, it was
+        # stretched down the slope like the mountain)
+        self.bridge_codes = {v for k, v in vc.behaviours().items() if k.startswith("MB_BRIDGE_OVER")}
+        self.bridges = set()
+        # a waterfall: the river above it goes over the edge, the pool at
+        # its foot is another body a cliff lower (joined as one water, the
+        # pool rose to the river's level above the bridge across it)
+        falls = vc.behaviours().get("MB_WATERFALL")
+        self.falls = set()
+        # puddles (Route 120's marsh) are walked through: ground, not water
+        # (as water the marsh joined the plateau beside it by its shore and
+        # floated four levels over the grass it lies in)
+        puddle = vc.behaviours().get("MB_PUDDLE")
+        self.puddles = set()
+        # a muddy slope cut down a face (Route 115's, slid down to the
+        # terrace under it): the face's levels, as stairs up a face are -
+        # read as the ground it is walked as, it lay at the foot as a pit
+        self.mud = vc.behaviours().get("MB_MUDDY_SLOPE")
         for lid, ox, oy in self.members:
-            art = self.arts[lid] = gr.layout_art(lid)
+            art = self.arts[lid] = gr.terrace_art(lid)
             roles = self.roles_of[lid] = gr.open_roles(lid)
             ledges = gr.ledge_cells(roles)
             entry = next(e for e in vb._layouts_json() if e["id"] == lid)
             props = voxel_props.cells_in(entry)
+            # each object placed: a patch of its own (unknown_levels)
+            for k, (name, sx, sy, _) in enumerate(voxel_props.find(entry)):
+                for (px, py) in voxel_props.cells_of(name, sx, sy):
+                    self.prop_of[(px + ox, py + oy)] = (lid, k)
             for y in range(art.h):
                 for x in range(art.w):
                     cell = (x + ox, y + oy)
@@ -197,9 +267,90 @@ class Cells:
                     m = art.metatile(x, y)
                     if (x, y) in ledges:
                         self.ledges.add(cell)
+                    if roles.behaviour(x, y) in self.bridge_codes:
+                        self.bridges.add(cell)
+                    if roles.behaviour(x, y) == falls:
+                        self.falls.add(cell)
+                    if roles.behaviour(x, y) == puddle:
+                        self.puddles.add(cell)
                     if (x, y) in ledges or roles.behaviour(x, y) == berry or m in gr.DIRT:
                         self.keep.add(cell)
                     self._read(cell, art, roles, m, (x, y) in ledges, (x, y) in props)
+                    if cell in self.keep and self.kind[cell] == ROCK:
+                        # berry soil, a patch of dirt: ground, whatever brown
+                        # it is drawn in (Route 115's dirt patch, read as a
+                        # face two rows tall, sank the grass south of it and
+                        # the wood beside it two levels into a trench)
+                        self.kind[cell] = GROUND
+                        self.band.pop(cell, None)
+                        self.rim.discard(cell)
+        # a walkway of treads across the water (Route 114's bridge over its
+        # pond: planks drawn as steps, railings either side, the water past
+        # them): a deck, level with the banks it joins - read as stairs cut
+        # down a face, it sank the pond thirteen levels
+        self.lone_bridge = set()
+        for cell in sorted(self.kind):
+            if self.role(cell) != "stair" or cell in self.bridges:
+                continue
+            x, y = cell
+            reach = {}
+            for side in (-1, 1):
+                for d in (1, 2, 3):
+                    n = (x + side * d, y)
+                    if self.water(n):
+                        reach[side] = d
+                        break
+                    if n not in self.src or self.role(n) not in ("floor", "stair"):
+                        break
+            if len(reach) == 2:
+                for side, d in reach.items():
+                    for k in range(d):
+                        n = (x + side * k, y)
+                        self.bridges.add(n)
+                        self.kind[n] = GROUND
+                        self.band.pop(n, None)
+        # a lone bridge cell (the deck's shadow on the pond beside it, drawn
+        # as water): the water, not a deck
+        self.lone_bridge = {b for b in self.bridges
+                            if (b[0] - 1, b[1]) not in self.bridges and (b[0] + 1, b[1]) not in self.bridges}
+        self.bridges -= self.lone_bridge
+        self.cheeks = set()
+        # the cheeks of stairs climbing a face (their balustrades, drawn
+        # in the face's colours in the town's own tiles): the face too
+        for cell, k in list(self.kind.items()):
+            if k != GROUND or self.role(cell) == "floor":
+                continue
+            x, y = cell
+            if not any(self.kind.get(n) == ROCK and self.is_stair(n) for n in ((x - 1, y), (x + 1, y))):
+                continue
+            cls = pixel_classes(self.art(cell), self.metatile(cell))
+            if sum(r.count("F") + r.count("T") for r in cls) >= 0.4 * 256:
+                self.kind[cell] = ROCK
+                self.cheeks.add(cell)
+        # a boulder drawn wide (Route 111's mounds with a secret base's
+        # door): its halves 093/094 over 09b/09c at its ends, a rim and a
+        # face between them. The whole of it is drawn on the terrace it
+        # stands in, one with it: the middle read as a level of cliff stood
+        # up as a block, walls against the halves at its ends; and taken as
+        # a boulder capping a ridge (its own terrace) it sank two levels
+        # into the plateau round it.
+        self.wide_boulder = set()
+        for (x, y), k in self.kind.items():
+            if self.metatile((x, y)) != 0x093:
+                continue
+            e = x + 1
+            while (e, y) in self.src and self.metatile((e, y)) not in BOULDER_HEAD | BOULDER_FOOT:
+                e += 1
+            ends = [((e, y), 0x094), ((x, y + 1), 0x09b), ((e, y + 1), 0x09c)]
+            if e == x + 1 or any(c not in self.src or self.metatile(c) != m for c, m in ends):
+                continue
+            middle = [(i, j) for i in range(x + 1, e) for j in (y, y + 1)]
+            if all(self.kind.get(c) in (TOP, ROCK) for c in middle):
+                whole = [(i, j) for i in range(x, e + 1) for j in (y, y + 1)]
+                for c in whole:
+                    self.kind[c] = TOP
+                    self.rim.discard(c)
+                self.wide_boulder.update(whole)
         xs = [x for x, _ in self.src]
         ys = [y for _, y in self.src]
         self.xs = range(min(xs), max(xs) + 1)
@@ -208,28 +359,72 @@ class Cells:
     def _read(self, cell, art, roles, m, ledge, prop):
         lx, ly = self.src[cell][1:]
         cls = pixel_classes(art, m)
-        m = twin(art, m)
+        # a door of the map's own tileset is a building's (Slateport's
+        # museum draws its door in a cave mouth's colours): no twin of rock -
+        # unless rock is drawn either side of it (a cave's mouth in a face:
+        # Route 120's mound)
+        def rock_beside():
+            for nx in (lx - 1, lx + 1):
+                if 0 <= nx < art.w:
+                    nc = pixel_classes(art, art.metatile(nx, ly))
+                    if sum(r.count("F") + r.count("T") for r in nc) >= 128:
+                        return True
+            return False
+        own = m
+        if not (m >= 0x200 and (lx, ly) in roles.warps) or rock_beside():
+            m = twin(art, m)
         t = sum(r.count("T") for r in cls) / 256.0
         f = sum(r.count("F") for r in cls) / 256.0
         role = roles.role_at(lx, ly)
+        # in a map read in the General's colours (gr.terrace_art) every tile
+        # of its own looks drawn in rock: only one that is a General mountain
+        # tile drawn again is rock (Route 114's berry soil read as faces)
+        alien = hasattr(art, "own_metatile") and m >= vb.NUM_PRIMARY and m not in MOUNTAIN
+        # and walked on, only a tile drawn again exactly (a cave's mouth, a
+        # door) is the face it is cut in, not one merely like it (Route 114's
+        # garden borders, like faces once in the General's colours)
+        if hasattr(art, "own_metatile") and own >= vb.NUM_PRIMARY and role == "floor":
+            alien = True
+            # a top merely like one, walked (Route 114's plateau over its
+            # valley): ground, but the level its bands give it, not the
+            # level of the grass walked onto it from (terraces)
+            if m in MOUNTAIN and f < 0.08 and t >= 0.45:
+                self.walked_tops.add(cell)
         # the mountain's own tiles drawn over grass (a band's corner, 068)
         # read as a tree by their green: they are the rock they draw
         tree = role == "tree" and not (m in MOUNTAIN and t + f >= 0.25)
+        if prop:
+            self.props.add(cell)
         if tree or prop or m in LOOSE:
             k = UNKNOWN     # a sea stack's model is drawn with band heads too
+        elif (m in HEADS and not ledge and ly + 1 < art.h and self._top_tile(art, art.metatile(lx, ly + 1))
+              and not (hasattr(art, "own_metatile") and rim_pixels(art, art.metatile(lx, ly + 1)) >= 3)):
+            # a terrace's corner, its back turning (in a map read in alias,
+            # not over a top that starts with its own lip: Route 114's head
+            # at (37, 26) is its terrace's band, up from the dirt beside it,
+            # over the next terrace's edge)
+            k = TOP
         elif (m in BAND_WEST or m in BAND_EAST) and not ledge:
             # a band, its head over the sea behind it too: rock
             k = ROCK
             self.band[cell] = "W" if m in BAND_WEST else "E"
-        elif ledge or role in ("water", "ledge"):
+        elif ledge or role in ("water", "ledge") or cell in self.bridges:
             k = GROUND
-        elif role == "stair" and self._in_face(art, lx, ly):
-            k = ROCK        # stairs up a face: a level, as the face
-        elif role == "floor" and m in MOUNTAIN and f >= 0.5:
-            k = ROCK        # a cave's mouth, a door: walked into, drawn as the face
-        elif role == "floor" and m in MOUNTAIN and f < 0.08 and t >= 0.45:
+        elif ((role == "stair" or roles.behaviour(lx, ly) == self.mud
+               or (role == "floor" and art.metatile(lx, ly) in CARVED_STEPS))
+              and self._in_face(art, lx, ly)):
+            k = ROCK        # stairs (a muddy slope) up a face: a level, as the face
+        elif role == "floor" and m in MOUNTAIN and f >= 0.5 and not alien:
+            # a cave's mouth, a door: walked into (a warp), drawn as the
+            # face. Walked over, it is the ground the face's colours are
+            # drawn on: Route 113's patches of ash in a ground of the
+            # mountain's colours (as rock they sank as pits with faces)
+            k = ROCK if (lx, ly) in roles.warps else TOP
+        elif role == "floor" and m in MOUNTAIN and f < 0.08 and t >= 0.45 and not alien:
             k = TOP         # a path along a ridge: the top it is drawn as
-        elif role in ("floor", "stair", "signpost") or m not in MOUNTAIN:
+        elif role in ("floor", "stair", "signpost") or (m not in MOUNTAIN and t + f < 0.9) or alien:
+            # (a tile drawn all in rock outside the mountain's own set - the
+            # rounded shoulders 0ee/0ef of a mound - is rock all the same)
             # walked on, a sign, a patch of soil, a building's wall: never
             # the mountain, whatever colours it is drawn in
             k = GROUND
@@ -247,13 +442,24 @@ class Cells:
         else:
             k = ROCK
         self.kind[cell] = k
-        if k in (TOP, ROCK):
+        if k in (TOP, ROCK) or cell in self.walked_tops:
             g_top = sum(1 for yy in range(4) for xx in range(16) if cls[yy][xx] == "G")
             if rim_pixels(art, m) >= 3 or g_top >= 12:
                 self.rim.add(cell)
 
     def art(self, cell):
         return self.arts[self.src[cell][0]]
+
+    def is_stair(self, cell):
+        """A flight of steps: walked up a face as stairs (or drawn as the
+        General's carved steps, which the regions read as floor)."""
+        return self.role(cell) == "stair" or (self.kind.get(cell) == ROCK
+                                             and self.metatile(cell) in CARVED_STEPS)
+
+    def on_top(self, cell):
+        """A boulder drawn whole on a ridge's end, capping it (a wide one
+        lies in its terrace, one with it)."""
+        return self.metatile(cell) in ON_TOP and cell not in self.wide_boulder
 
     def at_edge(self, cell):
         """On its map's border: where it meets the next map."""
@@ -271,6 +477,8 @@ class Cells:
         return twin(self.arts[lid], self.arts[lid].metatile(x, y))
 
     def role(self, cell):
+        if cell in getattr(self, "puddles", ()):
+            return "floor"
         lid, x, y = self.src[cell]
         return self.roles_of[lid].role_at(x, y)
 
@@ -279,7 +487,7 @@ class Cells:
         the drawing of the water beside it (Route 106's wood over the sea)."""
         if cell not in self.src:
             return False
-        if self.role(cell) == "water":
+        if self.role(cell) == "water" or cell in self.lone_bridge:
             return True
         if cell not in self._over_water:
             self._over_water[cell] = self.crown(cell) and any(
@@ -309,9 +517,25 @@ class Cells:
         hi, lo = art.cell_image(m).load(), art.cell_image(m, (0,)).load()
         return sum(1 for j in range(16) for i in range(16) if hi[i, j] != lo[i, j]) >= 64
 
+    def muddy(self, cell):
+        """A muddy slope (MB_MUDDY_SLOPE)."""
+        if cell not in self.src:
+            return False
+        lid, x, y = self.src[cell]
+        return self.mud is not None and self.roles_of[lid].behaviour(x, y) == self.mud
+
     def walked(self, cell):
         """Walked on (the collision map): a floor, not water, a ledge, stairs."""
-        return cell in self.src and self.role(cell) == "floor"
+        return cell in self.src and self.role(cell) == "floor" and cell not in self.lone_bridge
+
+    @staticmethod
+    def _top_tile(art, m):
+        """A mountain tile drawn as a terrace's top (its rim's included)."""
+        if twin(art, m) not in MOUNTAIN:
+            return False
+        cls = pixel_classes(art, m)
+        return (sum(r.count("F") for r in cls) < 0.08 * 256
+                and sum(r.count("T") for r in cls) >= 0.45 * 256)
 
     @staticmethod
     def _in_face(art, x, y):
@@ -377,8 +601,9 @@ def runs_of(c):
             while c.kind.get((x, y + 1 + k)) == ROCK and (x, y + 1 + k) not in c.band:
                 k += 1
             end = (x, y + 1 + k)
+            cells = [(x, y + 1 + i) for i in range(k)]
             if flat(end) and end not in c.rim:
-                runs.append(("S", (x, y), [(x, y + 1 + i) for i in range(k)], end))
+                runs.append(("S", (x, y), cells, end))
     for y in c.ys:
         for x in c.xs:
             nxt = (x + 1, y)
@@ -447,9 +672,13 @@ def terraces(c, runs):
                     continue
                 # a boulder drawn on a ridge's end caps it: the end is its
                 # own terrace (a ridge falls at its end, a band less high)
-                if (c.metatile((x, y)) in ON_TOP) != (c.metatile(n) in ON_TOP):
+                if c.on_top((x, y)) != c.on_top(n):
                     continue
             elif nk not in (GROUND, UNKNOWN):
+                continue
+            elif n[1] == y + 1 and n in c.walked_tops and n in c.rim:
+                # a walked top's rim: its back too is another terrace's
+                # (Route 114's lips stacked up to its summit, row on row)
                 continue
             # first what the collision map ties: ground walked from one cell
             # to the next with no ledge or stairs between is one level (the
@@ -458,11 +687,19 @@ def terraces(c, runs):
             # what a map's own tileset draws on it
             ma, mb = c.metatile((x, y)), c.metatile(n)
             wa, wb = c.water((x, y)), c.water(n)
+            if (x, y) in c.falls and n not in c.falls and n[1] == y + 1:
+                # the pool at a waterfall's foot: not the river above it
+                continue
             if (wa and wb) or (k == GROUND and nk == GROUND and c.walked((x, y)) and c.walked(n)):
                 rank = 0
             elif ma < 0x200 and mb < 0x200:
                 rank = 1
             else:
+                rank = 2
+            # a top walked onto from the grass (behind its rim, or past its
+            # band's head) is joined to that grass last: the band down its
+            # side holds them apart first (Route 114's plateau over its valley)
+            if ((x, y) in c.walked_tops) != (n in c.walked_tops):
                 rank = 2
             # a shore last: land is joined to land first, so a wood on a
             # ridge's top is one terrace (kept apart from the sea at the
@@ -491,13 +728,14 @@ def steps(c, cells, direction):
     return out, n
 
 
-def solve_levels(c, comp, runs, reference=None, meets=None):
+def solve_levels(c, comp, runs, reference=None, meets=None, blocks_out=None):
     """{terrace: level}, the votes that lost. `reference`: {cell: height} of
     the world as it stands (the relief the world solver placed); each block
     of terraces tied by votes is lifted to agree with it most, so no seam
     with a neighbouring map moves. Without it, its biggest ground is 0.
-    `meets`: the edge cells whose reference is the level of the map across
-    the seam (seam_meets) - only those hold a terrace where it stands."""
+    `meets`: the edge cells with a map across them (seam_faces) - only those
+    that meet it hold a terrace where it stands, and only along a seam most
+    of the terrace meets."""
     runs = [r for r in runs if r[1] in comp and r[3] in comp and comp[r[1]] != comp[r[3]]]
     # a band's head under a rim turns the corner (the band beside it may
     # start a row lower): it says the least
@@ -511,6 +749,15 @@ def solve_levels(c, comp, runs, reference=None, meets=None):
         # is not seen
         hidden[key] += d == "S" and ((c.role(lo) == "wall" and c.metatile(lo) >= 0x200)
                                      or c.kind.get((lo[0], lo[1] + 1)) == UNKNOWN)
+    # a rim's lip: the terrace it starts stands over the one behind it,
+    # how high the drawing does not say - one level, the least, and only
+    # where no face or band says more (a terrace no run reaches - Route
+    # 114's row of lips up to its summit - sank to the world's ground)
+    lip = collections.Counter()
+    for cell in c.rim:
+        n = (cell[0], cell[1] - 1)
+        if cell in comp and n in comp and comp[cell] != comp[n] and c.src[n][0] == c.src[cell][0]:
+            lip[(comp[cell], comp[n], 1)] += 1
     off = Offsets()
     dropped = []
     size = collections.Counter(comp.values())
@@ -530,9 +777,18 @@ def solve_levels(c, comp, runs, reference=None, meets=None):
             if kind_of[t] != GROUND or len(cells) < ANCHOR_MIN:
                 continue
             edge = [cell for cell in cells if c.at_edge(cell) and cell in reference
-                    and (meets is None or cell in meets)]
+                    and (meets is None or meets.get(cell, (None, False))[1])]
             if len(edge) < 2:
                 continue
+            if meets is not None:
+                # a couple of cells that happen to meet hold nothing: along
+                # Route 115's seam with Rustboro two of Rustboro's sea rocks
+                # stood at the level of 115's sea, a level over Rustboro's
+                # own sea - and held the beach level with the grass over it
+                met = collections.Counter(meets[cell][0] for cell in edge)
+                along = collections.Counter(meets[cell][0] for cell in cells if cell in meets)
+                if not any(2 * n >= along[b] for b, n in met.items()):
+                    continue
             got = collections.Counter(LEVEL * round(reference[cell] / LEVEL) for cell in cells
                                       if cell in reference and cell not in c.keep)
             if got:
@@ -556,12 +812,16 @@ def solve_levels(c, comp, runs, reference=None, meets=None):
                                                              kv[0][0], kv[0][1])):
         if not off.join(a, b, k * LEVEL):
             dropped.append(((a, b, k), n))
+    for (a, b, k), n in sorted(lip.items(), key=lambda kv: (-kv[1], kv[0])):
+        off.join(a, b, k * LEVEL)
     roots = collections.defaultdict(list)
     for t in set(comp.values()):
         roots[off.find(t)[0]].append(t)
     level = {}
     world_root = off.find(WORLD)[0]
     for r, members in roots.items():
+        if blocks_out is not None:
+            blocks_out.update((t, r) for t in members)
         rel = {t: off.find(t)[1] for t in members}
         grounds = [t for t in members if kind_of[t] == GROUND]
         lift = None
@@ -628,6 +888,24 @@ def upper_levels(c, comp, level, runs):
             for i in range(j):
                 U.setdefault((x + 1 + k + i, y), crest - LEVEL * i)
                 crests.add((x + 1 + k + i, y))
+    # a flank whose terrace is off the map (Route 111's desert walled east
+    # by bands climbing to its edge, no map beyond): it counts up from the
+    # ground at its foot, a level a band - kept to the levels round it, it
+    # sank under the desert as a trench
+    for y in c.ys:
+        for x in c.xs:
+            if (x, y) not in comp:
+                continue
+            for side, step in (("W", 1), ("E", -1)):
+                k, run = 1, []
+                while c.band.get((x + step * k, y)) == side:
+                    run.append((x + step * k, y))
+                    k += 1
+                if run and (x + step * k, y) not in c.src:
+                    for i, cell in enumerate(run):
+                        if cell not in U:
+                            U[cell] = level[comp[(x, y)]] + LEVEL * (i + 1)
+                            crests.add(cell)
     # bands down a column are one band: the same level
     changed = True
     while changed:
@@ -702,22 +980,145 @@ def unknown_levels(c, comp, level, U):
             x, y = todo.pop()
             patch.append((x, y))
             for n in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
-                if c.kind.get(n) == UNKNOWN and n not in seen:
+                # (a modelled object is a patch of its own: a loose boulder
+                # drawn against it on the terrace below is not on its ground)
+                if c.kind.get(n) == UNKNOWN and n not in seen and c.prop_of.get(n) == c.prop_of.get((x, y)):
                     seen.add(n)
                     todo.append(n)
-        cand, wet = [], []
+        cand, wet, feet, behind = [], [], [], []
         for (x, y) in patch:
             for n in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
                 if n in comp:
                     (wet if c.water(n) else cand).append(level[comp[n]])
+                    if n != (x, y + 1) and not c.water(n):
+                        behind.append(level[comp[n]])
             if (x, y - 1) in U:
-                cand.append(U[(x, y - 1)] - LEVEL)
+                feet.append(U[(x, y - 1)] - LEVEL)
+        # a modelled object (a boulder, a mound) lies on the ground round
+        # it; only where none is beside it, at the foot of the rock above
+        # (the boulder on Route 115's ledge by Meteor Falls, put at the foot
+        # the face over it was counted to, sank a level into the ledge)
+        modelled = all(cell in c.props for cell in patch)
+        if cand and modelled:
+            feet = []
+            # the ground it is drawn on is behind it and beside it: its foot
+            # may hang over the edge of a lower terrace, whose drop it hides
+            # (Route 111's boulders on the terraces south of the pond: put on
+            # the terrace below, the band beside them stood a level over
+            # their ground, a dark wall)
+            if behind:
+                cand = behind
         # what stands mostly in the sea (a rock off the shore) stands on the
         # sea; what stands mostly on land (a wood by the beach) on the land
-        cand = wet if len(wet) > len(cand) else (cand or wet)
+        use_wet = len(wet) > len(cand) + len(feet)
+        # ... but a patch drawn over a face is that face's top, whatever
+        # water is round it (Route 133's sandbar: its sand, read as nothing,
+        # stood on the sea - the face along its front had nothing to fall
+        # and lay flat on the water)
+        if use_wet and not modelled:
+            tops = set()
+            for (x, y) in patch:
+                run = []
+                while c.kind.get((x, y + 1 + len(run))) == ROCK and (x, y + 1 + len(run)) not in c.band:
+                    run.append((x, y + 1 + len(run)))
+                foot = (x, y + 1 + len(run))
+                if run and foot in comp and c.kind.get(foot) in (TOP, GROUND):
+                    tops.add(level[comp[foot]] + LEVEL * steps(c, run, "S")[1])
+            if len(tops) == 1:
+                top = tops.pop()
+                for cell in patch:
+                    out[cell] = top
+                continue
+        # the foot of the rock over a tree is never under every ground the
+        # patch stands beside: a face counted down past its foot (the end
+        # of Route 111's east cliff over the fence at Mauville's seam) sank
+        # the fence and the wood a level into a pit
+        ground = wet if use_wet else cand
+        floor = min(ground) if ground else None
+        # a wood of large trees (cards of four cells, each lifted with its
+        # own cell) whose every edge meets ground of one level: it is all
+        # on that ground (Route 115's wood under the cliff by Route 114:
+        # split by the counts of the faces over it into three levels, the
+        # trees stood on walls with the void between them)
+        if ground and not use_wet and max(ground) - min(ground) < 0.5 and all(
+                c.metatile(cell) in TREE_CARDS - SMALL_TRUNKS for cell in patch):
+            for cell in patch:
+                out[cell] = ground[0]
+            continue
+        feet = [f if floor is None else max(f, floor) for f in feet]
+        cand = wet if use_wet else (cand + feet or wet)
         v = min(cand) if cand else 0
+        # a big wood spans terraces: each tree stands on the ground nearest
+        # it (the lowest of the nearest), not the whole wood on the lowest
+        # ground any of it touches (a wood beside a high meadow sank three
+        # levels under it, a cliff the drawing never has)
+        own, spread = {}, {}
+        for (x, y) in patch:
+            mine = []
+            # a tree whose top is drawn in a face's row (rock either side,
+            # its trunk on the ground below): the top of the cliff over it
+            # is not its ground - the face runs on behind it (behind_trees).
+            # Taken as its ground, it stood a level or two over its trunk,
+            # dark wedges of wall either side of it
+            in_face = (c.kind.get((x - 1, y)) == ROCK and c.kind.get((x + 1, y)) == ROCK
+                       and c.kind.get((x, y + 1)) == UNKNOWN)
+            # the top of a small tree (a card standing on its trunk's cell):
+            # what it is drawn over is behind the tree, not its ground (a
+            # wood of two rows in front of a face: the back row's tops took
+            # the terrace over the face and stood a level over the front
+            # row, a wall between their trunks). Whether the wood spans more
+            # than a step is still read with them (`spread`).
+            top = (c.metatile((x, y)) not in TREE_CARDS and (x, y + 1) in c.src
+                   and c.metatile((x, y + 1)) in SMALL_TRUNKS)
+            behind = []
+            for n in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                if in_face and n == (x, y - 1):
+                    continue
+                if n in comp and c.water(n) == use_wet:
+                    if top and n == (x, y - 1):
+                        behind.append(level[comp[n]])
+                    else:
+                        mine.append(level[comp[n]])
+            if (x, y - 1) in U and (x, y - 1) not in c.band and not (modelled and mine):
+                # (under a band the foot is not one level down: its slope
+                # meets the ground beside it - that ground is the tree's)
+                f = U[(x, y - 1)] - LEVEL
+                mine.append(f if floor is None else max(f, floor))
+            if mine:
+                own[(x, y)] = min(mine)
+            if mine or behind:
+                spread[(x, y)] = min(mine + behind)
+        if not spread or max(spread.values()) - min(spread.values()) <= LEVEL + 0.5:
+            # a wood over one step (a hedge along a terrace's edge) lies
+            # whole on the lower ground: split, it climbed the edge in a
+            # zigzag of walls between the trees
+            for cell in patch:
+                out[cell] = v
+            continue
+        dist = {cell: 0 for cell in own}
+        front = list(own)
+        res = dict(own)
+        while front:
+            nxt = []
+            for (x, y) in front:
+                for n in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                    if c.kind.get(n) != UNKNOWN or n not in seen:
+                        continue
+                    d = dist[(x, y)] + 1
+                    if n not in dist:
+                        dist[n] = d
+                        res[n] = res[(x, y)]
+                        nxt.append(n)
+                    elif dist[n] == d:
+                        res[n] = min(res[n], res[(x, y)])
+            front = nxt
+        # the top of a small tree stands where its trunk does
+        for (x, y) in sorted(patch, key=lambda cl: -cl[1]):
+            if (c.metatile((x, y)) not in TREE_CARDS and (x, y + 1) in res
+                    and c.metatile((x, y + 1)) in SMALL_TRUNKS):
+                res[(x, y)] = res[(x, y + 1)]
         for cell in patch:
-            out[cell] = v
+            out[cell] = res.get(cell, v)
     return out
 
 
@@ -1026,6 +1427,8 @@ CORNER = 0.3            # taking a corner piece instead of the drawing's kind
 def is_face(c, cell):
     if cell in c.band:
         return False
+    if c.kind.get(cell) == ROCK and (c.is_stair(cell) or c.muddy(cell)):
+        return True     # stairs up a face climb its level as the face does
     cls = pixel_classes(c.art(cell), c.metatile(cell))
     f = sum(row.count("F") for row in cls)
     return f >= FACE_SHARE * 256
@@ -1186,8 +1589,31 @@ def blocks(c, U, flat, kept=None):
     return out
 
 
+def split_kind(kind):
+    """(kind, drop in pixels) of a piece's kind: "S:8" is a face falling 8
+    pixels (a fall shared out between more rows or columns of rock than it
+    has levels), "S" one level."""
+    if ":" in kind:
+        k, d = kind.split(":")
+        return k, float(d)
+    return kind, None
+
+
 def piece_grid(kind, top):
     """5 x 5 heights of a piece."""
+    kind, drop = split_kind(kind)
+    if drop is not None:
+        if kind in CORNERS:
+            east = kind[2] == "E"
+            pick = max if kind[0] == "c" else min
+            return [[top - drop / N * pick(i if east else N - i, j) for i in range(N + 1)]
+                    for j in range(N + 1)]
+        if kind == "S":
+            return [[top - drop * j / N] * (N + 1) for j in range(N + 1)]
+        if kind == "W":
+            return [[top - drop + drop * i / N for i in range(N + 1)] for _ in range(N + 1)]
+        if kind == "E":
+            return [[top - drop * i / N for i in range(N + 1)] for _ in range(N + 1)]
     if kind in CORNERS:
         # a face and a band meeting: one level down, the face falling south
         # and the band east or west, the nearer of the two (convex: a
@@ -1207,15 +1633,466 @@ def piece_grid(kind, top):
     return [[top] * (N + 1) for _ in range(N + 1)]
 
 
-def behind_trees(c, flat, grids):
+# A band's column is drawn with its ends: a head where it starts under what
+# is behind it (074 falling east, 089 west) and a foot where it turns into
+# the face below (07a/07d/092 east, 07b/078/090 west).
+BAND_HEAD = {"E": {0x074}, "W": {0x089}}
+BAND_FOOT = {"E": {0x07a, 0x07d, 0x092}, "W": {0x07b, 0x078, 0x090}}
+
+
+def segments(c):
+    """[(side, head or None, [band cells], foot or None)]: every column of
+    bands of one side with the ends drawn above and below it."""
+    out = []
+    for (x, y), side in sorted(c.band.items()):
+        if c.band.get((x, y - 1)) == side:
+            continue
+        cells = [(x, y)]
+        while c.band.get((x, cells[-1][1] + 1)) == side:
+            cells.append((x, cells[-1][1] + 1))
+        head, foot = (x, y - 1), (x, cells[-1][1] + 1)
+        head = head if head in c.src and c.kind.get(head) == ROCK and head not in c.band \
+            and c.role_id(head) in BAND_HEAD[side] else None
+        foot = foot if foot in c.src and c.kind.get(foot) == ROCK and foot not in c.band \
+            and c.role_id(foot) in BAND_FOOT[side] else None
+        out.append((side, head, cells, foot))
+    # a face's end drawn as a head straight over a foot, no band between
+    # (074 over 07a: one diagonal level, steps()): a column of no band
+    for (x, y), k in sorted(c.kind.items()):
+        if k != ROCK or (x, y) in c.band or (x, y + 1) not in c.src:
+            continue
+        for side in ("E", "W"):
+            foot = (x, y + 1)
+            # (with ground on its low side: the end of a face, the rock
+            # ending there - a run of such ends drawn rock against rock is
+            # the face's own pattern, read by the counts)
+            low = 1 if side == "E" else -1
+            if c.role_id((x, y)) in BAND_HEAD[side] and c.kind.get(foot) == ROCK \
+                    and foot not in c.band and c.role_id(foot) in BAND_FOOT[side] \
+                    and all(n in c.src and c.kind.get(n) != ROCK for n in ((x + low, y), (x + low, y + 1))):
+                out.append((side, (x, y), [], foot))
+    return out
+
+
+def staircases(c, pieces, flat, kept):
+    """A diagonal edge drawn as a staircase of band columns (Route 111's
+    cliffs falling south-east by the stairs: 074 over 072/075 over 07a/07d,
+    the next column a level lower two rows on) is one band a column: its
+    head, its bands and its foot one level, the level of what its high side
+    meets - the terrace beside it, or the low edge of the column before it.
+    Counted by rows and settled cell by cell, the columns of two steps were
+    mixed (a band a level up beside its own foot: a wall between them, the
+    dark slit; a head as a top, a box), as the corners of a staircase hold
+    no run of the counts.
+
+    Each column is then the pieces the drawing has: the head a concave
+    corner (vSE/vSW: what is behind it meets its top, the band below it its
+    slope), the bands their ramp, the foot a convex corner (cSE/cSW: the
+    band turning into the face under it) - the pieces of the same level
+    meet each other, the column before and the one after along whole
+    edges."""
+    # (a band lying flat between two grounds at one level, or falling two
+    # levels down a flank of one tile, is left as the blocks chose it)
+    # (nor a column with water on its low side: a rock's flank in the sea is
+    # no staircase but a mound's own side - the level of the top beside it
+    # stood the band over the water and its corner below, a step the width
+    # of the rock: Route 130's rocks; a cliff's end beside a waterfall has
+    # nothing to fall to - its corners fell a level under the river's edge:
+    # Safari Zone's waterfalls)
+    def dry(s):
+        out = 1 if s[0] == "E" else -1
+        return not any(c.water((cell[0] + out, cell[1])) for cell in [s[1], s[3]] + list(s[2]) if cell)
+    segs = [s for s in segments(c) if dry(s) and all(cell not in c.keep and pieces.get(cell, ("",))[0] == s[0]
+                                                     for cell in s[2])]
+
+    def north_edge(n):
+        """The heights along the south edge of `n` (north of a head)."""
+        if n in kept:
+            return None
+        if n in flat and c.kind.get(n) != ROCK:
+            return [flat[n]] * (N + 1)
+        p = pieces.get(n)
+        return None if p is None else edge(piece_grid(*p), "S")
+
+    def high_edge(n, side):
+        """The heights along the edge of `n` facing a band of `side`, or None."""
+        if n in kept:
+            return None
+        if n in flat and c.kind.get(n) != ROCK:
+            return [flat[n]] * (N + 1)
+        p = pieces.get(n)
+        if p is None:
+            return None
+        return edge(piece_grid(*p), "E" if side == "E" else "W")
+
+    # a fin: rock standing over the ground on three sides of it, west, east
+    # and behind (Route 111's staircase of face ends by the logs: an end
+    # between two patches of a ledge, read as a band, stood a level over
+    # them, dark walls either side) - it is that ground's level
+    def facing_we(n, side):
+        if n in kept:
+            return None
+        if n in flat and c.kind.get(n) != ROCK:
+            return [flat[n]] * (N + 1)
+        p = pieces.get(n)
+        return None if p is None else edge(piece_grid(*p), "E" if side == "W" else "W")
+    for cell, p in sorted(pieces.items()):
+        if c.kind.get(cell) != ROCK or cell in c.keep or cell in kept:
+            continue
+        x, y = cell
+        # (the sea round a rock's end is no ground it stands on: Route 133's
+        # sandbars end in rock with water west, east and behind)
+        if any(c.water(n) for n in ((x - 1, y), (x + 1, y), (x, y - 1))):
+            continue
+        sides = [facing_we((x - 1, y), "W"), facing_we((x + 1, y), "E"),
+                 facing_ns(c, pieces, flat, kept, (x, y - 1), "N")]
+        if any(e is None or max(e) - min(e) > 0.5 for e in sides):
+            continue
+        level = sides[0][0]
+        if any(abs(e[0] - level) > 0.5 for e in sides):
+            continue
+        if max(max(r) for r in piece_grid(*p)) > level + 0.5:
+            pieces[cell] = ("F", level)
+    for _ in range(4):
+        moved = 0
+        for side, head, cells, foot in segs:
+            step = -1 if side == "E" else 1        # towards the high side
+            votes = collections.Counter()
+            # (a head straight over its foot: what is behind the head and on
+            # its high side)
+            ask = cells or [head]
+            for cell in ask:
+                n = (cell[0] + step, cell[1])
+                e = high_edge(n, side)
+                if e is None or max(e) - min(e) > 0.5:
+                    continue
+                # a tree's ground says the least (a wood beside a band stands
+                # where the solve put it); the terrace or the band before it
+                votes[e[0]] += 1 if c.kind.get(n) == UNKNOWN else 2
+            if not cells:
+                n = (head[0], head[1] - 1)
+                e = north_edge(n)
+                if e is not None and max(e) - min(e) <= 0.5:
+                    votes[e[0]] += 1 if c.kind.get(n) == UNKNOWN else 2
+            if not votes:
+                continue
+            top = max(votes.items(), key=lambda kv: (kv[1], kv[0]))[0]
+            # a column whose ends meet ground of another level - the ground
+            # behind its head not at its top, or the ground its foot's face
+            # falls to not a level under it - is no step of a staircase: the
+            # drawing has the level change along the column (Safari Zone's
+            # lanes: a head under a terrace a level over the band's, drawn
+            # as the face it is). As one level it stood a step facing the
+            # camera across its head or its foot: left as the blocks chose
+            if cells:
+                ends = []
+                if head is not None:
+                    e = north_edge((head[0], head[1] - 1))
+                    n = (head[0], head[1] - 1)
+                    if e is not None and max(e) - min(e) <= 0.5 and c.kind.get(n) != UNKNOWN:
+                        ends.append(e[0] - top)
+                if foot is not None:
+                    n = (foot[0], foot[1] + 1)
+                    if n in flat and n not in kept and c.kind.get(n) in (TOP, GROUND):
+                        ends.append(flat[n] + LEVEL - top)
+                if any(abs(d) > 0.5 for d in ends):
+                    continue
+            want = [(cell, (side, top)) for cell in cells]
+            want = [(cell, (side, top)) for cell in cells]
+            if head is not None:
+                want.append((head, ("vS" + side, top)))
+            if foot is not None:
+                want.append((foot, ("cS" + side, top)))
+            for cell, piece in want:
+                if cell in kept or cell in c.keep:
+                    continue
+                if pieces.get(cell) != piece:
+                    pieces[cell] = piece
+                    moved += 1
+        if not moved:
+            break
+
+
+def level_bands(c, pieces, flat, kept, measured=frozenset()):
+    """A band with nothing to fall: the ground on its low side stands as
+    high as the edge on its high side (a flank drawn two bands wide for the
+    one level between a terrace and the meadow beside it - Route 111 by the
+    Winstrates' stairs: the outer band fell a level more, under the meadow,
+    and the meadow's edge hung over a black wedge where the band's head is
+    drawn on its grass). It lies flat at that level, its drawing on it; and
+    where every band of a column lies flat so do the head and the foot drawn
+    at its ends (corners of a fall there is not)."""
+    def facing(n, side):
+        """The heights along the edge of `n` that faces a cell on its
+        `side` ("W": n is west of it), or None."""
+        if n in kept:
+            return None
+        if n in flat and c.kind.get(n) != ROCK:
+            return [flat[n]] * (N + 1)
+        p = pieces.get(n)
+        return None if p is None else edge(piece_grid(*p), "E" if side == "W" else "W")
+
+    segs = segments(c)
+    # the same for a face: a column of faces drawn between ground above and
+    # ground below fewer levels apart than it has rows (Route 111's rocky
+    # slope by the logs: a strip of face between two patches of grass of a
+    # level, two rows of face for one level under a ledge) has rows with
+    # nothing to fall - as faces they stood over the ground above them, a
+    # pit walled round. The upper ones lie flat at the level above, the
+    # rest fall a level a row.
+    def plain(cell):
+        return c.kind.get(cell) == ROCK and cell not in c.band and cell not in c.keep \
+            and cell not in kept and pieces.get(cell, ("",))[0] in ("S",) + tuple(CORNERS)
+    for (x, y) in sorted(pieces):
+        # (from under ground, or under a corner - the foot a band ends in,
+        # level along its south edge)
+        if not plain((x, y)) or (c.kind.get((x, y - 1)) == ROCK and pieces.get((x, y - 1), ("",))[0]
+                                 not in CORNERS):
+            continue
+        if plain((x, y - 1)) and pieces[(x, y - 1)][0] not in CORNERS:
+            continue
+        run = [(x, y)]
+        while plain((x, run[-1][1] + 1)):
+            run.append((x, run[-1][1] + 1))
+        below = (x, run[-1][1] + 1)
+        if c.kind.get(below) == ROCK:
+            continue
+        # (nor hanging from water: the frilled rim of a sandbar's top reads
+        # as the sea round it - Route 133; nor standing in it: a rock's
+        # corner in the sea, between the rim of its top and the sea at its
+        # foot, has the rock beside it to fall from - laid flat, Route 134's
+        # rocks lost a corner and stood walled)
+        if c.water((x, y - 1)) or c.water(below):
+            continue
+        north = facing_ns(c, pieces, flat, kept, (x, y - 1), "N")
+        # (a wood at the foot stands where the face's count put it: its
+        # level says nothing of the face's - unless the count stood the
+        # face over the ground behind it, a fin: Route 111's two rows of
+        # face over the wood south of the logs, counted two levels for the
+        # one between the meadow and the wood, a peak over the meadow; or
+        # sunk under it, a pit: Safari Zone's face of two rows between two
+        # woods, counted a level under the wood behind it)
+        if c.kind.get(below) == UNKNOWN and (north is None or abs(max(
+                max(r) for r in piece_grid(*pieces[run[0]])) - max(north)) <= 0.5):
+            continue
+        south = facing_ns(c, pieces, flat, kept, below, "S")
+        if north is None or south is None or max(north) - min(north) > 0.5 \
+                or max(south) - min(south) > 0.5:
+            continue
+        fall = (north[0] - south[0]) / LEVEL
+        if abs(fall - round(fall)) > 0.01 or not 0 <= round(fall) <= len(run):
+            continue
+        fall = int(round(fall))
+        if fall and any(pieces[cell][0] != "S" for cell in run):
+            continue        # (corners in a run that falls: left as counted)
+        if not fall:
+            # nothing to fall at all. Where a count of the drawing measured
+            # this face, the solve dropped it against others: the face stands
+            # as counted (laid flat, Safari Zone's middle terrace was rock
+            # painted on the meadow below it). Where none did, it is the
+            # drawing's own contradiction (Route 111's face end between two
+            # scraps of one meadow by the logs): flat
+            if ((x, y - 1), below) in measured:
+                continue
+            for cell in run:
+                pieces[cell] = ("F", north[0])
+            continue
+        # whole faces from the top, one level a row, as many as the fall
+        # has; the rows left over lie flat at the foot (a face of a share of
+        # a level was neither face nor top - a twisted strip breaking the
+        # cliff's shape; the flat rows at its foot are mostly hidden by what
+        # stands in front of it, a wood)
+        for i, cell in enumerate(run):
+            pieces[cell] = ("S", north[0] - LEVEL * i) if i < fall else ("F", north[0] - LEVEL * fall)
+    # a row of bands of one side between two grounds (west and east of it)
+    # fewer levels apart than it has bands: the fall shared out between them,
+    # each a band of its share (the flank of a terrace drawn two bands wide
+    # for its one level: the outer one fell a level more, under the meadow);
+    # none to fall at all, they lie flat. The ends drawn at a column's ends
+    # go with the band beside them: a head with the first band's share, a
+    # foot with the last's (a column falling its share at the foot's row
+    # gives the next column down the flank its edge to fall from) - so
+    # rows and ends are worked out turn by turn.
+    def chains():
+        moved = 0
+        wants = {}
+        for (x, y), side in sorted(c.band.items()):
+            up = 1 if side == "W" else -1           # towards the high side
+            if c.band.get((x + up, y)) == side:
+                continue                            # not the chain's high end
+            chain = [(x, y)]
+            while c.band.get((chain[-1][0] - up, y)) == side:
+                chain.append((chain[-1][0] - up, y))
+            if any(pieces.get(cell, ("",))[0] not in (side, "F") and split_kind(
+                    pieces.get(cell, ("",))[0])[0] != side or cell in c.keep for cell in chain):
+                continue
+            hi_n, lo_n = (x + up, y), (chain[-1][0] - up, y)
+            hi = facing(hi_n, "E" if side == "W" else "W")
+            lo = facing(lo_n, "W" if side == "W" else "E")
+            if hi is None or lo is None or max(hi) - min(hi) > 0.5 or max(lo) - min(lo) > 0.5:
+                continue
+            fall = hi[0] - lo[0]
+            if fall >= LEVEL * len(chain) - 0.5:
+                continue                            # as counted
+            if fall <= 0.5:
+                want = [("F", hi[0])] * len(chain)
+            elif abs(fall / LEVEL - round(fall / LEVEL)) > 0.01:
+                share = fall / float(len(chain))
+                want = [("%s:%g" % (side, share), hi[0] - share * i) for i in range(len(chain))]
+            else:
+                # whole bands from the high side, the rest flat at the foot
+                full = int(round(fall / LEVEL))
+                want = [(side, hi[0] - LEVEL * i) if i < full else ("F", hi[0] - LEVEL * full)
+                        for i in range(len(chain))]
+            wants[tuple(chain)] = (side, want)
+        # a band laid flat where the column it is drawn in goes on falling
+        # above or below it (Safari Zone's lanes: the top row of a column
+        # beside the terrace it starts under, one level between its ends
+        # for two bands) breaks that column - a step across it, the drawn
+        # band lying as ground: the row stands as counted
+        flat_at = {cell for chain, (side, want) in wants.items()
+                   for cell, piece in zip(chain, want) if piece[0] == "F"}
+        for chain, (side, want) in wants.items():
+            if any(piece[0] == "F" and any(
+                    c.band.get(n) == side and n not in flat_at and n not in c.keep
+                    and split_kind(pieces.get(n, ("",))[0])[0] == side
+                    for n in ((cell[0], cell[1] - 1), (cell[0], cell[1] + 1)))
+                   for cell, piece in zip(chain, want)):
+                continue
+            for cell, piece in zip(chain, want):
+                if pieces.get(cell) != piece:
+                    pieces[cell] = piece
+                    moved += 1
+        return moved
+
+    def ends():
+        moved = 0
+        for side, head, cells, foot in segs:
+            if not cells:
+                continue
+            tops = {pieces[cell] for cell in cells if cell in pieces}
+            if len(tops) == 1 and next(iter(tops))[0] == "F":
+                # all flat: the ends too, where what is past them stands at
+                # that level as well (a head drawn in the row of a face above
+                # is that face's)
+                level = next(iter(tops))[1]
+                for end, beyond, mine in ((head, 0, "N"), (foot, 1, "S")):
+                    if end is None or end in c.keep or end in kept:
+                        continue
+                    n = (end[0], end[1] - 1 if beyond == 0 else end[1] + 1)
+                    e = facing_ns(c, pieces, flat, kept, n, mine)
+                    if e is not None and all(abs(v - level) < 0.5 for v in e) \
+                            and pieces.get(end) != ("F", level):
+                        pieces[end] = ("F", level)
+                        moved += 1
+                continue
+            for end, band, corner in ((head, cells[0], "vS"), (foot, cells[-1], "cS")):
+                if end is None or end in c.keep or end in kept or band not in pieces:
+                    continue
+                k, share = split_kind(pieces[band][0])
+                if share is None or k != side:
+                    continue
+                piece = ("%s%s:%g" % (corner, side, share), pieces[band][1])
+                if pieces.get(end) != piece:
+                    pieces[end] = piece
+                    moved += 1
+        return moved
+
+    for _ in range(6):
+        if not chains() + ends():
+            break
+
+
+def unstand(c, pieces, flat, kept):
+    """A face (or a band, or a corner of the two) is the front of the
+    ground on top of it: its top edge never stands over the ground behind
+    it, a fin with lower ground at its back - from the game's camera a box
+    over the meadow (Route 111's foot of a band by the logs south of the
+    meadow, voted a level over the meadow and the faces beside it). Where
+    one does it comes down to the ground behind it, as itself or flat,
+    whichever meets the four cells round it best."""
+    def nb(n, its):
+        if n in kept:
+            return None
+        if n in flat and c.kind.get(n) != ROCK:
+            return [flat[n]] * (N + 1)
+        q = pieces.get(n)
+        return None if q is None else edge(piece_grid(*q), its)
+
+    def round_it(cell):
+        x, y = cell
+        return (((x, y - 1), "N", "S"), ((x, y + 1), "S", "N"), ((x - 1, y), "W", "E"), ((x + 1, y), "E", "W"))
+
+    def misfit(cell, piece):
+        g = piece_grid(*piece)
+        total = 0.0
+        for n, mine, its in round_it(cell):
+            e = nb(n, its)
+            if e is not None:
+                total += sum(abs(a - b) for a, b in zip(edge(g, mine), e))
+        return total
+
+    for _ in range(2):
+        moved = 0
+        for cell, p in sorted(pieces.items()):
+            if c.kind.get(cell) != ROCK or cell in c.keep or cell in kept or p[0] == "F":
+                continue
+            x, y = cell
+            g = piece_grid(*p)
+            behind = set()
+            # (the edge it falls from, the edge it falls to, the cell behind)
+            for back, hi, lo, its in (((x, y - 1), "N", "S", "S"), ((x + 1, y), "E", "W", "W"),
+                                      ((x - 1, y), "W", "E", "E")):
+                e = nb(back, its)
+                if e is None:
+                    continue
+                top, foot = edge(g, hi), edge(g, lo)
+                if sum(1 for t, f, b in zip(top, foot, e) if t - f > 0.5 and t - b > 0.5) >= 2:
+                    behind |= {max(e), min(e)}
+            if not behind:
+                continue
+            kind = p[0]
+            cands = [(k, lv) for lv in sorted(behind) for k in (kind, "F")]
+            best = min(cands, key=lambda q: misfit(cell, q))
+            if misfit(cell, best) < misfit(cell, p) - 0.5:
+                pieces[cell] = best
+                moved += 1
+        if not moved:
+            break
+
+
+def facing_ns(c, pieces, flat, kept, n, mine):
+    """The heights along the edge of `n` that faces a cell north ("N": n
+    is north of it) or south of it, or None."""
+    if n in kept:
+        return None
+    if n in flat and c.kind.get(n) != ROCK:
+        return [flat[n]] * (N + 1)
+    p = pieces.get(n)
+    return None if p is None else edge(piece_grid(*p), "S" if mine == "N" else "N")
+
+
+# voxel_tree.c VoxelTree_Part: the General tileset's trees drawn as cards
+# (a large tree's four parts, a small tree's trunk); and the small trees'
+# trunks, whose cell alone the tree stands on.
+SMALL_TRUNKS = {0x016, 0x017, 0x0C6, 0x0C7, 0x1F4, 0x1F5}
+TREE_CARDS = SMALL_TRUNKS | {0x1D4, 0x1D5, 0x1D6, 0x1D7, 0x1DC, 0x1DD, 0x1DE, 0x1DF, 0x1E4, 0x1E5,
+                             0x1E6, 0x1E7, 0x1EC, 0x1ED, 0x1F2, 0x1F3, 0x1FC, 0x1FD}
+
+
+def behind_trees(c, flat, grids, pieces=None):
     """A wood standing at a cliff's foot hides the cliff, it does not cut it
-    off: under each tree the face over it goes on down, a pixel a row, to
-    the ground the wood stands on - the mountain as if the trees were not
-    there (they are models of their own, drawn over it)."""
-    step = LEVEL / N
+    off: the tree's cell lies flat on the ground the wood stands on, and the
+    face over it goes straight down to it as a wall along the cell's edge -
+    the mountain as if the trees were not there (they are models of their
+    own, drawn over it). (A face run on down a pixel a row through the
+    tree's cell was a slope with a toothed foot: a cliff broken where it
+    met the wood.)"""
     for cell in sorted(grids, key=lambda cl: (cl[1], cl[0])):
         if c.kind.get(cell) != UNKNOWN or c.role(cell) != "tree" or cell in c.keep:
             continue
+        if pieces is not None and pieces.get(cell, ("F",))[0] != "F":
+            continue        # read as the face it is drawn in (a door's top in a face)
         x, y = cell
         north = grids.get((x, y - 1))
         if north is None or (x, y - 1) in c.keep:
@@ -1224,16 +2101,66 @@ def behind_trees(c, flat, grids):
         top = north[N]
         if max(top) <= low + 0.5:
             continue
-        grids[cell] = [[max(low, top[i] - j * step) for i in range(N + 1)] for j in range(N + 1)]
+        trunk = (x, y + 1)
+
+        def face_beside(n):
+            # (the face it goes on from, west or east of it in its row: a
+            # face, a corner of one at its top - the tree drawn in front of
+            # a face that runs on behind it, not at a face's end)
+            p = pieces.get(n) if pieces is not None else None
+            return p is not None and (p[0] == "S" or p[0] in CORNERS) and abs(p[1] - top[0]) < 0.5
+        if (pieces is not None and c.metatile(cell) not in TREE_CARDS and trunk in c.src
+                and c.metatile(trunk) in SMALL_TRUNKS and max(top) - min(top) < 0.5
+                and abs(top[0] - LEVEL - flat.get(trunk, low)) < 0.5
+                and (face_beside((x - 1, y)) or face_beside((x + 1, y)))):
+            # the top of a small tree drawn in the row of a face, one level
+            # over its trunk's ground: the tree stands on its trunk's cell
+            # alone (voxel_tree.c: a small tree's crown is a card from its
+            # trunk), so its top's cell is the face, going on behind it as
+            # it does either side (flat at the trunk's level, it was a notch
+            # in the cliff, a dark slit of wall either side of the tree)
+            pieces[cell] = ("S", top[0])
+            grids[cell] = piece_grid("S", top[0])
+            continue
+        grids[cell] = [[low] * (N + 1) for _ in range(N + 1)]
+
+
+# Maps solved on one canvas though the world's solve reads them apart: their
+# mountain is one it does not read (gr.ALIAS_TERRACES). Route 115's beige
+# mountain goes on into Route 114's south (apart, Route 115's ended at the
+# seam in a cliff six levels tall over Route 114's flat drawing).
+JOIN = (("LAYOUT_ROUTE115", "LAYOUT_ROUTE114"),)
 
 
 def group_of(layout_id):
-    """[(layout, x, y)]: the drawn group a layout is solved in, placed."""
-    for name, members in gr.DRAWN.items():
-        if layout_id in members:
-            return sorted(((lid, ox, oy) for lid, (ox, oy) in members.items()),
-                          key=lambda m: (m[0] != layout_id, m[0]))
-    return [(layout_id, 0, 0)]
+    """[(layout, x, y)]: the drawn group a layout is solved in, placed, with
+    the groups JOIN ties to it placed as their maps connect."""
+    def drawn(lid):
+        for name, members in gr.DRAWN.items():
+            if lid in members:
+                return dict(members)
+        return {lid: (0, 0)}
+
+    placed = drawn(layout_id)
+    grown = True
+    while grown:
+        grown = False
+        for a, b in JOIN:
+            for have, other in ((a, b), (b, a)):
+                if have not in placed or other in placed:
+                    continue
+                link = next(((dx, dy) for n, dx, dy in voxel_props.connections().get(have, ())
+                             if n == other), None)
+                if link is None:
+                    continue
+                ox, oy = placed[have][0] + link[0], placed[have][1] + link[1]
+                theirs = drawn(other)
+                bx, by = theirs[other]
+                for lid, (x, y) in theirs.items():
+                    placed.setdefault(lid, (x - bx + ox, y - by + oy))
+                grown = True
+    return sorted(((lid, ox, oy) for lid, (ox, oy) in placed.items()),
+                  key=lambda m: (m[0] != layout_id, m[0]))
 
 
 def reference_heights(relief, members):
@@ -1257,6 +2184,12 @@ def seam_meets(relief, members):
     """{canvas cell}: the edge cells of a group whose height in a parsed
     relief.bin is the height of the cell across the seam, on the map
     connected there (within a half level) - where the two maps meet."""
+    return {cell for cell, (_, meet) in seam_faces(relief, members).items() if meet}
+
+
+def seam_faces(relief, members):
+    """{canvas cell: (map across, meets)}: every edge cell of a group with a
+    map connected across it, and whether the two meet (seam_meets)."""
     import voxel_relief_fixes as vrf
     size = {lid: (gr.layout_art(lid).w, gr.layout_art(lid).h) for lid, _, _ in members}
     at = {lid: (ox, oy) for lid, ox, oy in members}
@@ -1264,7 +2197,11 @@ def seam_meets(relief, members):
     def height(lid, x, y):
         t = relief["layouts"].get(vrf.layout_index(lid))
         if t is None:
-            return None
+            # a map with no table stands level at the world's 0 (the export
+            # leaves out a map with no cell lifted and no base): Mauville
+            # under Route 111 - read as no height, the seam anchored nothing
+            # and the routes' terraces were lifted off the town's ground
+            return 0
         g = t["cells"].get((x, y))
         return t["base"] + (g[12] if g else 0)
 
@@ -1272,17 +2209,25 @@ def seam_meets(relief, members):
         w, h = size[lid]
         return {"down": (i, h - 1), "up": (i, 0), "right": (w - 1, i), "left": (0, i)}[edge]
 
-    out = set()
+    # a layout a script swaps in for a member (Route 111 without the Mirage
+    # Tower) is the member itself: its seams are the group's own, and
+    # taken as a neighbour's they pinned the group to the old solve's
+    # heights of its twin
+    import voxel_cells as vc
+    alt = vc.alternate_layouts()
+    same = set(at) | {k for k, v in alt.items() if v in at} | {v for k, v in alt.items() if k in at}
+    out = {}
     for a, b, direction, offset in gr.map_links():
-        if a not in at or b in at:
+        if a not in at or b in same:
             continue
         a_art, b_art = gr.layout_art(a), gr.layout_art(b)
         size[b] = (b_art.w, b_art.h)
         for ea, ia, eb, ib in gr._seam_cells(a, b, direction, offset, size):
             ax, ay = cell_at(a, ea, ia)
             ha, hb = height(a, ax, ay), height(b, *cell_at(b, eb, ib))
-            if ha is not None and hb is not None and abs(ha - hb) <= LEVEL // 2:
-                out.add((ax + at[a][0], ay + at[a][1]))
+            if ha is not None and hb is not None:
+                cell = (ax + at[a][0], ay + at[a][1])
+                out[cell] = (b, out.get(cell, (b, False))[1] or abs(ha - hb) <= LEVEL // 2)
     return out
 
 
@@ -1294,15 +2239,57 @@ def solve(layout_id, reference=None):
     runs = runs_of(c)
     comp = terraces(c, runs)
     ref = reference_heights(reference, members) if reference is not None else None
-    meets = seam_meets(reference, members) if reference is not None else None
+    meets = seam_faces(reference, members) if reference is not None else None
     level, dropped = solve_levels(c, comp, runs, ref, meets)
+    # a scrap of ground no face or band counts, held apart from the ground
+    # round it (Route 115's two cells of grass between the dirt patch and the
+    # wood: lifted to where the old relief had them, two levels down, a
+    # trench in the wood): the level of the ground round it
+    counted = {cell for _, hi, cells, lo in runs for cell in (hi, lo)}
+    members = collections.defaultdict(list)
+    for cell, t in comp.items():
+        members[t].append(cell)
+    for t, cells in members.items():
+        if len(cells) > 4 or any(cell in counted or c.kind.get(cell) != GROUND or c.water(cell)
+                                 for cell in cells):
+            continue
+        round_it = collections.Counter(
+            level[comp[n]] for (x, y) in cells for n in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1))
+            if n in comp and comp[n] != t and not c.water(n))
+        if round_it:
+            best, k = round_it.most_common(1)[0]
+            if best != level[t] and 2 * k > sum(round_it.values()):
+                level[t] = best
     U = upper_levels(c, comp, level, runs)
     fixed = {cell for d, hi, cells, lo in runs if hi in comp and lo in comp
              and level[comp[hi]] - level[comp[lo]] == LEVEL * steps(c, cells, d)[1] for cell in cells}
     flat = {cell: level[t] for cell, t in comp.items()}
     flat.update(unknown_levels(c, comp, level, U))
     U = settle(c, U, flat, fixed)
+    # a flank of bands between two grounds: when the ground on its high side
+    # and the one at its foot are as many levels apart as the flank has
+    # bands, each band falls one level from the ground beside it (a band
+    # pair under a wood took its top off the terrace beyond the wood, a
+    # level too high, and the other band fell two levels to make up)
+    for cell in sorted(c.band):
+        side = c.band[cell]
+        x, y = cell
+        up = 1 if side == "W" else -1           # the high side
+        hi = (x + up, y)
+        if c.band.get(hi) == side:
+            continue                            # not the chain's high end
+        chain = [cell]
+        while c.band.get((chain[-1][0] - up, y)) == side:
+            chain.append((chain[-1][0] - up, y))
+        lo = (chain[-1][0] - up, y)
+        if hi not in flat or lo not in flat or c.kind.get(hi) == ROCK or c.kind.get(lo) == ROCK:
+            continue
+        if abs(flat[hi] - flat[lo] - LEVEL * len(chain)) > 0.5:
+            continue
+        for i, b in enumerate(chain):
+            U[b] = flat[hi] - LEVEL * i
     kept = {}
+    keep_shift = {}
     if reference is not None:
         # ledges and berry soil keep the relief they had: their neighbours
         # meet (and wall themselves against) what is really there
@@ -1315,12 +2302,183 @@ def solve(layout_id, reference=None):
             g = t["cells"].get((x, y))
             kept[cell] = [[t["base"] + (g[j * (N + 1) + i] if g else 0) for i in range(N + 1)]
                           for j in range(N + 1)]
+        # their shape is kept, not their height in the world: where the
+        # terraces put the ground round a run of ledges at another level
+        # than the old relief had it, the run moves with that ground (kept
+        # where it was, it sank into a trench or stood as a wall)
+        def ref_at(cell):
+            lid, x, y = c.src[cell]
+            t = reference["layouts"].get(vrf.layout_index(lid))
+            if t is None:
+                return None
+            g = t["cells"].get((x, y))
+            return t["base"] + (min(g) if g else 0)
+        seen = set()
+        for start in list(kept):
+            if start in seen:
+                continue
+            run, todo = [], [start]
+            seen.add(start)
+            while todo:
+                x, y = todo.pop()
+                run.append((x, y))
+                for n in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                    if n in kept and n not in seen:
+                        seen.add(n)
+                        todo.append(n)
+            shifts = collections.Counter()
+            for (x, y) in run:
+                for n in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
+                    if n in kept or n not in flat or c.kind.get(n) != GROUND or c.water(n):
+                        continue
+                    r = ref_at(n)
+                    if r is not None:
+                        shifts[round(flat[n] - r)] += 1
+            if not shifts:
+                continue
+            d = shifts.most_common(1)[0][0]
+            if d:
+                for cell in run:
+                    kept[cell] = [[v + d for v in row] for row in kept[cell]]
+                    keep_shift[cell] = d
     pieces = blocks(c, U, flat, kept)
+    # a gap in a face drawn in a town's own tiles (Lilycove's stairs between
+    # two stretches of cliff): ground flat at the top's level over lower
+    # ground, it stood as a slab with a two-level step at its front and no
+    # wall - it is the face, stepping down with the cliff either side
+    # (south rows first: the row over a converted one steps down onto it)
+    # The same at the face's foot (Route 111's Trainer Hill: the face over
+    # its door drawn in the building's tiles, the door's top among them, read
+    # as ground a level under the face either side and under the rim over
+    # it - a trench open to the void the length of the door): the face too,
+    # when the rim over it stands at the face's top.
+    def gap_cell(n, h):
+        q = pieces.get(n)
+        if q is None or q[0] != "F" or n in c.keep or n in c.bridges:
+            return False
+        k = c.kind.get(n)
+        # (the door's top half among them, green enough for the regions to
+        # read it as a tree: a General tree is what stands on its own)
+        if not (k == GROUND or (k == UNKNOWN and (c.role(n) != "tree" or c.metatile(n) >= vb.NUM_PRIMARY))):
+            return False
+        if q[1] >= h - 0.5:
+            return k == GROUND
+        north = pieces.get((n[0], n[1] - 1))
+        return abs(q[1] - (h - LEVEL)) < 0.5 and north is not None and north[1] >= h - 0.5 \
+            and c.kind.get((n[0], n[1] - 1)) != ROCK
+    for (x, y), p in sorted(pieces.items(), key=lambda kv: (-kv[0][1], kv[0][0])):
+        p = pieces[(x, y)]
+        left = pieces.get((x - 1, y))
+        if left is None or left[0] != "S":
+            continue
+        h = left[1]
+        if not gap_cell((x, y), h):
+            continue
+        run = [(x, y)]
+        while True:
+            n = (run[-1][0] + 1, y)
+            q = pieces.get(n)
+            if q is None or len(run) > 6:
+                run = None
+                break
+            if q[0] == "S" and abs(q[1] - h) < 0.5:
+                break
+            if not gap_cell(n, h):
+                run = None
+                break
+            run.append(n)
+        if not run:
+            continue
+        if all((cx, y + 1) in pieces and pieces[(cx, y + 1)][1] < h - 0.5 for cx, _ in run):
+            for cell in run:
+                pieces[cell] = ("S", h)
+            # the face's ends either side are its cheeks: whole, not cut
+            # (cut, their edge beside the gap opened wedges to the void)
+            c.cheeks.update({(x - 1, y), (run[-1][0] + 1, y)})
+    # a waterfall falls a level a row, as a face does, from the river above
+    # it to the pool at its foot (flat at the river's level, the pool's
+    # edge stood under it as a wall of water)
+    for cell in sorted(c.falls):
+        x, y = cell
+        if (x, y - 1) in c.falls:
+            continue
+        run = [cell]
+        while (x, run[-1][1] + 1) in c.falls:
+            run.append((x, run[-1][1] + 1))
+        above, below = (x, y - 1), (x, run[-1][1] + 1)
+        if above not in flat or below not in flat:
+            continue
+        top, foot = flat[above], flat[below]
+        if abs(top - foot - len(run) * LEVEL) > 0.5:
+            continue
+        for k, f in enumerate(run):
+            pieces[f] = ("S", top - k * LEVEL)
+        # the cliffs it falls between are one face with it: each row of
+        # theirs a level down beside its own (the east one started a level
+        # higher, a dark wedge of wall standing over the water)
+        for side in (-1, 1):
+            beside = [(f[0] + side, f[1]) for f in run]
+            if all(b in pieces and c.kind.get(b) == ROCK and b not in c.keep and b not in c.band
+                   for b in beside):
+                for k, b in enumerate(beside):
+                    pieces[b] = ("S", top - k * LEVEL)
+    # the shoulders of a mound (rock drawn beside its top, over the face's
+    # corners): the top they flank, not ground - left at the ground's level
+    # the top stood alone, a pillar walled on both sides
+    for _ in range(2):
+        for cell, p in list(pieces.items()):
+            if c.kind.get(cell) != ROCK or p[0] not in ("F", "T") or cell in c.keep:
+                continue
+            x, y = cell
+            south = pieces.get((x, y + 1))
+            if south is not None and south[0] in ("S",) + tuple(CORNERS):
+                south = (south[0], south[1])
+            for n in ((x - 1, y), (x + 1, y)):
+                q = pieces.get(n)
+                if q is None or q[0] not in ("F", "T") or q[1] <= p[1]:
+                    continue
+                if c.kind.get(n) not in (TOP, ROCK) or south is None or south[1] < q[1]:
+                    continue
+                # a flank falling one level away from the top (the mound
+                # narrows up to it, drawn round)
+                pieces[cell] = ("W" if n[0] > x else "E", q[1])
+                break
+    # the flanks of a mound: rock at the end of a row of faces, lower than
+    # the face beside it, with the water or ground at its other side - the
+    # flank falls from that face's top to that ground as a band (one or two
+    # levels): the mound's outline narrows upwards, as drawn, instead of
+    # stepping in as a box on a box
+    for cell, p in list(pieces.items()):
+        if c.kind.get(cell) != ROCK or cell in c.keep or cell in c.band:
+            continue
+        x, y = cell
+        for inner, outer, kind in (((x + 1, y), (x - 1, y), "W"), ((x - 1, y), (x + 1, y), "E")):
+            q = pieces.get(inner)
+            if q is None or c.kind.get(inner) != ROCK or q[0] not in ("S", "W", "E") + tuple(CORNERS)                     or q[1] <= p[1]:
+                continue
+            if outer not in flat or c.kind.get(outer) == ROCK:
+                continue
+            drop = q[1] - flat[outer]
+            if abs(drop - LEVEL) < 0.5:
+                pieces[cell] = (kind, q[1])
+            elif abs(drop - 2 * LEVEL) < 0.5:
+                pieces[cell] = (kind + "2", q[1])
+            break
+    # (each reads the other's pieces: a staircase's foot voted by a face
+    # beside it that the faces' fall then lowered stood a peak over it)
+    measured = {(hi, lo) for d, hi, cells, lo in runs if d == "S"}
+    for _ in range(3):
+        before = dict(pieces)
+        staircases(c, pieces, flat, kept)
+        level_bands(c, pieces, flat, kept, measured)
+        if pieces == before:
+            break
+    unstand(c, pieces, flat, kept)
     grids = {cell: piece_grid(*p) for cell, p in pieces.items()}
     grids.update(kept)
-    behind_trees(c, flat, grids)
+    behind_trees(c, flat, grids, pieces)
     return {"cells": c, "comp": comp, "level": level, "U": U, "flat": flat,
-            "pieces": pieces, "grids": grids, "dropped": dropped}
+            "pieces": pieces, "grids": grids, "dropped": dropped, "keep_shift": keep_shift}
 
 
 # -- into relief.bin ----------------------------------------------------------
@@ -1329,6 +2487,8 @@ CUT_LIFT = 2          # pixels: background lifted more than this is cut away
 FACES = (0x07c, 0x0a9, 0x079, 0x091)   # a step's wall: the first face the map draws
 BLOCK_WALLS = 4       # voxel_relief.h VOXEL_RELIEF_BLOCK_WALLS >> 8: west and east walls of the face too
 PLAIN = 1             # its flat layer is the ground behind it, plain
+THIN_DECK = 8         # voxel_relief.h VOXEL_RELIEF_THIN_DECK >> 8: a deck's walls are its edge alone
+GOES_ON = gr.GOES_ON  # voxel_relief.h VOXEL_RELIEF_GOES_ON >> 8: the band north of it goes on under it
 
 
 def edge(grid, side):
@@ -1348,10 +2508,6 @@ def _sample(g, px, py):
             + (g[b + 1][a] * (1 - tx) + g[b + 1][a + 1] * tx) * ty)
 
 
-_ROCK_OF = {}
-_PLAIN_OF = {}
-
-
 def behind(c, out, cell, lid):
     """The ground that runs on under a cell, seen past its back: what the
     cell north of it is (flat) or stands on (its own cut's ground), else the
@@ -1369,14 +2525,25 @@ def behind(c, out, cell, lid):
         if c.kind[n] in (GROUND, TOP):
             # the plain ground, not the drawing of its edge: a shore tile's
             # foam ran on under the rock as a white line along its foot
+            # (cached on the cells themselves: keyed by id(c), a group solved
+            # later could reuse a freed group's id and read its ground)
             l2, nx, ny = c.src[n]
-            if lid not in _ROCK_OF.setdefault(id(c), {}):
-                _ROCK_OF[id(c)][lid] = {c.src[r][1:] for r, k in c.kind.items()
-                                        if k in (ROCK, TOP) and c.src[r][0] == lid}
-            key = (id(c), lid, nx, ny)
-            if key not in _PLAIN_OF:
-                _PLAIN_OF[key] = gr.plain_ground(c.arts[lid], c.roles_of[lid], _ROCK_OF[id(c)][lid], nx, ny, "S")
-            m = _PLAIN_OF[key]
+            rock_of = c.__dict__.setdefault("_rock_of", {})
+            plain_of = c.__dict__.setdefault("_plain_of", {})
+            if lid not in rock_of:
+                rock_of[lid] = {c.src[r][1:] for r, k in c.kind.items()
+                                if k in (ROCK, TOP) and c.src[r][0] == lid}
+            key = (lid, nx, ny)
+            if key not in plain_of:
+                # (in the map's own colours: see records)
+                art = c.arts[lid]
+                seen = gr.own_art(lid) if hasattr(art, "own_metatile") else art
+                past = rock_of[lid]
+                if seen is not art:
+                    past = past | {c.src[r][1:] for r in c.rim if c.src[r][0] == lid}
+                m = gr.plain_ground(seen, c.roles_of[lid], past, nx, ny, "S", half=seen is not art)
+                plain_of[key] = art.alias.get(m, m) if seen is not art else m
+            m = plain_of[key]
             return c.metatile(n) if m is None else m
         if n in out and out[n][2] is not None:
             return out[n][2]
@@ -1418,6 +2585,97 @@ def low_side(c, cell):
     return out
 
 
+# -- straight outlines ----------------------------------------------------------
+#
+# A cut tile's outline was where its drawing's pixels end: the bumps of a
+# rim's highlight, the ragged diagonal of a band's corner. Lifted off the
+# ground they stood as teeth along the mountain's edges. The outline is drawn
+# straight instead: the polygon of horizontal, vertical and 45-degree sides
+# nearest the rock - or nearest the ground, where the rock wraps round it.
+
+SIDES8 = ((0, -1), (0, 1), (-1, 0), (1, 0), (-1, -1), (1, -1), (-1, 1), (1, 1))
+PIXELS = tuple((i, j) for j in range(16) for i in range(16))
+STRAIGHT_MAX = 32       # pixels off: no straight outline comes nearer, the drawn one is kept
+NOTCH = 2               # pixels: a 45-degree side gaining no more is a notch at a corner
+
+
+def _polygon(region, sides):
+    """(pixels, mismatch): the polygon of `sides` (SIDES8 indices) nearest
+    `region`, each side started at the region's own extent and moved in
+    while that leaves fewer pixels on the wrong side of the outline. Its
+    45-degree sides stay along the region's outermost pixels: straightening
+    a diagonal never takes rock off (a pixel of a band's head taken off
+    showed the void behind it)."""
+    full = [max(a * i + b * j for i, j in PIXELS) for a, b in SIDES8]
+    c = [max(a * i + b * j for i, j in region) if k in sides else full[k] for k, (a, b) in enumerate(SIDES8)]
+    fixed = range(4, 8)
+
+    def inside(c):
+        return {(i, j) for i, j in PIXELS if all(a * i + b * j <= ck for (a, b), ck in zip(SIDES8, c))}
+
+    def err(c):
+        return len(inside(c) ^ region)
+
+    best = err(c)
+    while True:
+        step = None
+        for k in sides:
+            if k in fixed:
+                continue
+            for d in (-1, 1):
+                t = list(c)
+                t[k] += d
+                e = err(t)
+                if e < best and (step is None or e < step[0]):
+                    step = (e, t)
+        if step is None:
+            break
+        best, c = step
+    # a 45-degree side clipping a pixel or two: a notch at a corner, no side
+    for k in sides:
+        if k >= 4 and c[k] < full[k]:
+            t = list(c)
+            t[k] = full[k]
+            e = err(t)
+            if e - best <= NOTCH:
+                best, c = e, t
+    return inside(c), best
+
+
+def straight_mask(mask):
+    """A cut mask (16 rows, a bit set where the ground is) with a straight
+    outline: rows of bits again, or the mask as it was where its rock is no
+    polygon at all (two pieces apart, a ring)."""
+    rock = {(i, j) for i, j in PIXELS if not (mask[j] >> i) & 1}
+    if not rock or len(rock) == len(PIXELS):
+        return mask
+    ground = set(PIXELS) - rock
+    best = None
+    for region, flip in ((rock, False), (ground, True)):
+        # (the ground's polygon, where the rock wraps round it, has no
+        # 45-degree sides: laid along the ground, they would take rock off)
+        square, e4 = _polygon(region, range(4))
+        octagon, e8 = _polygon(region, range(4) if flip else range(8))
+        # the straight one first: 45-degree sides only where they follow
+        # the drawing better by more than a notch
+        shape, e = (octagon, e8) if e8 < e4 - NOTCH else (square, e4)
+        if flip:
+            shape = set(PIXELS) - shape
+        if best is None or e < best[1]:
+            best = (shape, e)
+    shape, e = best
+    if e > STRAIGHT_MAX or not shape:
+        return mask
+    cleared = set(PIXELS) - shape
+    # a strip of ground one pixel thin along an edge is drawing, not shape
+    # (a rim's grass between the bumps of its highlight): drawn whole - cut,
+    # the rim's back stood a pixel behind the uncut top beside it
+    if all(j == 0 for _, j in cleared) or all(j == 15 for _, j in cleared) \
+            or all(i == 0 for i, _ in cleared) or all(i == 15 for i, _ in cleared):
+        return [0] * 16
+    return [sum(1 << i for i in range(16) if (i, j) not in shape) for j in range(16)]
+
+
 def records(sol):
     """{canvas cell: [variant mask, "fill" or None, foot, ground metatile or
     None, wall, sides, flags]}: cut tiles, the ground behind run on, cliff
@@ -1428,6 +2686,14 @@ def records(sol):
     for cell in rock:
         lid, x, y = c.src[cell]
         local_rock[lid].add((x, y))
+    # (the ground a map read in alias stands its cuts on is looked for past
+    # its rims too: a rim is the ground's edge, its lip and the grass behind
+    # it drawn - Route 114's 239 ran under every cut, a pale line and green
+    # flecks across its terraces)
+    past_rims = collections.defaultdict(set)
+    for cell in c.rim:
+        lid, x, y = c.src[cell]
+        past_rims[lid].add((x, y))
     face_of = {}
     for lid, ox, oy in c.members:
         art = c.arts[lid]
@@ -1445,7 +2711,12 @@ def records(sol):
             if n not in grids:
                 continue
             if any(p - q > 0.5 for p, q in zip(edge(g, mine), edge(grids[n], theirs))):
-                rec[3] = face_of[lid]
+                # a bridge's deck over the water: its sides are the deck's
+                # own planks, not a cliff's rock
+                # (and a wood's step, the trees' own drawing: the wood
+                # climbing, not a slab of rock between the crowns)
+                own = (x, y) in c.bridges or (c.kind.get((x, y)) == UNKNOWN and c.role((x, y)) == "tree")
+                rec[3] = c.metatile((x, y)) if own else face_of[lid]
                 rec[4] = 0xFF
                 rec[5] |= BLOCK_WALLS
         # its background, lifted off the ground it is: cut away
@@ -1455,8 +2726,33 @@ def records(sol):
         # (stairs cut through a face are all stairs: their shaded steps are
         # no ground to cut away - cut, they showed the void)
         mask = (gr._cut_mask(art, roles, lx, ly, local_rock[lid])
-                if c.kind[(x, y)] in (ROCK, TOP) and c.role((x, y)) != "stair" else None)
+                if c.kind[(x, y)] in (ROCK, TOP) and not c.is_stair((x, y)) and not c.muddy((x, y))
+                and (x, y) not in c.cheeks
+                else None)
+        if mask and hasattr(art, "own_metatile"):
+            # a band's head drawn over the map's own ground (twin: Route
+            # 114's 220/222 on Fallarbor's dirt, flecked in the rock's
+            # colours once read in the General's): cut as the head it is,
+            # along its one diagonal - cut by its colours it fell to slivers
+            m = c.metatile((x, y))
+            head = twin(art, m)
+            if head != m and head in HEADS:
+                # (its ground the triangle off the diagonal through the
+                # corner it rises from: W heads rise to the east)
+                west = HEADS[head] == "W"
+                mask = [sum(1 << i for i in range(16) if (i + j <= 15 if west else i >= j)) for j in range(16)]
+        if mask and (x, y + 1) in c.src and c.role((x, y + 1)) == "tree" and is_face(c, (x, y)):
+            # a face whose foot the wood south of it is drawn over: the
+            # crowns are the trees' (models of their own), not ground - cut
+            # away they broke the cliff's foot into the trees' outline
+            mask = None
         low = low_side(c, (x, y))
+        side = c.band.get((x, y))
+        if low and side and c.band.get((x - 1, y) if side == "W" else (x + 1, y)) == side:
+            # the next band down the same flank on its low side: the slope
+            # goes on there - no terrace behind to cut down to (cut, the
+            # sliver of top it draws at its foot opened a slit to the void)
+            low = None
         foot = None
         if low and any(low):
             # the top beyond a band's foot, drawn in its tile: the terrace a
@@ -1473,10 +2769,20 @@ def records(sol):
             lifted = sum(1 for j in range(16) for i in range(16)
                          if (mask[j] >> i) & 1 and _sample(g, i + 0.5, j + 0.5) - foot > CUT_LIFT)
             if lifted >= 4:
+                # its outline straight (all rock where the ground it draws is
+                # a one-pixel strip: still a cut record, the ground it runs
+                # on under its neighbours kept)
+                drawn, mask = mask, straight_mask(mask)
                 rec[0], rec[1] = mask, foot
-                rec[2] = gr._behind(art, roles, lx, ly, local_rock[lid], mask)
-                if rec[2] is not None and gr._plain_background(art, art.metatile(lx, ly), mask, rec[2]):
+                # (what it is drawn over, read off the ground it draws - in
+                # the map's own colours: read in the General's, Route 114's
+                # dirt is the General's grass, and its band heads stood on it)
+                seen = gr.own_art(lid) if hasattr(art, "own_metatile") else art
+                past = local_rock[lid] | past_rims[lid] if seen is not art else local_rock[lid]
+                ground = gr._behind(seen, roles, lx, ly, past, drawn, half=seen is not art)
+                if ground is not None and gr._plain_background(seen, seen.metatile(lx, ly), drawn, ground):
                     rec[5] |= PLAIN
+                rec[2] = art.alias.get(ground, ground) if seen is not art else ground
                 if rec[3] is not None:
                     # a cut tile's sides go down only from its rock's own
                     # pixels (the cleared ground is no wall: seen through
@@ -1498,14 +2804,60 @@ def records(sol):
                 rec[0] = "fill"
                 rec[1] = min(north)
                 rec[2] = behind(c, out, (x, y), lid)
+                # a band ending against this top's back (its foot on the
+                # terrace in front): its slope goes on under the top, a row
+                # on - what the camera, a little steeper than the drawing,
+                # finds past the back. Flat at the band's foot, a wedge of
+                # the ground below opened between the band and the top's
+                # edge at every corner where a band meets the next terrace
+                n = (x, y - 1)
+                gn = grids[n]
+                if c.band.get(n) and c.src[n][0] == lid and all(
+                        abs(gn[j][i] - gn[N][i]) <= 1.0 for j in range(N + 1) for i in range(N + 1)):
+                    rec[5] |= GOES_ON
+        if (x, y) in c.bridges:
+            # a bridge: a deck over the water, its walls only the deck's
+            # edge (walled down to the water it stood as a dam), and the
+            # water under it seen through the gap
+            # (only over water all round: at its ends, over a lower bank,
+            # the gap under a thin deck showed the void)
+            under = [n for n, mine, theirs in (((x - 1, y), "W", "E"), ((x + 1, y), "E", "W"),
+                                               ((x, y + 1), "S", "N"))
+                     if n in grids and any(p - q > 0.5 for p, q in zip(edge(g, mine), edge(grids[n], theirs)))]
+            thin = rec[3] is not None and all(c.water(n) or n in c.bridges for n in under)
+            if thin:
+                rec[5] |= THIN_DECK
+            low = [n for n in ((x, y + 1), (x - 1, y), (x + 1, y), (x, y - 1))
+                   if n in grids and n not in c.bridges and c.water(n)]
+            if low:
+                n = min(low, key=lambda n: min(min(r) for r in grids[n]))
+                bottom = min(min(r) for r in grids[n])
+                if thin and rec[0] is None and bottom < min(min(r) for r in g) - 0.5:
+                    rec[0], rec[1], rec[2] = "fill", bottom, c.metatile(n)
         if rec[0] is not None or rec[3] is not None:
             out[(x, y)] = rec
+    # beside a thin deck (a bridge's end, a bank): its own side goes down to
+    # the water under the deck (voxel_mesh_builder walls it there)
+    for (x, y), rec in list(out.items()):
+        if not rec[5] & THIN_DECK:
+            continue
+        for n in ((x - 1, y), (x + 1, y)):
+            if n not in grids:
+                continue
+            other = out.setdefault(n, [None, 0, None, None, 0, 0])
+            if other[5] & THIN_DECK:
+                continue
+            if other[3] is None:
+                other[3] = c.metatile(n) if n in c.bridges else face_of[c.src[n][0]]
+            if not other[4]:
+                other[4] = 0xFF
     # under every piece of rock standing over ground round it, the lowest of
     # that ground runs on: wherever two pieces leave a gap the eye can find
     # (where three or four cells meet at different levels), it finds ground
     # there, never the void
     for (x, y) in sorted(grids, key=lambda cell: (cell[1], cell[0])):
-        if c.kind.get((x, y)) not in (ROCK, TOP) or (x, y) in c.keep:
+        # (and a wood's step: a tree over lower trees beside it)
+        if c.kind.get((x, y)) not in (ROCK, TOP, UNKNOWN) or (x, y) in c.keep:
             continue
         rec = out.get((x, y))
         if rec is not None and rec[0] is not None:
@@ -1546,16 +2898,51 @@ def merge(sol, relief):
     import voxel_relief_fixes as vrf
     c = sol["cells"]
     recs = records(sol)
-    keyof = {(m, tuple(rows)): i for i, (l2, m, rows) in enumerate(relief["variants"])}
+    # a variant is a metatile cut so: the secondary tileset's ids are its own
+    entries = vb._layouts_json()
+
+    def vkey(lay, m, rows):
+        return (entries[lay - 1]["secondary_tileset"] if m >= vb.NUM_PRIMARY else None, m, tuple(rows))
+
+    keyof = {vkey(l2, m, rows): i for i, (l2, m, rows) in enumerate(relief["variants"])}
     for lid, ox, oy in c.members:
         lay = vrf.layout_index(lid)
         art = c.arts[lid]
+        # a map read in the General's tiles (gr.terrace_art): the console has
+        # its own tiles - the cut tile drawn as it is, the ground behind as
+        # the map draws it, and a wall of its own rock in its own face
+        aliased = hasattr(art, "own_metatile")
+        own_xy = art.own_metatile if aliased else art.metatile
+
+        def own(m):
+            return m if m is None else gr.terrace_own_id(lid, m)
+
+        def recoloured(x, y):
+            """Rock of the map's own tileset (its recoloured mountain), not
+            the General's: most of the rock round the cell (Route 115's
+            beige mountain beside its brown cliffs over the sea)."""
+            mine = theirs = 0
+            for j in (-1, 0, 1):
+                for i in (-1, 0, 1):
+                    n = (x + i + ox, y + j + oy)
+                    if n in c.src and c.src[n][0] == lid and c.kind.get(n) in (ROCK, TOP):
+                        if own_xy(x + i, y + j) >= vb.NUM_PRIMARY:
+                            mine += 1
+                        else:
+                            theirs += 1
+            return mine > theirs
         t = relief["layouts"].setdefault(lay, {"w": art.w, "h": art.h, "flags": vrf.DRAWN,
                                                "base": 0, "cells": {}})
         base = t["base"]
         mine = [cell for cell, src in c.src.items() if src[0] == lid]
         keep = {c.src[cell][1:] for cell in mine if cell in c.keep}
-        cells = {cell: g for cell, g in t["cells"].items() if cell in keep}
+        shift = {c.src[cell][1:]: d for cell, d in sol.get("keep_shift", {}).items() if c.src[cell][0] == lid}
+        cells = {cell: [v + shift.get(cell, 0) for v in g] for cell, g in t["cells"].items() if cell in keep}
+        # a shifted ledge with no relief of its own stood at the base: now it
+        # needs its grid
+        for xy, d in shift.items():
+            if xy not in cells:
+                cells[xy] = [d] * ((N + 1) * (N + 1))
         for cell in mine:
             xy = c.src[cell][1:]
             if xy in keep:
@@ -1568,16 +2955,24 @@ def merge(sol, relief):
         t["cells"] = cells
         t["flags"] |= vrf.DRAWN
         cuts = {k: v for k, v in relief["cuts"].items() if k[0] != lay or (k[1], k[2]) in keep}
+        for xy, d in shift.items():
+            k = (lay,) + xy
+            if k in cuts:
+                cuts[k] = [cuts[k][0], cuts[k][1] + int(round(d))] + list(cuts[k][2:])
         for cell in mine:
             xy = c.src[cell][1:]
             if cell not in recs or xy in keep:
                 continue
             mask, foot, ground, wall, sides, flags = recs[cell]
+            if aliased:
+                ground = own(ground)
+                if wall is not None and recoloured(*xy):
+                    wall = own(wall)
             if mask is None or mask == "fill":
                 k = vrf.NO_VARIANT
             else:
-                m = art.metatile(*xy)
-                key = (m, tuple(mask))
+                m = own_xy(*xy)
+                key = vkey(lay, m, mask)
                 if key not in keyof:
                     keyof[key] = len(relief["variants"])
                     relief["variants"].append((lay, m, list(mask)))
@@ -1592,7 +2987,7 @@ def cracks(sol):
     """[(cell, neighbour, edge)]: every edge where two cells part with no
     wall closing it (the higher one west, east or north of the step) and no
     ground run on behind it (the higher one south): must be empty."""
-    c, g = sol["cells"], sol["grids"]
+    g = sol["grids"]
     rec = records(sol)
     out = []
     for (x, y) in g:
@@ -1613,7 +3008,64 @@ def cracks(sol):
 # 116, the reference): the rest keep gen_voxel_relief.py's solve until they
 # are looked at. VOXEL_TERRACES=all for every drawn group, =none for none,
 # or a list of layouts.
-GROUPS = ("LAYOUT_ROUTE104", "LAYOUT_ROUTE105", "LAYOUT_ROUTE106", "LAYOUT_ROUTE116")
+GROUPS = ("LAYOUT_ROUTE104", "LAYOUT_ROUTE105", "LAYOUT_ROUTE106", "LAYOUT_ROUTE116",
+          # 2026-10-09: Slateport and the routes round it
+          "LAYOUT_SLATEPORT_CITY", "LAYOUT_ROUTE103", "LAYOUT_ROUTE109", "LAYOUT_DEWFORD_TOWN",
+          "LAYOUT_ROUTE117", "LAYOUT_ROUTE115",
+          # Route 114's south, the same mountain as Route 115's (JOIN)
+          "LAYOUT_ROUTE114",
+          # Route 123: clean (deformed 2 -> 0, side 2 -> 0)
+          "LAYOUT_ROUTE123",
+          # the southern sea: Pacifidlog with 130-132, 133, 134 (deformed 58/54/43/21/45/14 -> 1/3/1/1/0/0,
+          # holes 0 -> 3 cells of <= 252 px)
+          "LAYOUT_PACIFIDLOG_TOWN", "LAYOUT_ROUTE133", "LAYOUT_ROUTE134",
+          # the Safari Zone (deformed 54/25/100/7/11 -> 1/15/11/2/11, holes 22 -> 0 in the north-east)
+          "LAYOUT_SAFARI_ZONE_NORTH",
+          # Route 111 with 112 and 113, both of its layouts (the Mirage Tower's
+          # comes and goes): placed in the world by this count (region_ties),
+          # level with Mauville
+          "LAYOUT_ROUTE111", "LAYOUT_ROUTE111_NO_MIRAGE_TOWER")
+
+
+def region_ties(name, prep):
+    """{(a, b): d}: the levels of a group's regions as the world solver
+    reads them (gen_voxel_relief.drawn_prepare), counted as the terraces
+    count them - h[a] - h[b] = d between regions on terraces the votes tie.
+
+    The world places a group by its seams from that reading; a group built
+    as terraces must be placed by their count, or the world and the group
+    disagree and the terraces are lifted off a seam: Route 111's harmonic
+    solve put three levels between the hollow at Mauville and the plateau
+    the stairs climb to, where the drawing has two flights of one, and the
+    world, pinned at Fallarbor and Lavaridge, left Mauville's seam a level
+    apart."""
+    members = [(lid, ox, oy) for lid, (ox, oy) in gr.DRAWN[name].items()]
+    c = Cells(members)
+    runs = runs_of(c)
+    comp = terraces(c, runs)
+    block = {}
+    level, _ = solve_levels(c, comp, runs, blocks_out=block)
+    region, big, sizes = prep["region"], prep["big"], prep["sizes"]
+    votes = collections.defaultdict(collections.Counter)
+    for (cx, cy), t in comp.items():
+        py, px = cy * 16 + 8, cx * 16 + 8
+        if py >= len(region) or px >= len(region[0]):
+            continue
+        r = region[py][px]
+        if r >= 0 and big[r]:
+            votes[r][(block[t], level[t])] += 1
+    by_block = collections.defaultdict(list)
+    for r, got in votes.items():
+        (b, lv), n = got.most_common(1)[0]
+        if n * 5 >= sum(got.values()) * 3:     # most of the region on one terrace
+            by_block[b].append((r, lv))
+    ties = {}
+    for b, rs in by_block.items():
+        r0, l0 = max(rs, key=lambda e: (sizes[e[0]], -e[0]))
+        for r, lv in rs:
+            if r != r0:
+                ties[(r0, r)] = l0 - lv
+    return ties
 
 
 def chosen_layouts():
