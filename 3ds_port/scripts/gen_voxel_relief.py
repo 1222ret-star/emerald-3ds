@@ -2661,8 +2661,20 @@ def ledge_berms(layout, art, h):
         touching = [(cx, cy) for cx in {(gx - 1) // PER_CELL, gx // PER_CELL}
                     for cy in {(gy - 1) // PER_CELL, gy // PER_CELL}
                     if 0 <= cx < layout.w and 0 <= cy < layout.h]
-        if all(c in cells for c in touching):
-            h[gy][gx] += v
+        if not all(c in cells for c in touching):
+            raised[(gx, gy)] = 0.0
+    # nor does the berm fall south faster than its lip does: where a run
+    # going north and south ends at a cell that is no ledge, its last point
+    # stays on the ground, and a lip still LIP pixels up a step north of it
+    # fell further than the step - (u, h, v + h) folded back over itself and
+    # opened a hole in the ground. It comes down at the lip's own slope.
+    fall = LIP * STEP / float(LIP_WIDTH)
+    for (gx, gy) in sorted(raised, key=lambda k: -k[1]):
+        south = raised.get((gx, gy + 1))
+        if south is not None and raised[(gx, gy)] > south + fall:
+            raised[(gx, gy)] = south + fall
+    for (gx, gy), v in raised.items():
+        h[gy][gx] += v
     return len(cells)
 
 
@@ -3457,6 +3469,17 @@ def cell_shapes(lid, roles_layout, h, cut):
     berry = vc.behaviours().get("MB_BERRY_TREE_SOIL")
     keep_out |= {(x, y) for y in range(Hh) for x in range(W)
                  if art.metatile(x, y) in DIRT or roles_layout.behaviour(x, y) == berry}
+    rock_cells = content - keep_out
+
+    def rock_point(c, i, j):
+        """A point the rules for rock may move: any of the rock's, and of
+        a ledge or berry soil only one it shares with rock, which they move
+        too (a crack opens there otherwise). Its others are its own."""
+        if c not in keep_out:
+            return True
+        X, Y = c[0] * P + i, c[1] * P + j
+        return any((cx, cy) in rock_cells for cx in {(X - 1) // P, X // P}
+                   for cy in {(Y - 1) // P, Y // P})
 
     def grid(c):
         return grids.get(c) or cell_grid(h, *c)
@@ -3563,14 +3586,16 @@ def cell_shapes(lid, roles_layout, h, cut):
             return abs(a - b) > LEVEL + 0.01
         for j in range(P + 1):
             for (e, n) in ((0, 1), (P, P - 1)):
-                if not seam(c, e, j) and drawn(c, min(e, n), min(j, P - 1)) and far(g[j][e], g[j][n]):
+                if (not seam(c, e, j) and rock_point(c, e, j) and drawn(c, min(e, n), min(j, P - 1))
+                        and far(g[j][e], g[j][n])):
                     g[j][e] = min(max(g[j][e], g[j][n] - T), g[j][n] + T)
         for i in range(P + 1):
             # north: no lower than the row south of it, a pixel a pixel at
             # most higher; south: the other way round
-            if not seam(c, i, 0) and drawn(c, min(i, P - 1), 0) and far(g[0][i], g[1][i]):
+            if not seam(c, i, 0) and rock_point(c, i, 0) and drawn(c, min(i, P - 1), 0) and far(g[0][i], g[1][i]):
                 g[0][i] = min(max(g[0][i], g[1][i]), g[1][i] + T)
-            if not seam(c, i, P) and drawn(c, min(i, P - 1), P - 1) and far(g[P][i], g[P - 1][i]):
+            if (not seam(c, i, P) and rock_point(c, i, P) and drawn(c, min(i, P - 1), P - 1)
+                    and far(g[P][i], g[P - 1][i])):
                 g[P][i] = min(max(g[P][i], g[P - 1][i] - T), g[P - 1][i])
         if g != grid(c):
             grids[c] = g
@@ -3581,6 +3606,9 @@ def cell_shapes(lid, roles_layout, h, cut):
         band across or a face down lifts its low point. Raising only, it
         comes to rest."""
         g = [row[:] for row in grid(c)]
+
+        def free(p):
+            return not seam(c, *p) and rock_point(c, *p)
         moved = True
         while moved:
             moved = False
@@ -3593,17 +3621,17 @@ def cell_shapes(lid, roles_layout, h, cut):
                         h0, h1 = g[p0[1]][p0[0]], g[p1[1]][p1[0]]
                         T = STEP * SPREAD
                         if d == "u":
-                            if h1 < h0 - T - 0.01 and not seam(c, *p1):
+                            if h1 < h0 - T - 0.01 and free(p1):
                                 g[p1[1]][p1[0]] = h0 - T
                                 moved = True
-                            elif h0 < h1 - T - 0.01 and not seam(c, *p0):
+                            elif h0 < h1 - T - 0.01 and free(p0):
                                 g[p0[1]][p0[0]] = h1 - T
                                 moved = True
                         else:
-                            if h1 > h0 + 0.01 and not seam(c, *p0):
+                            if h1 > h0 + 0.01 and free(p0):
                                 g[p0[1]][p0[0]] = h1          # rising south: its back
                                 moved = True
-                            elif h1 < h0 - T - 0.01 and not seam(c, *p1):
+                            elif h1 < h0 - T - 0.01 and free(p1):
                                 g[p1[1]][p1[0]] = h0 - T      # falling faster than a face
                                 moved = True
         if g != grid(c):
@@ -3789,10 +3817,13 @@ def cell_shapes(lid, roles_layout, h, cut):
         return best
 
     flank_frac = {}
+    # a ledge's berm is no flank: brought down across its lip, the run of
+    # ledge cells read as rock lay flat while the end of the run, no rock,
+    # kept its berm, and the step between them opened a hole
     for c in content:
         for j in range(P + 1):
             for i in range(P + 1):
-                if seam(c, i, j):
+                if seam(c, i, j) or not rock_point(c, i, j):
                     continue
                 X, Y = c[0] * 16 + i * STEP, c[1] * 16 + j * STEP
                 around = [crossed(X, row) for row in (Y - 2, Y - 1, Y, Y + 1)]

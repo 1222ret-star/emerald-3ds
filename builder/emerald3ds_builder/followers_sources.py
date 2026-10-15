@@ -6,11 +6,11 @@ private_assets/hgss_followers; plain data, edited only to re-pin."""
 SOURCES = {
  "sources": {
   "pokeheartgold": {
-   "repo": "pret/pokeheartgold",
+   "repo": "ZallaxDev/pokeheartgold",
    "commit": "3291d88a7e3e264b503024ead80f4d8b55b835cd"
   },
   "poke-corpus": {
-   "repo": "abcboy101/poke-corpus",
+   "repo": "ZallaxDev/poke-corpus",
    "commit": "5d1da078d70dea5c9feaaba7575626eab4f10a08"
   }
  },

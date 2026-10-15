@@ -841,7 +841,6 @@ void VoxelWorld_MarkUsedMetatiles(const void *primaryTileset, const void *second
     {
         const VoxelMapInstance *inst = &sInstances[i];
         const struct MapLayout *layout = inst->layout;
-        const uint16_t *border;
 
         if (inst->primaryTileset != primaryTileset
          || inst->secondaryTileset != secondaryTileset)
@@ -875,11 +874,28 @@ void VoxelWorld_MarkUsedMetatiles(const void *primaryTileset, const void *second
                       && y + inst->originY >= sMaterialView[1] && y + inst->originY < sMaterialView[3]) ? 2u : 1u;
                     if (used[m] < priority) used[m] = priority;
                 }
+    }
+    /* The belt is drawn with the current map's atlas, and from a neighbour's
+     * border as well as its own (VoxelWorld_BorderMetatile): any border whose
+     * metatiles these tilesets hold. */
+    for (unsigned i = 0; i < sInstanceCount; ++i)
+    {
+        const VoxelMapInstance *inst = &sInstances[i];
+        const struct MapLayout *layout = inst->layout;
+        const uint16_t *border;
+        bool secondary = false;
 
-        border = layout->border != NULL ? Port_ResolveAssetPointer(layout->border) : NULL;
-        if (border != NULL)
-            for (unsigned t = 0; t < 4; ++t)
-                used[border[t] & MAPGRID_METATILE_ID_MASK] = 2;
+        if (inst->primaryTileset != primaryTileset || layout == NULL || layout->border == NULL)
+            continue;
+        border = Port_ResolveAssetPointer(layout->border);
+        if (border == NULL)
+            continue;
+        for (unsigned t = 0; t < 4; ++t)
+            secondary |= (border[t] & MAPGRID_METATILE_ID_MASK) >= NUM_METATILES_IN_PRIMARY;
+        if (secondary && inst->secondaryTileset != secondaryTileset)
+            continue;
+        for (unsigned t = 0; t < 4; ++t)
+            used[border[t] & MAPGRID_METATILE_ID_MASK] = 2;
     }
     /* The replacement removes canopy fringes even on maps that never used
      * their bare ground tile. Keep that material available in the atlas. */
@@ -989,32 +1005,30 @@ uint32_t VoxelWorld_BlockHash(int x0, int y0, int x1, int y1)
  * tiles the layout's 2x2 border block outwards for ever, which is why a town
  * looks like it sits in a wood rather than on a plate over a black sky.
  *
- * The indexing is GetBorderBlockAt's, over backup-layout coordinates, so the
- * phase of the 2x2 matches what the 2D renderer draws on the same tile.
+ * Whose border, and in which phase, is fieldmap.c's to say: the nearest map's
+ * whose border the current tilesets draw, the same answer the 2D camera
+ * gives, and the same from either side of a crossing.
  */
 int VoxelWorld_BorderMetatile(int worldX, int worldY)
 {
-    const struct MapLayout *layout;
     const uint16_t *border;
-    const void *resolved;
-    int bx, by, index;
+    const void *source, *resolved;
+    u8 index;
 
-    if (sInstanceCount == 0)
+    if (sInstanceCount == 0 || sInstances[0].layout == NULL)
         return -1;
-    layout = sInstances[0].layout;
-    if (layout == NULL || layout->border == NULL)
+    source = MapGridGetCameraBorderAt(worldX - sInstances[0].originX,
+                                      worldY - sInstances[0].originY, &index);
+    if (source == NULL)
         return -1;
-    if (!MemoGet(&sBorderMemo, layout->border, &resolved))
+    if (!MemoGet(&sBorderMemo, source, &resolved))
     {
-        resolved = Port_ResolveAssetPointer(layout->border);
-        MemoPut(&sBorderMemo, layout->border, resolved);
+        resolved = Port_ResolveAssetPointer(source);
+        MemoPut(&sBorderMemo, source, resolved);
     }
     border = resolved;
     if (border == NULL)
         return -1;
-    bx = worldX - sInstances[0].originX + MAP_OFFSET;
-    by = worldY - sInstances[0].originY + MAP_OFFSET;
-    index = ((bx + 1) & 1) + (((by + 1) & 1) * 2);
     return (int)(border[index] & MAPGRID_METATILE_ID_MASK);
 }
 

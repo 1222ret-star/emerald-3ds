@@ -49,6 +49,8 @@ int VoxelTree_Part(const void *secondaryTileset, int metatileId)
 int VoxelTree_GroundMetatile(const void *secondaryTileset, int metatileId)
 { (void)secondaryTileset; return metatileId; }
 bool VoxelRelief_IsDrawn(const VoxelMapInstance *inst) { (void)inst; return false; }
+const u16 *MapGridGetCameraBorderAt(int x, int y, u8 *index)
+{ (void)x; (void)y; *index = 0; return NULL; }
 
 static void Check(int x0, int y0, int x1, int y1)
 {

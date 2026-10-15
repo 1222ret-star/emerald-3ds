@@ -47,7 +47,9 @@ releases: the overworld sprites from pret/pokeheartgold
 (https://github.com/pret/pokeheartgold, commit
 `3291d88a7e3e264b503024ead80f4d8b55b835cd`), the messages in the ROM's
 language from Poké Corpus by abcboy101 (https://github.com/abcboy101/poke-corpus,
-commit `5d1da078d70dea5c9feaaba7575626eab4f10a08`), each file checked against
+commit `5d1da078d70dea5c9feaaba7575626eab4f10a08`). The builder downloads both
+from forks that keep those commits (https://github.com/ZallaxDev/pokeheartgold,
+https://github.com/ZallaxDev/poke-corpus), each file checked against
 the SHA-256 listed in `builder/emerald3ds_builder/followers_sources.py` and
 converted for the console. They are Nintendo, Game Freak and Creatures' work;
 not relicensed.

@@ -1,7 +1,7 @@
 """Follower sprites and texts: HeartGold/SoulSilver's, fetched and converted.
 
 The sprites are not the player's ROM's and never ship with the port: the
-builder fetches them from pret/pokeheartgold at the commit that
+builder fetches them from a fork of pret/pokeheartgold at the commit that
 followers_sources.py pins, checks each file's size and SHA-256 against it,
 and converts them for the pack. Nothing fetched reaches the SD card as it
 is.

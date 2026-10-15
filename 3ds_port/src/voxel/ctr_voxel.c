@@ -34,6 +34,7 @@
 #include "3ds_log.h"
 #include "3ds_platform.h"
 #include "3ds_daynight.h"
+#include "3ds_gpumem.h"
 #include "3ds_video.h"
 #include "3ds_map_events.h"
 
@@ -184,6 +185,8 @@ static C3D_Tex *AtlasTex(VoxelAtlasSlot *slot, unsigned page)
     return page == 0 ? &slot->tex : &slot->extra[page - 1u];
 }
 
+static void AtlasPageRelease(C3D_Tex *tex);
+
 static void FreeAtlasTextures(VoxelAtlasSlot *slot)
 {
     for (unsigned page = 0; page < VOXEL_ATLAS_PAGES; ++page)
@@ -191,7 +194,7 @@ static void FreeAtlasTextures(VoxelAtlasSlot *slot)
         C3D_Tex *tex = AtlasTex(slot, page);
         if (tex->data != NULL)
         {
-            C3D_TexDelete(tex);
+            AtlasPageRelease(tex);
             sPrefetchBlocked = false;
         }
         memset(tex, 0, sizeof(*tex));
@@ -1045,8 +1048,11 @@ static int sDynamicX, sDynamicZ; /* the billboards' origin this frame */
 /* Pages take their whole power-of-two texture (PageBytes): the Battle
  * Frontier's two halves, in view together, are 512 KiB each. */
 #define VOXEL_PAGE_VRAM_BUDGET (1024u * 1024u)
-/* The arena's pieces: a page's texture and its window mask. */
-#define VOXEL_PAGE_PIECES (VOXEL_BUILDING_PAGES * 2u)
+/* Atlas pages that may borrow a gap of the pages' arena (AtlasPageBorrow). */
+#define VOXEL_ATLAS_BORROW_MAX 2u
+/* The arena's pieces: a page's texture and its window mask, and the
+ * borrowed atlas pages. */
+#define VOXEL_PAGE_PIECES (VOXEL_BUILDING_PAGES * 2u + VOXEL_ATLAS_BORROW_MAX)
 /* A page that found no room is asked for again only after this long. */
 #define VOXEL_PAGE_RETRY_FRAMES 120u
 
@@ -1140,6 +1146,64 @@ static void PageTexInit(C3D_Tex *tex, void *data, unsigned w, unsigned th)
     tex->param = GPU_TEXTURE_MODE(GPU_TEX_2D);
     C3D_TexSetFilter(tex, GPU_NEAREST, GPU_NEAREST);
     C3D_TexSetWrap(tex, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+}
+
+/*
+ * An atlas page over a piece of the pages' arena. A battle over the world
+ * frames more maps than the field does, with the battle scene's 512 KiB out
+ * of VRAM: on Route 110 beside Slateport the battle view wanted a fifth atlas
+ * page where VRAM held four, the atlas job waited on it the whole battle and
+ * the chunks behind it were never built - parts of the world missing
+ * (port.log 2026-10-15: pending=61 for the whole battle). The arena had
+ * 480 KiB unused there, as a battle frames few buildings. Borrowed only when
+ * VRAM has no room and no atlas off screen can give its own, and moved back
+ * to VRAM once there is room (AtlasPagesReturn): the field's buildings want
+ * the arena whole.
+ */
+static bool AtlasPageBorrowed(const C3D_Tex *tex)
+{
+    const uint8_t *data = (const uint8_t *)tex->data;
+
+    return sPageBlock != NULL && data >= (const uint8_t *)sPageBlock
+        && data < (const uint8_t *)sPageBlock + VOXEL_PAGE_VRAM_BUDGET;
+}
+
+static void AtlasPageRelease(C3D_Tex *tex)
+{
+    if (tex->data == NULL)
+        return;
+    if (AtlasPageBorrowed(tex))
+        VoxelArena_Free(&sPageArena, tex->data);
+    else
+        C3D_TexDelete(tex);
+    memset(tex, 0, sizeof(*tex));
+}
+
+static unsigned CountBorrowedAtlasPages(void)
+{
+    unsigned count = 0;
+
+    for (unsigned i = 0; i < VOXEL_ATLAS_SLOTS; ++i)
+        for (unsigned p = 0; p < VOXEL_ATLAS_PAGES; ++p)
+            count += AtlasPageBorrowed(AtlasTex(&sAtlases[i], p));
+    return count;
+}
+
+static bool AtlasPageBorrow(C3D_Tex *tex)
+{
+    const uint32_t bytes = VOXEL_ATLAS_PIXELS * sizeof(uint16_t);
+    void *block;
+
+    if (sPageBlock == NULL || CountBorrowedAtlasPages() >= VOXEL_ATLAS_BORROW_MAX)
+        return false;
+    block = VoxelArena_Alloc(&sPageArena, bytes, false);
+    if (block == NULL)
+        return false;
+    PageTexInit(tex, block, VOXEL_ATLAS_W, VOXEL_ATLAS_H);
+    CtrLog_Write(CTR_LOG_VIDEO, "VOXEL: atlas page borrowed from the building pages' arena "
+                 "(VRAM free=%lu, arena gap left %lu KiB)", (unsigned long)vramSpaceFree(),
+                 (unsigned long)(VoxelArena_LargestGap(&sPageArena) >> 10));
+    return true;
 }
 
 /*
@@ -2404,11 +2468,60 @@ static bool AllocateAtlasPage(VoxelAtlasSlot *slot, unsigned page, bool mayEvict
             if (victim == NULL || candidate->stamp < victim->stamp)
                 victim = candidate;
         }
-        if (victim == NULL || !mayEvict)
+        if (!mayEvict)
             return false;
+        /* Every atlas holding VRAM is on screen: a gap of the pages' arena,
+         * if there is one, rather than a map left unbuilt. */
+        if (victim == NULL)
+            return CountAllocatedAtlases() < VOXEL_ATLAS_SLOTS && AtlasPageBorrow(tex);
         AnimForget(victim);
         FreeAtlasTextures(victim);
     }
+}
+
+/*
+ * A borrowed atlas page goes back to VRAM as soon as a piece of it is free
+ * (a battle's scene surface given back, a 2D screen's layers): a GPU copy,
+ * queued like an atlas upload, one page a frame.
+ */
+static void AtlasPagesReturn(void)
+{
+    static uint32_t sNextTry;
+    const uint32_t bytes = VOXEL_ATLAS_PIXELS * sizeof(uint16_t);
+
+    if (sFrame < sNextTry || sAtlasUploadPending)
+        return;
+    for (unsigned i = 0; i < VOXEL_ATLAS_SLOTS; ++i)
+        for (unsigned p = 0; p < VOXEL_ATLAS_PAGES; ++p)
+        {
+            C3D_Tex *tex = AtlasTex(&sAtlases[i], p);
+            C3D_Tex home;
+
+            if (tex->data == NULL || !AtlasPageBorrowed(tex))
+                continue;
+            /* Asked of the allocator only when it can answer yes: every
+             * failed request is a GPUMEM line in the log. */
+            if (CtrGpuMem_LargestVram() < bytes
+             || !C3D_TexInitVRAM(&home, VOXEL_ATLAS_W, VOXEL_ATLAS_H, GPU_RGBA5551))
+            {
+                sNextTry = sFrame + 30u;
+                return;
+            }
+            if (!CtrVideo_TryVoxelUpload())
+            {
+                C3D_TexDelete(&home);
+                return;
+            }
+            C3D_TexSetFilter(&home, GPU_NEAREST, GPU_NEAREST);
+            C3D_TexSetWrap(&home, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
+            C3D_SyncTextureCopy((u32 *)tex->data, 0, (u32 *)home.data, 0, bytes, 8);
+            sAtlasUploadPending = true;
+            VoxelArena_Free(&sPageArena, tex->data);
+            *tex = home;
+            CtrLog_Write(CTR_LOG_VIDEO, "VOXEL: borrowed atlas page back in VRAM (VRAM free=%lu)",
+                         (unsigned long)vramSpaceFree());
+            return;
+        }
 }
 
 static VoxelAtlasSlot *AcquireAtlas(const VoxelMapInstance *inst, bool mayEvict)
@@ -2552,7 +2665,7 @@ static VoxelAtlasSlot *AcquireAtlas(const VoxelMapInstance *inst, bool mayEvict)
         for (unsigned p = 1; p < VOXEL_ATLAS_PAGES; ++p)
         {
             C3D_Tex *tex = AtlasTex(victim, p);
-            if (tex->data != NULL) C3D_TexDelete(tex);
+            AtlasPageRelease(tex);
             memset(tex, 0, sizeof(*tex));
         }
     }
@@ -4408,6 +4521,7 @@ static void UpdateView(float playerX, float playerZ, bool crossed, bool cut)
          && sAfterStarvedFrames >= VOXEL_STARVE_FRAMES)
             atlasMs = VOXEL_STARVE_MS;
         RunAtlasJob(started, atlasMs, true);
+        AtlasPagesReturn();
     }
     sRebuildStamp = sAtlasStamp;
     sDrawCount = 0;
@@ -5199,6 +5313,18 @@ static void AnimateBuildings(const VoxelMapInstance *inst)
     }
 }
 
+static void DropTileAnimation(void)
+{
+    if (sAnimPending || sAnimWorkPage != 0)
+        memset(sAnimDirty, 0, sizeof(sAnimDirty));
+    sAnimPending = false;
+    sAnimWorkPage = 0;
+    sAnimWorkAtlas = NULL;
+    if (sBuildingAnimPending)
+        memset(sBuildingAnimDirty, 0, sizeof(sBuildingAnimDirty));
+    sBuildingAnimPending = false;
+}
+
 bool CtrVoxel_Update(void)
 {
     const VoxelMapInstance *inst;
@@ -5418,8 +5544,21 @@ bool CtrVoxel_Update(void)
     {
         uint64_t animStart = svcGetSystemTick();
 
-        AnimateTiles(inst);
-        AnimateBuildings(inst);
+        /*
+         * The passes read the tiles from BG VRAM, which in a battle holds the
+         * battle's: a pass still pending when one began redrew the sea from
+         * them - transparent, the whole battle, as no tile animation runs
+         * there to draw it again (Route 110's canal, the Cycling Road's sea,
+         * port.log 2026-10-15). Dropped instead: back on the field, the
+         * tileset animation writes every frame again and each pass with it.
+         */
+        if (VoxelBattle_GameInBattle())
+            DropTileAnimation();
+        else
+        {
+            AnimateTiles(inst);
+            AnimateBuildings(inst);
+        }
         sStats.animMs = MsSince(animStart);
     }
 
@@ -5567,7 +5706,7 @@ unsigned long CtrVoxel_ReleaseIdleVram(void)
             continue;
         unsigned pages = 0;
         for (unsigned p = 0; p < VOXEL_ATLAS_PAGES; ++p)
-            pages += AtlasTex(slot, p)->data != NULL;
+            pages += AtlasTex(slot, p)->data != NULL && !AtlasPageBorrowed(AtlasTex(slot, p));
         FreeAtlasTextures(slot);
         AnimForget(slot);
         memset(&slot->tex, 0, sizeof(slot->tex));

@@ -4021,7 +4021,7 @@ static bool FastCells(unsigned bg, const uint16_t *cells, unsigned count, const 
      * of no size, and sends it: its state is then the GPU's. */
     sInLayerTexture = true;
     BlendForget();
-    C2D_SceneBegin(layer->target);
+    SceneOn(layer->target);
     C2D_ViewReset();
     Blend(bg, false, false);
     C2D_DrawImageAt((C2D_Image){&sAtlas, &none}, 0, 0, 0, &sTint, 1, 1);
@@ -4168,7 +4168,7 @@ static bool LayerRenderCells(unsigned bg)
     if (full)
     {
         C2D_TargetClear(layer->target, 0);
-        C2D_SceneBegin(layer->target);
+        SceneOn(layer->target);
         C2D_ViewReset();
         count = 0;
         for (unsigned cell = 0; cell < cells; ++cell)
@@ -4178,7 +4178,7 @@ static bool LayerRenderCells(unsigned bg)
     {
         /* Clear the changed cells to transparent first: a tile's transparent
          * pixels must not keep what was drawn there before. */
-        C2D_SceneBegin(layer->target);
+        SceneOn(layer->target);
         C2D_ViewReset();
         C2D_Flush();
         C3D_AlphaTest(false, GPU_ALWAYS, 0);
@@ -6005,7 +6005,7 @@ static void ObjWindowCompose(void)
 
     ColourClear(sObjWinTarget, 0);
     BlendForget();
-    C2D_SceneBegin(sObjWinTarget);
+    SceneOn(sObjWinTarget);
     C2D_ViewReset();
     sObjWinPass = OBJWIN_MASK;
     for (int priority = 3; priority >= 0; --priority)
@@ -6462,11 +6462,11 @@ static void SceneComposeInto(C3D_RenderTarget *target, int column, int left, int
     if (column == 0)
     {
         C2D_TargetClear(target, 0);
-        C2D_SceneBegin(target);
+        SceneOn(target);
     }
     else
     {
-        C2D_SceneBegin(target);
+        SceneOn(target);
         C2D_ViewReset();
         C2D_Flush();
         C3D_AlphaTest(false, GPU_ALWAYS, 0);
@@ -6773,6 +6773,11 @@ static void BattleSceneCompose(int margin, unsigned exclude)
  * so a target begun without one blended with what the cache still held of
  * the last: on hardware the sprite slots came out again over the text box.
  * Azahar does not model the cache. Reset to NULL after a split.
+ *
+ * Every switch goes through here: one made straight with C2D_SceneBegin, or
+ * the voxel world's C3D_FrameDrawOn, left this naming a target no longer
+ * drawn on, and the next SceneOn back to it skipped the invalidate - ghosts
+ * of the battle's sprites over the 3D battle on hardware (2026-10-15).
  */
 static C3D_RenderTarget *sSceneOn;
 
@@ -7328,7 +7333,7 @@ static void RenderEye(C3D_RenderTarget *target, uint32_t clear, float parallax)
     ColourClear(sLogical, clear);
     sIndicatorApartHere = scene;
     if (scene) RenderBattleScene(clear);
-    C2D_SceneBegin(sLogical);
+    SceneOn(sLogical);
     Blend(5, false, false);
     StageUnderlay();
     if (scene) BattleSkyCompose(true);
@@ -7352,7 +7357,7 @@ static void RenderEye(C3D_RenderTarget *target, uint32_t clear, float parallax)
 
     BlendForget();
     ColourClear(target, C2D_Color32(0, 0, 0, 255));
-    C2D_SceneBegin(target);
+    SceneOn(target);
     if (target == sBottom)
     {
         /* The middle 240 columns of the logical frame, or 320 for the boxes:
@@ -8015,7 +8020,7 @@ static void RenderBattleStereo(uint32_t clear, float slider, C3D_Tex *world)
                 BlendForget();
                 ColourClear(sLogical, 0);
                 RenderBattleScene(0);
-                C2D_SceneBegin(sLogical);
+                SceneOn(sLogical);
                 Blend(5, false, false);
                 HudDrawCrisp(HUD_SPRITE_DEPTH);
                 sLayerExclude = 63 & ~(1u | 32u | BattleBoxLayers());
@@ -8225,7 +8230,7 @@ static void VoxelBloomPrepare(void)
     C3D_TexEnv *env;
 
     C2D_TargetClear(sBloom, C2D_Color32(0, 0, 0, 255));
-    C2D_SceneBegin(sBloom);
+    SceneOn(sBloom);
     C2D_ViewReset();
     Blend(5, false, false);
     SurfaceFilter(GPU_LINEAR);
@@ -8546,6 +8551,7 @@ static void RenderVoxelTo(C3D_RenderTarget *target, int eye, uint32_t clear, boo
     /* C2D_TargetClear clears colour and depth, which the 3D pass needs. */
     C2D_TargetClear(sLogical, clear);
     CtrVoxel_Draw(sLogical, eye);
+    sSceneOn = NULL; /* drawn on with C3D_FrameDrawOn, behind SceneOn's back */
 
     /* Finish the world before sampling it. UI is drawn on top after blur.
      * The GPU draws it from here while the rest is recorded (GpuStartEarly):
@@ -8566,7 +8572,7 @@ static void RenderVoxelTo(C3D_RenderTarget *target, int eye, uint32_t clear, boo
     if (bloom > 0.005f)
         VoxelBloomPrepare();
     C2D_TargetClear(target, C2D_Color32(0, 0, 0, 255));
-    C2D_SceneBegin(target);
+    SceneOn(target);
     C2D_ViewReset();
     Blend(5, false, false);
     C2D_DrawImageAt((C2D_Image){&sSurface, &logical}, 0, 0, 0, NULL, 1, 1);
@@ -8864,6 +8870,7 @@ static void RenderBattleWorld(uint32_t clear, float slider)
     CtrVoxel_SetBrightness((control & 0x08) ? bright : 0.0f, 0.0f, effect == 2);
     C2D_TargetClear(sLogical, clear);
     CtrVoxel_Draw(sLogical, -1);
+    sSceneOn = NULL; /* drawn on with C3D_FrameDrawOn, behind SceneOn's back */
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
     GpuSplit();
     PORT_PROF_END(bwWorld, PORT_PROF_BW_WORLD);
@@ -8881,7 +8888,7 @@ static void RenderBattleWorld(uint32_t clear, float slider)
     if (bloom > 0.005f)
         VoxelBloomPrepare();
     C2D_TargetClear(world, C2D_Color32(0, 0, 0, 255));
-    C2D_SceneBegin(world);
+    SceneOn(world);
     C2D_ViewReset();
     Blend(5, false, false);
     C2D_DrawImageAt((C2D_Image){&sSurface, &logical}, 0, 0, 0, NULL, 1, 1);
@@ -8922,7 +8929,7 @@ static void RenderBattleWorld(uint32_t clear, float slider)
     BlendForget();
     C2D_TargetClear(sLogical, 0);
     if (sScene) RenderBattleScene(0);
-    C2D_SceneBegin(sLogical);
+    SceneOn(sLogical);
     Blend(5, false, false);
     if (sScene) HudDrawCrisp(HUD_FLAT);
     /* After a scene composed on its own only the text box is left; without
@@ -8935,7 +8942,7 @@ static void RenderBattleWorld(uint32_t clear, float slider)
     GpuSplit();
 
     BlendForget();
-    C2D_SceneBegin(sTop);
+    SceneOn(sTop);
     C2D_ViewReset();
     Blend(5, false, false);
     C2D_DrawImageAt((C2D_Image){&sSurface, &logical}, 0, 0, 0, NULL, 1, 1);
@@ -9169,7 +9176,7 @@ static void TransitionCompose(void)
     BlendForget();
     sSceneCached = false;
     C2D_TargetClear(sScene, 0);
-    C2D_SceneBegin(sScene);
+    SceneOn(sScene);
     C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
     sScissored = false;
     Blend(5, false, false);
@@ -9326,6 +9333,7 @@ static void RenderTransition(bool voxel, uint32_t clear)
         CtrVoxel_SetBrightness(0.0f, 0.0f, false);
         C2D_TargetClear(sLogical, clear);
         CtrVoxel_Draw(sLogical, -1);
+        sSceneOn = NULL; /* drawn on with C3D_FrameDrawOn, behind SceneOn's back */
         C3D_SetScissor(GPU_SCISSOR_DISABLE, 0, 0, 0, 0);
         C3D_FrameSplit(0);
         C2D_Prepare();
@@ -9338,7 +9346,7 @@ static void RenderTransition(bool voxel, uint32_t clear)
 #endif
     {
         C2D_TargetClear(sLogical, clear);
-        C2D_SceneBegin(sLogical);
+        SceneOn(sLogical);
         Blend(5, false, false);
         sRegLine = fieldRegs;
         sLayerExclude = 1;
@@ -9356,7 +9364,7 @@ static void RenderTransition(bool voxel, uint32_t clear)
     if (sScene) TransitionCompose();
 
     C2D_TargetClear(sTop, clear);
-    C2D_SceneBegin(sTop);
+    SceneOn(sTop);
     C2D_ViewReset();
     Blend(5, false, false);
     TransitionField();
@@ -9818,7 +9826,7 @@ static void RenderBands(unsigned count, uint32_t backdrop)
         sLayerShift = 0;
         BlendForget();
         PlaneClear(sBand[band], last ? backdrop : behind ? backdrop & 0x00ffffff : 0);
-        C2D_SceneBegin(sBand[band]);
+        SceneOn(sBand[band]);
         if (behind)
         {
             C2D_Flush();
@@ -9876,7 +9884,7 @@ static void BlitBands(C3D_RenderTarget *target, unsigned count, float parallax)
         CTR_GAME_WIDTH / 512.0f, 1 - CTR_GAME_HEIGHT / 256.0f};
 
     BlendForget();
-    C2D_SceneBegin(target);
+    SceneOn(target);
     C2D_ViewReset();
     /*
      * The furthest plane sits at the screen plane in both eyes and is opaque
@@ -9959,7 +9967,7 @@ static void DrawNoHome(C3D_RenderTarget *target)
     C2D_Prepare();
     C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
     BlendForget();
-    C2D_SceneBegin(target);
+    SceneOn(target);
     C2D_ViewReset();
     Blend(5, false, false);
     C2D_DrawCircleSolid(x + w / 2, y + w / 2, 0, w / 2, C2D_Color32(0, 0, 0, 170));
@@ -9977,7 +9985,7 @@ static void DrawPoisonVeil(C3D_RenderTarget *target, unsigned alpha)
     C2D_Prepare();
     C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
     BlendForget();
-    C2D_SceneBegin(target);
+    SceneOn(target);
     C2D_ViewReset();
     Blend(5, false, false);
     C2D_DrawRectSolid(0, 0, 0, CTR_GAME_WIDTH, CTR_GAME_HEIGHT, C2D_Color32(150, 60, 200, alpha));
@@ -10003,7 +10011,7 @@ static void DrawFps(C3D_RenderTarget *target)
     C2D_Prepare();
     C3D_DepthTest(false, GPU_ALWAYS, GPU_WRITE_COLOR);
     BlendForget();
-    C2D_SceneBegin(target);
+    SceneOn(target);
     C2D_ViewReset();
     Blend(5, false, false);
     C2D_DrawRectSolid(2, 2, 0, count * FPS_ADVANCE + FPS_PIXEL * 3, 5 * FPS_PIXEL + FPS_PIXEL * 4,
