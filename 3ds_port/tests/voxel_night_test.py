@@ -365,8 +365,9 @@ int main(void)
 def renderer_tests(cc):
     text = (ROOT / "src/voxel/ctr_voxel.c").read_text(encoding="utf-8")
     functions = []
-    for name in ("MoonlightColour", "TerrainTexEnv", "ReleaseGlowUnit", "BuildingGlowEnv", "LampTexEnv"):
-        result_type = "uint32_t" if name == "MoonlightColour" else "void"
+    for name in ("MoonlightColour", "TerrainTexEnv", "ReleaseGlowUnit", "HazeTexEnv", "FadeColour",
+                 "FadeTexEnv", "BuildingGlowEnv", "LampTexEnv"):
+        result_type = "uint32_t" if name in ("MoonlightColour", "FadeColour") else "void"
         start = text.index("static " + result_type + " " + name + "(")
         position = text.index("{", start) + 1
         depth = 1
@@ -397,6 +398,7 @@ typedef struct { float dappleLow, dappleHigh; } VoxelLight;
 static float sMoonlight;
 static uint32_t sMoonlightColour;
 static uint32_t DappleConstant(const VoxelLight *light) { (void)light; return 0x12345678u; }
+static float sHazeRgb[3];
 static uint8_t __C3D_Context[512] __attribute__((aligned(16)));
 #define C3DI_CONTEXT_FLAGS 0x20u
 #define C3DI_CONTEXT_TEX 0x118u
@@ -429,6 +431,8 @@ static void C3D_TexEnvScale(C3D_TexEnv *env, int mode, int scale)
 { (void)env; if (mode == C3D_Alpha) sAlphaScale = scale; }
 '''
     source += re.search(r"#define VOXEL_LAMP_POOL_GAIN .*", text).group(0) + "\n"
+    source += re.search(r"typedef struct\s*\{\s*float amount, rgb\[3\];\s*\} VoxelFade;", text).group(0) + "\n"
+    source += "static VoxelFade sWorldFade;\n"
     source += "\n".join(functions)
     source += r'''
 int main(void)
@@ -451,10 +455,10 @@ int main(void)
     C3D_Tex mask, other;
     C3D_Tex **bound = (C3D_Tex **)(void *)(__C3D_Context + C3DI_CONTEXT_TEX);
     uint32_t *flags = (uint32_t *)(void *)(__C3D_Context + C3DI_CONTEXT_FLAGS);
-    BuildingGlowEnv(NULL, 1.0f);
-    BuildingGlowEnv(&mask, 0.0f);
+    BuildingGlowEnv(NULL, 1.0f, NULL);
+    BuildingGlowEnv(&mask, 0.0f, NULL);
     assert(sBinds == 0 && sGlowBound == NULL);
-    BuildingGlowEnv(&mask, 0.5f);
+    BuildingGlowEnv(&mask, 0.5f, NULL);
     assert(sBinds == 1 && bound[2] == &mask && sGlowBound == &mask);
     assert(sEnvs[1].alpha[0] == GPU_TEXTURE2 && sEnvs[1].alpha[1] == GPU_CONSTANT);
     assert(sEnvs[1].alphaOp[0] == GPU_TEVOP_A_SRC_R);
@@ -467,13 +471,46 @@ int main(void)
     assert(sEnvs[3].colour == 0 && sEnvs[4].colour == 0);
     ReleaseGlowUnit();
     assert(bound[2] == NULL && sGlowBound == NULL && *flags == C3DI_FLAG_TEX(2));
-    BuildingGlowEnv(&mask, 1.0f);
+    BuildingGlowEnv(&mask, 1.0f, NULL);
     bound[2] = &other;
     ReleaseGlowUnit();
     assert(bound[2] == &sTreeAtlas && sGlowBound == NULL);
-    BuildingGlowEnv(&mask, 1.0f);
-    BuildingGlowEnv(NULL, 1.0f);
+    BuildingGlowEnv(&mask, 1.0f, NULL);
+    BuildingGlowEnv(NULL, 1.0f, NULL);
     assert(bound[2] == NULL && sGlowBound == NULL && sEnvs[2].colour == 0);
+    /* the glow over the dapples: their stages 0-2 kept, the glow in 3, the
+       haze and the fade moved on to 4 and 5 */
+    sHazeRgb[0] = 0.25f; sHazeRgb[1] = 0.5f; sHazeRgb[2] = 1.0f;
+    sWorldFade.amount = 0.5f;
+    sWorldFade.rgb[0] = 1.0f;
+    BuildingGlowEnv(&mask, 0.5f, &dapple);
+    assert(bound[2] == &mask && sGlowBound == &mask);
+    assert(sEnvs[0].rgbFunc == GPU_INTERPOLATE && sEnvs[0].rgb[0] == GPU_TEXTURE1);
+    assert(sEnvs[0].colour == 0x12345678u && sEnvs[0].alpha[0] == GPU_TEXTURE0);
+    assert(sEnvs[1].rgbFunc == GPU_MODULATE && sEnvs[1].rgb[0] == GPU_PREVIOUS);
+    assert(sEnvs[1].rgb[1] == GPU_PRIMARY_COLOR);
+    assert(sEnvs[1].alpha[0] == GPU_TEXTURE2 && sEnvs[1].alpha[1] == GPU_CONSTANT);
+    assert(sEnvs[1].alphaOp[0] == GPU_TEVOP_A_SRC_R);
+    assert(sEnvs[1].alphaFunc == GPU_MODULATE && sEnvs[1].colour == 0x80000000u);
+    assert(sEnvs[2].rgbFunc == GPU_MULTIPLY_ADD && sEnvs[2].rgb[0] == GPU_TEXTURE0);
+    assert(sEnvs[2].rgb[1] == GPU_PREVIOUS && sEnvs[2].colour == sMoonlightColour);
+    assert(sEnvs[2].alpha[0] == GPU_PREVIOUS && sEnvs[2].alphaFunc == GPU_REPLACE);
+    assert(sEnvs[3].rgbFunc == GPU_INTERPOLATE && sEnvs[3].rgb[0] == GPU_CONSTANT);
+    assert(sEnvs[3].rgb[1] == GPU_PREVIOUS && sEnvs[3].rgbOp[2] == GPU_TEVOP_RGB_SRC_ALPHA);
+    assert(sEnvs[3].alpha[0] == GPU_TEXTURE0 && sEnvs[3].alphaFunc == GPU_REPLACE);
+    assert(sEnvs[3].colour == 0xFFA0D8FFu);
+    assert(sEnvs[4].rgbFunc == GPU_INTERPOLATE && sEnvs[4].rgb[0] == GPU_PREVIOUS);
+    assert(sEnvs[4].rgb[2] == GPU_PRIMARY_COLOR && sEnvs[4].colour == FadeColour(1.0f, sHazeRgb));
+    assert(sEnvs[5].rgbFunc == GPU_INTERPOLATE && sEnvs[5].rgb[1] == GPU_PREVIOUS);
+    assert(sEnvs[5].colour == FadeColour(0.5f, sWorldFade.rgb));
+    /* a page without a mask, over the dapples: haze and fade back in 3 and 4 */
+    BuildingGlowEnv(NULL, 1.0f, &dapple);
+    assert(bound[2] == NULL && sGlowBound == NULL);
+    assert(sEnvs[0].rgbFunc == GPU_INTERPOLATE && sEnvs[0].colour == 0x12345678u);
+    assert(sEnvs[1].alpha[0] == GPU_PREVIOUS && sEnvs[2].alpha[0] == GPU_PREVIOUS);
+    assert(sEnvs[3].rgb[2] == GPU_PRIMARY_COLOR && sEnvs[3].colour == FadeColour(1.0f, sHazeRgb));
+    assert(sEnvs[4].colour == FadeColour(0.5f, sWorldFade.rgb));
+    assert(sEnvs[5].rgbFunc == 0 && sEnvs[5].colour == 0);
     /* the glow: a flat colour over the scene by its alpha */
     LampTexEnv(1.0f, false);
     assert(sEnvs[0].rgbFunc == GPU_REPLACE && sEnvs[0].alphaFunc == GPU_REPLACE);

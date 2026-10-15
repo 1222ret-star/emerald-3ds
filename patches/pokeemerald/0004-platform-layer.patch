@@ -243,7 +243,7 @@ index ba84546aaf4d7c8992168291c7c213d849b4282c..1f43139af75cdf20805442e01005656d
 +
  #endif // GUARD_GBA_FLASH_INTERNAL_H
 diff --git a/include/gba/io_reg.h b/include/gba/io_reg.h
-index 53021185e3cc87e127ac3146f5597165cd9ff697..2e468c07272b23f19caa1260d39e306a04b99efb 100644
+index 53021185e3cc87e127ac3146f5597165cd9ff697..9387102d70544d600a195261cd8d12e9d0a5b886 100644
 --- a/include/gba/io_reg.h
 +++ b/include/gba/io_reg.h
 @@ -1,7 +1,11 @@
@@ -258,7 +258,40 @@ index 53021185e3cc87e127ac3146f5597165cd9ff697..2e468c07272b23f19caa1260d39e306a
  
  // I/O register offsets
  
-@@ -644,9 +648,11 @@
+@@ -581,8 +585,32 @@
+ #define WINOUT_WINOBJ_CLR   (1 << 13)
+ #define WINOUT_WINOBJ_ALL   (WINOUT_WINOBJ_BG_ALL | WINOUT_WINOBJ_OBJ | WINOUT_WINOBJ_CLR)
+ 
++#ifdef PLATFORM_3DS
++// Beside WIN0H and WIN1H, in the GBA's unused 0x56-0x5D: what the edges of a
++// wide window pass 255 by (left in bits 8-15, right in 0-7), and the WINxH
++// value they go with, so a write that bypassed SetGpuReg drops them.
++#define REG_OFFSET_WIN0H_OVER 0x56
++#define REG_OFFSET_WIN1H_OVER 0x58
++#define REG_OFFSET_WIN0H_TAG  0x5a
++#define REG_OFFSET_WIN1H_TAG  0x5c
++#endif
++
++#if defined(PLATFORM_3DS) && !defined(CTR_GBA_STAGE)
++// A window edge is 8 bits and the 3DS screen is 400 pixels wide. The low 16
++// bits are the register as the GBA had it, an edge past 255 saturated there
++// (255 is what the compositor reads as the edge of the screen); bits 16-31
++// carry how far each edge passes 255, which SetGpuReg keeps beside the
++// register for the compositor (WindowEdge in 3ds_video.c). A value cut to u16
++// still reads as before. GBA-geometry units keep the GBA's exact encoding.
++// The + 0 keeps u8 arguments free of -Wtype-limits.
++#define WIN_EDGE(x) ((x) + 0 > 255 ? 255u : (unsigned)(x))
++#define WIN_OVER(x) ((x) + 0 > 255 ? (unsigned)(x) - 255u : 0u)
++#define WIN_RANGE(a, b) ((WIN_EDGE(a) << 8) | WIN_EDGE(b) | (WIN_OVER(a) << 24) | (WIN_OVER(b) << 16))
++#define WIN_RANGE2(a, b) WIN_RANGE(a, b)
++#else
+ #define WIN_RANGE(a, b) (((a) << 8) | (b))
+ #define WIN_RANGE2(a, b) ((b) | ((a) << 8))
++#endif
+ 
+ // BLDCNT
+ // Bits 0-5 select layers for the 1st target
+@@ -644,9 +672,11 @@
  #define DMA_DEST_DEC      0x0020
  #define DMA_DEST_FIXED    0x0040
  #define DMA_DEST_RELOAD   0x0060

@@ -19,7 +19,10 @@
  *                  u16 metatile its cliff walls are drawn with (0xFFFF: none),
  *                  u8 sides (bits 0-3: stretches of its west edge column, 4-7:
  *                  of its east one, that have rock for a wall to hang from),
- *                  u8 flags (1: its flat layer is the ground behind it, plain)
+ *                  u8 flags, `sides` bits 8-15 to VoxelRelief_Cut (1: all its
+ *                  background is the plain ground behind it - written, no
+ *                  longer read; 2: VOXEL_RELIEF_GOES_ON; 4:
+ *                  VOXEL_RELIEF_BLOCK_WALLS; 8: VOXEL_RELIEF_THIN_DECK)
  *   and last u32 the table's offset, "CUTS".
  *
  * A point's depth is its height ((u, h, v + h)), so the file does not carry
@@ -103,6 +106,19 @@ static const uint8_t *sCutVariants, *sCutCells;
 static unsigned sCutVariantCount, sCutCellCount;
 #define CUT_VARIANT_BYTES 36
 #define CUT_CELL_BYTES 14
+
+/* The cut cells last looked up, tiled as sFindMemo: a relief cell asks about
+ * itself and its neighbours several times a build (its walls, its ground,
+ * the cells beside it), each a search of every map's cut cells. Exact, and
+ * cleared with the table (VoxelRelief_Shutdown). */
+typedef struct
+{
+    bool used;
+    int layoutId;
+    int16_t x, y;
+    int record;            /* index into sCutCells, -1: not cut */
+} CutMemo;
+static CutMemo sCutMemo[FIND_MEMO_SIDE * FIND_MEMO_SIDE];
 
 /* floorf as a conversion and one correction: the library call it replaces was
  * made at every step of every shadow ray over a mountain. */
@@ -233,6 +249,7 @@ void VoxelRelief_Shutdown(void)
         free(sLayouts[i].heights);
     }
     memset(sFindMemo, 0, sizeof(sFindMemo));
+    memset(sCutMemo, 0, sizeof(sCutMemo));
     free(sLayouts);
     free(sLayoutIndex);
     sLayoutIndex = NULL;
@@ -389,6 +406,8 @@ int VoxelRelief_Cut(const VoxelMapInstance *inst, int x, int y, float *foot, int
                     int *wall, unsigned *sides)
 {
     unsigned lo = 0, hi = sCutCellCount, key;
+    const uint8_t *c;
+    CutMemo *memo;
 
     if (inst == NULL || sCutCells == NULL)
         return -1;
@@ -396,27 +415,42 @@ int VoxelRelief_Cut(const VoxelMapInstance *inst, int x, int y, float *foot, int
     y -= inst->originY;
     if (x < 0 || y < 0 || x > 255 || y > 255)
         return -1;
-    key = ((unsigned)inst->layoutId << 16) | ((unsigned)x << 8) | (unsigned)y;
-    while (lo < hi)
+    memo = &sCutMemo[((unsigned)y & (FIND_MEMO_SIDE - 1u)) * FIND_MEMO_SIDE
+                     + ((unsigned)x & (FIND_MEMO_SIDE - 1u))];
+    if (!memo->used || memo->layoutId != inst->layoutId || memo->x != x || memo->y != y)
     {
-        unsigned mid = (lo + hi) / 2;
-        const uint8_t *c = sCutCells + CUT_CELL_BYTES * mid;
-        unsigned at = (U16(c) << 16) | ((unsigned)c[2] << 8) | c[3];
-
-        if (at == key)
+        key = ((unsigned)inst->layoutId << 16) | ((unsigned)x << 8) | (unsigned)y;
+        memo->used = true;
+        memo->layoutId = inst->layoutId;
+        memo->x = (int16_t)x;
+        memo->y = (int16_t)y;
+        memo->record = -1;
+        while (lo < hi)
         {
-            *foot = (int16_t)U16(c + 6) / 16.0f;
-            *ground = U16(c + 8) == 0xFFFFu ? -1 : (int)U16(c + 8);
-            *wall = U16(c + 10) == 0xFFFFu ? -1 : (int)U16(c + 10);
-            *sides = (unsigned)c[12] | ((unsigned)c[13] << 8);
-            return (int)U16(c + 4);
+            unsigned mid = (lo + hi) / 2;
+            unsigned at;
+
+            c = sCutCells + CUT_CELL_BYTES * mid;
+            at = (U16(c) << 16) | ((unsigned)c[2] << 8) | c[3];
+            if (at == key)
+            {
+                memo->record = (int)mid;
+                break;
+            }
+            if (at < key)
+                lo = mid + 1;
+            else
+                hi = mid;
         }
-        if (at < key)
-            lo = mid + 1;
-        else
-            hi = mid;
     }
-    return -1;
+    if (memo->record < 0)
+        return -1;
+    c = sCutCells + CUT_CELL_BYTES * (unsigned)memo->record;
+    *foot = (int16_t)U16(c + 6) / 16.0f;
+    *ground = U16(c + 8) == 0xFFFFu ? -1 : (int)U16(c + 8);
+    *wall = U16(c + 10) == 0xFFFFu ? -1 : (int)U16(c + 10);
+    *sides = (unsigned)c[12] | ((unsigned)c[13] << 8);
+    return (int)U16(c + 4);
 }
 
 static const ReliefLayout *LayoutOf(const VoxelMapInstance *inst)

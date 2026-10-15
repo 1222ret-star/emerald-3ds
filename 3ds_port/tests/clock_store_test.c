@@ -13,6 +13,11 @@
 #include "3ds_pak.h"
 #include "3ds_platform.h"
 
+#ifdef _WIN32
+/* mingw's mkdir takes no mode. */
+#define mkdir(path, mode) mkdir(path)
+#endif
+
 #undef rename
 int rename(const char *from, const char *to);
 
@@ -37,6 +42,7 @@ static bool sFailWrite;
 uint64_t CtrPlatform_Milliseconds(void) { return sNow; }
 int64_t CtrPlatform_WallSeconds(void) { return sWall; }
 bool CtrGame_IsOutdoor(void) { return true; }
+bool CtrScenario_SaveWrites(void) { return true; }
 bool CtrGame_LocalTimeSeconds(unsigned *seconds) { *seconds = 12 * 3600; return true; }
 int CtrSettings_GetInt(const char *key, int fallback)
 {
@@ -91,6 +97,12 @@ int main(void)
     unsigned char record[40], probe[41];
     CtrDayNightSnapshot saved, loaded;
 
+#ifdef _WIN32
+    /* The store writes CTR_DATA_DIR ("sdmc:/...") as is, and Windows cannot
+     * create a folder named "sdmc:" (nor has /tmp): run it on a POSIX host. */
+    puts("SKIP clock store: sdmc:/ paths need a POSIX host");
+    return 0;
+#endif
     assert(mkdtemp(folder) != NULL && chdir(folder) == 0);
     assert(mkdir("sdmc:", 0700) == 0);
     assert(mkdir("sdmc:/3ds", 0700) == 0);

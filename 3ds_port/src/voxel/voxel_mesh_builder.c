@@ -144,6 +144,12 @@ void VoxelBuilder_Quad(VoxelBuilder *builder, const VoxelVertex *a, const VoxelV
         return;
     }
 #endif
+    /* Whole or not at all: half a quad is a sliver along its diagonal. */
+    if (builder->count + 6 > builder->capacity)
+    {
+        builder->dropped += 2;
+        return;
+    }
     VoxelBuilder_Tri(builder, a, b, c);
     VoxelBuilder_Tri(builder, a, c, d);
 }
@@ -565,7 +571,8 @@ static void EmitCutGround(VoxelBuilder *b, int x, int y, float u0, float v0, flo
 typedef VoxelCutDiagonals CutDiagonals;
 
 /* A triangle of the cell, its vertices at pixels (X, Y) of the tile, cut by
- * the diagonals: what is left drawn as quads (a fan of the convex piece). */
+ * the diagonals: what is left drawn as quads (a fan of the convex piece),
+ * an odd one left over as a triangle. */
 static void EmitCutTri(VoxelBuilder *b, const VoxelVertex *v0, const VoxelVertex *v1,
                        const VoxelVertex *v2, const float px[3][2], const CutDiagonals *cut)
 {
@@ -618,7 +625,14 @@ static void EmitCutTri(VoxelBuilder *b, const VoxelVertex *v0, const VoxelVertex
         if (i + 2 < n)
             VoxelBuilder_Quad(b, &poly[cur][0], &poly[cur][i], &poly[cur][i + 1], &poly[cur][i + 2]);
         else
-            VoxelBuilder_Quad(b, &poly[cur][0], &poly[cur][i], &poly[cur][i + 1], &poly[cur][i + 1]);
+        {
+#if CTR_VOXEL_LIGHTING
+            if (b->lighting)
+                VoxelLighting_Tri(b, &poly[cur][0], &poly[cur][i], &poly[cur][i + 1]);
+            else
+#endif
+                VoxelBuilder_Tri(b, &poly[cur][0], &poly[cur][i], &poly[cur][i + 1]);
+        }
     }
 }
 
@@ -1316,11 +1330,12 @@ void VoxelMesh_EmitGroundRow(VoxelBuilder *builder, const VoxelMapInstance *inst
                     builder->lift = foot;
                     builder->shift = foot;
                     /*
-                     * Its flat layer: the tile's own drawing, or - when all
-                     * its background is the plain ground (flag 0x100) - that
-                     * ground itself. The rock the drawing carries, flat at
-                     * the foot, showed as a dark wedge on the sand wherever
-                     * the lifted rock did not cover it.
+                     * Its flat layer: with a ground behind it, that ground
+                     * where the drawing has rock and the drawing where it is
+                     * background (EmitCutGround); with none, the whole
+                     * drawing. The rock the drawing carries, flat at the
+                     * foot, showed as a dark wedge on the sand wherever the
+                     * lifted rock did not cover it.
                      */
                     {
                         unsigned vLayout = 0, vMetatile = 0;

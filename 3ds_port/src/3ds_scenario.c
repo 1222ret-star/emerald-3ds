@@ -419,6 +419,9 @@ void CtrScenario_Input(CtrInputSample *sample)
         sample->touchY = s->touchY;
         return;
     }
+    /* exit=0: the live pad from here on, to go on by hand from the recorded spot. */
+    if (sEnded && !sExitAtEnd)
+        return;
     memset(sample, 0, sizeof(*sample));
     if (!sEnded)
     {

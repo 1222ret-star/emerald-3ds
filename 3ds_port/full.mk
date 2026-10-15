@@ -12,6 +12,7 @@
 PREPROC := $(abspath $(ROOT)/tools/preproc/preproc$(EXESUFFIX))
 MAPJSON := $(abspath $(ROOT)/tools/mapjson/mapjson$(EXESUFFIX))
 WAV2AGB := $(abspath $(ROOT)/tools/wav2agb/wav2agb$(EXESUFFIX))
+SCANINC := $(abspath $(ROOT)/tools/scaninc/scaninc$(EXESUFFIX))
 GAME_ARCH := $(ARCH)
 ASM_PSEUDO_OP_CONV := sed -e 's/\.4byte/\.int/g;s/\.2byte/\.short/g'
 AS := $(DEVKITARM)/bin/arm-none-eabi-as
@@ -92,7 +93,7 @@ SOUND_WRAPPED := m4aSoundVSync m4aSoundMain m4aSoundInit m4aSoundMode m4aSoundVS
 	m4aMPlayLFOSpeedSet MPlayStart MPlayContinue MPlayFadeOut SetPokemonCryVolume \
 	SetPokemonCryPanpot SetPokemonCryPitch SetPokemonCryLength SetPokemonCryRelease \
 	SetPokemonCryProgress SetPokemonCryChorus SetPokemonCryStereo SetPokemonCryPriority \
-	SetPokemonCryTone IsPokemonCryPlaying
+	SetPokemonCryTone IsPokemonCryPlaying ClearPokemonCrySongs
 # The field map's changes, announced to the voxel world (src/3ds_map_events.c).
 BACKEND_SRCS += src/3ds_map_events.c
 # Sprites' identities, numbered by sprite.c and completed here.
@@ -149,11 +150,17 @@ ROMFS_GAMEDATA_OUTS := romfs/gamedata/gamedata.bin romfs/gamedata/gamedata.rel
 
 $(FULL_OBJECTS): build/config
 
+# Headers are tracked from the preprocessing stage. It runs from the repository
+# root, so the headers found beside the source come out relative to it (src/):
+# they are made absolute, and only once the compile succeeded, so a failed one
+# never leaves a .d naming paths make cannot find.
 build/root/%.o: $(ROOT)/%.c Makefile full.mk
 	@mkdir -p $(dir $@)
-	cd $(ROOT) && "$(CC)" $(FULLFLAGS) $(FULLCFLAGS) -E -x c $(patsubst $(ROOT)/%,%,$<) \
+	cd $(ROOT) && "$(CC)" $(FULLFLAGS) $(FULLCFLAGS) -MMD -MP -MT $@ -MF $(CURDIR)/$(@:.o=.d.tmp) -E -x c $(patsubst $(ROOT)/%,%,$<) \
 		| "$(PREPROC)" -i $(patsubst $(ROOT)/%,%,$<) charmap.txt \
 		| "$(CC)" $(FULLFLAGS) $(FULLCFLAGS) -x c -c -o $(CURDIR)/$@ -
+	@sed -e 's# src/# $(abspath $(ROOT))/src/#g' -e 's#^src/#$(abspath $(ROOT))/src/#' $(@:.o=.d.tmp) > $(@:.o=.d)
+	@rm -f $(@:.o=.d.tmp)
 
 # Screens staged as one whole GBA picture: GBA geometry, and their VBlank
 # callbacks reported to the bridge (compat/ctr_gba_stage.h). The cable car too:
@@ -255,19 +262,29 @@ $(CTR_GBA_TRANSITION_OBJS): compat/ctr_gba_transition.h $(ROOT)/include/gba/defi
 # hit by the DS build). It has no charmap string literals, so it is safe to skip.
 build/root/src/field_camera.o: $(ROOT)/src/field_camera.c Makefile full.mk
 	@mkdir -p $(dir $@)
-	"$(CC)" $(FULLFLAGS) $(FULLCFLAGS) -c $< -o $@
+	"$(CC)" $(FULLFLAGS) $(FULLCFLAGS) -MMD -MP -c $< -o $@
 
 build/root/data/maps.o: build/maps.s build/map_layouts.inc $(ROOT)/data/layouts/layouts_table.inc \
 		$(ROOT)/data/maps/headers.inc $(ROOT)/data/maps/groups.inc $(ROOT)/data/maps/connections.inc
 	@mkdir -p $(dir $@)
+	@$(call scan_data_deps,3ds_port/build/maps.s)
 	cd $(ROOT) && "$(PREPROC)" 3ds_port/build/maps.s charmap.txt | "$(CPPTOOL)" -Iinclude -I. - \
-		| "$(PREPROC)" -ie 3ds_port/build/maps.s charmap.txt | $(ASM_PSEUDO_OP_CONV) - \
+		| "$(PREPROC)" -ie 3ds_port/build/maps.s charmap.txt | $(ASM_PSEUDO_OP_CONV) \
 		| "$(AS)" $(ASFLAGS) -o $(CURDIR)/$@
+
+# What a data file .includes and #includes, listed by scaninc as the root
+# Makefile does (preproc expands .include itself, so as --MD sees nothing):
+# absolute paths, each with an empty rule like -MP's (a Windows scaninc ends
+# its lines with CR). Listed before assembling, so a scaninc that cannot run
+# stops the build before the object exists.
+scan_data_deps = cd $(ROOT) && "$(SCANINC)" -I include -I "" $(1) \
+	| awk '{ sub(/\r$$/, "") } NF { print "$@: $(abspath $(ROOT))/" $$0; print "$(abspath $(ROOT))/" $$0 ":" }' > $(CURDIR)/$(@:.o=.d)
 
 build/root/data/%.o: $(ROOT)/data/%.s Makefile full.mk
 	@mkdir -p $(dir $@)
+	@$(call scan_data_deps,data/$*.s)
 	cd $(ROOT) && "$(PREPROC)" data/$*.s charmap.txt | "$(CPPTOOL)" -Iinclude -I. - \
-		| "$(PREPROC)" -ie data/$*.s charmap.txt | $(ASM_PSEUDO_OP_CONV) - \
+		| "$(PREPROC)" -ie data/$*.s charmap.txt | $(ASM_PSEUDO_OP_CONV) \
 		| "$(AS)" $(ASFLAGS) -o $(CURDIR)/$@
 
 # The samples are .incbin'd from paths relative to the repository root, and the
@@ -279,12 +296,13 @@ else
 SAMPLE_OVERLAY_SED := $(foreach f,$(SAMPLE_OVERLAY),-e 's\#"sound/direct_sound_samples/\(cries/\)\{0,1\}$(notdir $(f))"\#"$(f)"\#')
 build/root/data/sound_data.o: $(ROOT)/data/sound_data.s $(ROOT_SOUND_BIN_SRCS) $(SAMPLE_OVERLAY) Makefile full.mk
 	@mkdir -p $(dir $@)
-	cd $(ROOT) && "$(PREPROC)" data/sound_data.s charmap.txt | "$(CPPTOOL)" -Iinclude -I. - 		| "$(PREPROC)" -ie data/sound_data.s charmap.txt | $(ASM_PSEUDO_OP_CONV) - 		| sed $(SAMPLE_OVERLAY_SED) | "$(AS)" $(ASFLAGS) -o $(CURDIR)/$@
+	@$(call scan_data_deps,data/sound_data.s)
+	cd $(ROOT) && "$(PREPROC)" data/sound_data.s charmap.txt | "$(CPPTOOL)" -Iinclude -I. - 		| "$(PREPROC)" -ie data/sound_data.s charmap.txt | $(ASM_PSEUDO_OP_CONV) 		| sed $(SAMPLE_OVERLAY_SED) | "$(AS)" $(ASFLAGS) -o $(CURDIR)/$@
 endif
 
 build/root/sound/songs/%.o: $(ROOT)/sound/songs/%.s
 	@mkdir -p $(dir $@)
-	$(ASM_PSEUDO_OP_CONV) $< | "$(AS)" $(ASFLAGS) -I$(ROOT)/sound -o $@
+	$(ASM_PSEUDO_OP_CONV) $< | "$(AS)" $(ASFLAGS) -I$(ROOT)/sound --MD $(@:.o=.d) -o $@
 
 # mid2agb takes per-song options from sound/songs/midi/midi.cfg, which the root
 # Makefile already parses. Duplicating that parsing here would be a second place
@@ -399,6 +417,8 @@ map-includes:
 	"$(PYTHON)" $(SCRIPTS)/gen_missing_map_includes.py
 
 -include $(BACKEND_OBJS:.o=.d)
+# The Makefile's $(OBJECTS:.o=.d) already covers FULL_OBJECTS.
+-include $(SCRIPT_DATA_OBJS:.o=.d) $(ROOT_SONG_OBJS:.o=.d)
 
 # Voxel generators read converted tiles/palettes directly. On a fresh checkout
 # those files do not exist until the asset stage, which runs after the link.
@@ -610,6 +630,16 @@ build/settings_shutdown_test.exe: tests/settings_shutdown_test.c tests/settings_
 verify: verify-voxel-runtime
 verify-voxel-runtime:
 	"$(PYTHON)" tests/voxel_runtime_test.py --cc "$(HOSTCC)"
+
+.PHONY: verify-wide-windows
+verify: verify-wide-windows
+verify-wide-windows:
+	"$(PYTHON)" tests/wide_window_test.py --cc "$(HOSTCC)"
+
+.PHONY: verify-slot-pack
+verify: verify-slot-pack
+verify-slot-pack:
+	"$(PYTHON)" tests/slot_pack_test.py --cc "$(HOSTCC)"
 
 .PHONY: verify-voxel-draft
 verify: verify-voxel-draft

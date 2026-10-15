@@ -26,6 +26,7 @@
 #include "voxel_tree.h"
 #include "voxel_atlas.h"
 #ifdef PLATFORM_3DS
+#include "voxel_building.h"
 #include "field_weather.h"
 #include "palette.h"
 #include "constants/field_weather.h"
@@ -154,44 +155,6 @@ unsigned Voxel_MetatileCount(const void *tilesetPtr, unsigned limit)
         return limit;
     bytes /= NUM_TILES_PER_METATILE * sizeof(u16);
     return bytes < limit ? (unsigned)bytes : limit;
-}
-
-bool Voxel_LoadTiles(const void *tilesetPtr, uint8_t *dest, uint32_t destSize)
-{
-    const struct Tileset *tileset = tilesetPtr;
-    const void *tiles;
-    u32 available;
-
-    if (tileset == NULL || tileset->tiles == NULL || dest == NULL)
-        return false;
-
-    if (tileset->isCompressed)
-    {
-        /*
-         * LZ77UnCompWram cannot be told how large the destination is, so the
-         * header is read first and a payload that does not fit is refused
-         * rather than allowed to run off the end of the scratch buffer.
-         */
-        const u8 *packed = Port_ResolveAssetPointer(tileset->tiles);
-        u32 size;
-
-        if (packed == NULL)
-            return false;
-        size = (u32)packed[1] | ((u32)packed[2] << 8) | ((u32)packed[3] << 16);
-        if (size == 0 || size > destSize)
-            return false;
-        LZDecompressWram((const u32 *)packed, dest);
-        return true;
-    }
-
-    tiles = Port_ResolveAssetPointer(tileset->tiles);
-    if (tiles == NULL)
-        return false;
-    available = Port_GetAssetSizeExact(tileset->tiles);
-    if (available == 0 || available > destSize)
-        available = destSize;
-    memcpy(dest, tiles, available);
-    return true;
 }
 
 /* ── Availability ───────────────────────────────────────────────────────── */
@@ -383,6 +346,22 @@ static void AddConnections(const VoxelMapInstance *from, bool far)
     }
 }
 
+#ifdef PLATFORM_3DS
+/* Ground variant (layout, metatile) is drawn from `inst`'s own tileset of
+ * that metatile, the one the atlas composes it from (voxel_atlas.c
+ * AtlasSourceOf). */
+static bool VariantFits(const VoxelMapInstance *inst, unsigned layoutId, unsigned metatile)
+{
+    const struct MapLayout *layout = Port_GetMapLayoutById((u16)layoutId);
+
+    if (layout == NULL)
+        return false;
+    return metatile < NUM_METATILES_IN_PRIMARY
+         ? layout->primaryTileset == inst->primaryTileset
+         : layout->secondaryTileset == inst->secondaryTileset;
+}
+#endif
+
 /*
  * The current map, its connections, and theirs. The game loads only the first
  * two, which is all its 15 x 10 tiles of screen can reach; the 3D view sees
@@ -398,6 +377,9 @@ void VoxelWorld_BuildInstances(void)
 {
     unsigned near;
 
+#ifdef PLATFORM_3DS
+    VoxelBuildings_SetVariantFits(VariantFits);
+#endif
     sInstanceCount = 0;
     if (gMapHeader.mapLayout == NULL)
         return;

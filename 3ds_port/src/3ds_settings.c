@@ -13,8 +13,11 @@
 #include <3ds.h>
 #include "3ds_platform.h"
 #include "3ds_daynight.h"
+#include "3ds_data.h"
 
 #define SETTINGS_FILE "settings.txt"
+/* Written first, then put in the file's place (WriteText). */
+#define SETTINGS_TEMP "settings.txt.tmp"
 
 /* The voxel overworld is opt-in: the classic 2D field is the default. */
 static bool sVoxel = false;
@@ -134,6 +137,10 @@ void CtrSettings_Load(void)
     FILE *file = CtrFs_OpenData(SETTINGS_FILE, "r");
     char line[64];
 
+    /* A power cut between WriteText's remove and rename leaves only the
+       temp file, complete. */
+    if (file == NULL)
+        file = CtrFs_OpenData(SETTINGS_TEMP, "r");
     if (file == NULL)
     {
         CtrLog_Write(CTR_LOG_FS, "settings: none yet, defaults (voxel=0 fps=0)");
@@ -161,20 +168,30 @@ static LightLock sSaveLock = 1;
 static char sSaveText[160 + EXTRA_KEYS * 32];
 static bool sSavePending, sSaveQuit;
 
+/* Into a temp file, then in place of the old one: rewritten in place, a power
+ * cut mid-write lost every setting. FAT's rename does not replace, so the old
+ * file goes first; until the rename, Load reads the temp file. */
 static void WriteText(const char *text)
 {
-    FILE *file = CtrFs_OpenData(SETTINGS_FILE, "w");
+    FILE *file = CtrFs_OpenData(SETTINGS_TEMP, "w");
 
     if (file == NULL)
     {
-        CtrLog_Write(CTR_LOG_ERROR, "settings: could not open %s", SETTINGS_FILE);
+        CtrLog_Write(CTR_LOG_ERROR, "settings: could not open %s", SETTINGS_TEMP);
         return;
     }
     bool ok = fputs(text, file) >= 0;
     if (fclose(file) != 0)
         ok = false;
     if (!ok)
-        CtrLog_Write(CTR_LOG_ERROR, "settings: write failed for %s", SETTINGS_FILE);
+    {
+        CtrLog_Write(CTR_LOG_ERROR, "settings: write failed for %s", SETTINGS_TEMP);
+        remove(CTR_DATA_DIR SETTINGS_TEMP);
+        return;
+    }
+    remove(CTR_DATA_DIR SETTINGS_FILE);
+    if (rename(CTR_DATA_DIR SETTINGS_TEMP, CTR_DATA_DIR SETTINGS_FILE) != 0)
+        CtrLog_Write(CTR_LOG_ERROR, "settings: could not replace %s", SETTINGS_FILE);
 }
 
 static void Saver(void *arg)

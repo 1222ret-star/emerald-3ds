@@ -176,6 +176,5 @@ typedef struct {
 } VoxelTileLoad;
 bool Voxel_LoadTilesStep(const void *tileset, uint8_t *dest, uint32_t destSize,
                          VoxelTileLoad *load, unsigned bytes);
-bool Voxel_LoadTiles(const void *tileset, uint8_t *dest, uint32_t destSize);
 
 #endif

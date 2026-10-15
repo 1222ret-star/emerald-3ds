@@ -401,6 +401,24 @@ index a2721b06b4d2457c94c91403c925723694f71650..9c3902e7cca45a00ad341865fcb499ce
      /*2BAD*/ u8 battleNum;
      /*2BAE*/ u8 battleTookMoreThanOneTurn:1;
               u8 playerLostAMon:1;
+diff --git a/include/gpu_regs.h b/include/gpu_regs.h
+index 89e0cb64bcf56ffa0843295d05553a8a22ab56d0..a4959b32521f708a7b477d71dfc65cb265e4b62e 100644
+--- a/include/gpu_regs.h
++++ b/include/gpu_regs.h
+@@ -8,7 +8,13 @@
+ // Exported ROM declarations
+ void InitGpuRegManager(void);
+ void CopyBufferedValuesToGpuRegs(void);
++#ifdef PLATFORM_3DS
++// A window's horizontal edges can pass 255 on the 400-pixel screen: WIN_RANGE
++// (gba/io_reg.h) carries the rest above bit 15, and SetGpuReg keeps it.
++void SetGpuReg(u8 regOffset, u32 value);
++#else
+ void SetGpuReg(u8 regOffset, u16 value);
++#endif
+ void SetGpuReg_ForcedBlank(u8 regOffset, u16 value);
+ u16 GetGpuReg(u8 regOffset);
+ void SetGpuRegBits(u8 regOffset, u16 mask);
 diff --git a/include/item_menu.h b/include/item_menu.h
 index e63eb3b6c2ca9281481f6a8a0f1afe066a8a324b..dc7b44a0d6b38a52e8354f08bf3f78cd480b9008 100644
 --- a/include/item_menu.h
@@ -2125,20 +2143,10 @@ index 0a0226c608da187311d58ef67ec06ce98de539ab..71b7ace46257a1daaae3f3c04c4566fc
  {
      DestroyTask(taskId);
 diff --git a/src/battle_main.c b/src/battle_main.c
-index ed50332bb801f155d11e88ea844d082c6f52ffa8..2a51f0bf42119ca5558542093686bbfc15659f36 100644
+index ed50332bb801f155d11e88ea844d082c6f52ffa8..27664d25489e05f35040a3dea1b0ff02c9bfcb01 100644
 --- a/src/battle_main.c
 +++ b/src/battle_main.c
-@@ -60,6 +60,9 @@
- #include "constants/songs.h"
- #include "constants/trainers.h"
- #include "cable_club.h"
-+#ifdef PORT_BRIDGE
-+#include <stdio.h>
-+#endif
- 
- extern const struct BgTemplate gBattleBgTemplates[];
- extern const struct WindowTemplate *const gBattleWindowTemplates[];
-@@ -150,8 +153,8 @@ EWRAM_DATA struct MultiPartnerMenuPokemon gMultiPartnerParty[MULTI_PARTY_SIZE] =
+@@ -150,8 +150,8 @@ EWRAM_DATA struct MultiPartnerMenuPokemon gMultiPartnerParty[MULTI_PARTY_SIZE] =
  EWRAM_DATA static struct MultiPartnerMenuPokemon *sMultiPartnerPartyBuffer = NULL;
  EWRAM_DATA u8 *gBattleAnimBgTileBuffer = NULL;
  EWRAM_DATA u8 *gBattleAnimBgTilemapBuffer = NULL;
@@ -2149,7 +2157,7 @@ index ed50332bb801f155d11e88ea844d082c6f52ffa8..2a51f0bf42119ca5558542093686bbfc
  EWRAM_DATA u8 gActiveBattler = 0;
  EWRAM_DATA u32 gBattleControllerExecFlags = 0;
  EWRAM_DATA u8 gBattlersCount = 0;
-@@ -237,7 +240,7 @@ EWRAM_DATA u16 gBattleMovePower = 0;
+@@ -237,7 +237,7 @@ EWRAM_DATA u16 gBattleMovePower = 0;
  EWRAM_DATA u16 gMoveToLearn = 0;
  EWRAM_DATA u8 gBattleMonForms[MAX_BATTLERS_COUNT] = {0};
  
@@ -2158,38 +2166,7 @@ index ed50332bb801f155d11e88ea844d082c6f52ffa8..2a51f0bf42119ca5558542093686bbfc
  COMMON_DATA void (*gBattleMainFunc)(void) = NULL;
  COMMON_DATA struct BattleResults gBattleResults = {0};
  COMMON_DATA u8 gLeveledUpInBattle = 0;
-@@ -4214,6 +4217,15 @@ static void HandleTurnActionSelectionState(void)
-                                                             i);
-                         }
- 
-+#ifdef PORT_BRIDGE
-+                        if (gBattleMons[gActiveBattler].species == SPECIES_TORCHIC)
-+                            printf("[PORT][MENU] b=%u m=%u,%u,%u,%u pp=%u,%u,%u,%u max=%u,%u,%u,%u\n",
-+                                   gActiveBattler,
-+                                   moveInfo.moves[0], moveInfo.moves[1], moveInfo.moves[2], moveInfo.moves[3],
-+                                   moveInfo.currentPp[0], moveInfo.currentPp[1], moveInfo.currentPp[2], moveInfo.currentPp[3],
-+                                   moveInfo.maxPp[0], moveInfo.maxPp[1], moveInfo.maxPp[2], moveInfo.maxPp[3]);
-+#endif
-+
-                         BtlController_EmitChooseMove(B_COMM_TO_CONTROLLER, (gBattleTypeFlags & BATTLE_TYPE_DOUBLE) != 0, FALSE, &moveInfo);
-                         MarkBattlerForControllerExec(gActiveBattler);
-                     }
-@@ -4397,6 +4409,14 @@ static void HandleTurnActionSelectionState(void)
-                             }
-                             *(gBattleStruct->chosenMovePositions + gActiveBattler) = gBattleBufferB[gActiveBattler][2];
-                             gChosenMoveByBattler[gActiveBattler] = gBattleMons[gActiveBattler].moves[*(gBattleStruct->chosenMovePositions + gActiveBattler)];
-+#ifdef PORT_BRIDGE
-+                            if (gBattleMons[gActiveBattler].species == SPECIES_TORCHIC)
-+                                printf("[PORT][SEL] b=%u slot=%u tgt=%u move=%u\n",
-+                                       gActiveBattler,
-+                                       gBattleBufferB[gActiveBattler][2],
-+                                       gBattleBufferB[gActiveBattler][3],
-+                                       gChosenMoveByBattler[gActiveBattler]);
-+#endif
-                             *(gBattleStruct->moveTarget + gActiveBattler) = gBattleBufferB[gActiveBattler][3];
-                             gBattleCommunication[gActiveBattler]++;
-                         }
-@@ -5156,6 +5176,15 @@ static void FreeResetData_ReturnToOvOrDoEvolutions(void)
+@@ -5156,8 +5156,23 @@ static void FreeResetData_ReturnToOvOrDoEvolutions(void)
  {
      if (!gPaletteFade.active)
      {
@@ -2203,9 +2180,17 @@ index ed50332bb801f155d11e88ea844d082c6f52ffa8..2a51f0bf42119ca5558542093686bbfc
 +    }
 +#endif
          ResetSpriteData();
++#ifdef PLATFORM_3DS
++        // EXP for catching (OPTIONS, ENHANCEMENTS): a level gained on a catch
++        // evolves as one gained on a win.
++        if (gLeveledUpInBattle == 0 || (gBattleOutcome != B_OUTCOME_WON && gBattleOutcome != B_OUTCOME_CAUGHT))
++#else
          if (gLeveledUpInBattle == 0 || gBattleOutcome != B_OUTCOME_WON)
++#endif
          {
-@@ -5168,6 +5197,7 @@ static void FreeResetData_ReturnToOvOrDoEvolutions(void)
+             gBattleMainFunc = ReturnFromBattleToOverworld;
+             return;
+@@ -5168,6 +5183,7 @@ static void FreeResetData_ReturnToOvOrDoEvolutions(void)
          }
      }
  
@@ -2213,7 +2198,7 @@ index ed50332bb801f155d11e88ea844d082c6f52ffa8..2a51f0bf42119ca5558542093686bbfc
      FreeAllWindowBuffers();
      if (!(gBattleTypeFlags & BATTLE_TYPE_LINK))
      {
-@@ -5175,6 +5205,7 @@ static void FreeResetData_ReturnToOvOrDoEvolutions(void)
+@@ -5175,6 +5191,7 @@ static void FreeResetData_ReturnToOvOrDoEvolutions(void)
          FreeBattleResources();
          FreeBattleSpritesData();
      }
@@ -6181,7 +6166,7 @@ index fb6920e3cc684c6c77d2e1e7a172b9e4cc880c6f..9e6c7d4fc403899390b7b625b75ee301
      if (sMapData != NULL)
          SetMainCallback2(callback); // This line doesn't make sense at all, since it gets overwritten later anyway.
 diff --git a/src/gpu_regs.c b/src/gpu_regs.c
-index d645c1442d1a7952cb8593c68d5c9de98294dd51..ab092893f4e540f067daa4edd9e55465c54da2b2 100644
+index d645c1442d1a7952cb8593c68d5c9de98294dd51..81203402f361f74e378f5dcdc62554661f7a8686 100644
 --- a/src/gpu_regs.c
 +++ b/src/gpu_regs.c
 @@ -10,8 +10,8 @@
@@ -6195,6 +6180,44 @@ index d645c1442d1a7952cb8593c68d5c9de98294dd51..ab092893f4e540f067daa4edd9e55465
  static vu16 sRegIE;
  
  static void CopyBufferedValueToGpuReg(u8 regOffset);
+@@ -63,7 +63,11 @@ void CopyBufferedValuesToGpuRegs(void)
+     }
+ }
+ 
++#ifdef PLATFORM_3DS
++static void SetGpuReg16(u8 regOffset, u16 value)
++#else
+ void SetGpuReg(u8 regOffset, u16 value)
++#endif
+ {
+     if (regOffset < GPU_REG_BUF_SIZE)
+     {
+@@ -97,6 +101,25 @@ void SetGpuReg(u8 regOffset, u16 value)
+     }
+ }
+ 
++#ifdef PLATFORM_3DS
++// WIN0H and WIN1H: what the edges pass 255 by goes beside the register,
++// buffered and copied with it, tagged with the value it belongs to. A window
++// kept in an s16 (a task's data) arrives sign-extended when its left edge is
++// 128 or more: 0xFFFF above bit 15 is that, never edges past 255.
++void SetGpuReg(u8 regOffset, u32 value)
++{
++    if (regOffset == REG_OFFSET_WIN0H || regOffset == REG_OFFSET_WIN1H)
++    {
++        u8 over = regOffset == REG_OFFSET_WIN0H ? REG_OFFSET_WIN0H_OVER : REG_OFFSET_WIN1H_OVER;
++        u8 tag = regOffset == REG_OFFSET_WIN0H ? REG_OFFSET_WIN0H_TAG : REG_OFFSET_WIN1H_TAG;
++
++        SetGpuReg16(over, (value >> 16) == 0xFFFF ? 0 : value >> 16);
++        SetGpuReg16(tag, value);
++    }
++    SetGpuReg16(regOffset, value);
++}
++
++#endif
+ void SetGpuReg_ForcedBlank(u8 regOffset, u16 value)
+ {
+     if (regOffset < GPU_REG_BUF_SIZE)
 diff --git a/src/intro.c b/src/intro.c
 index 169ef002a665712e92f6fec36a86ee7888067a17..a154bacf5122bbebb940f2bc4240811e287ca7f8 100644
 --- a/src/intro.c
@@ -12220,43 +12243,20 @@ index 2fb3d55a2455dff61bd76cacb282d7dfc1cb1ad1..688f3729a7aa5f9c758d124f03690e07
      u16 offset;
      u16 temp;
 diff --git a/src/pokemon.c b/src/pokemon.c
-index 7283e0e4566a32d4b1e633e368e717e83743160e..eaa5cade12d33f80325720951ae09b626422f059 100644
+index 7283e0e4566a32d4b1e633e368e717e83743160e..4f1d76f17fd07dde97cd27e534ee8c156ecda756 100644
 --- a/src/pokemon.c
 +++ b/src/pokemon.c
-@@ -47,6 +47,10 @@
+@@ -47,6 +47,9 @@
  #include "constants/songs.h"
  #include "constants/trainers.h"
  #include "constants/union_room.h"
 +#ifdef PORT_BRIDGE
-+#include <stdio.h>
 +#include "port_platform.h"
 +#endif
  
  #define DAY_EVO_HOUR_BEGIN       12
  #define DAY_EVO_HOUR_END         HOURS_PER_DAY
-@@ -2300,6 +2304,21 @@ void CreateBoxMon(struct BoxPokemon *boxMon, u16 species, u8 level, u8 fixedIV,
-     }
- 
-     GiveBoxMonInitialMoveset(boxMon);
-+
-+#ifdef PORT_BRIDGE
-+    if (species == SPECIES_TORCHIC)
-+        printf("[PORT][CREATE] sp=%u lv=%u m=%lu,%lu,%lu,%lu pp=%lu,%lu,%lu,%lu\n",
-+               species,
-+               level,
-+               GetBoxMonData(boxMon, MON_DATA_MOVE1, NULL),
-+               GetBoxMonData(boxMon, MON_DATA_MOVE2, NULL),
-+               GetBoxMonData(boxMon, MON_DATA_MOVE3, NULL),
-+               GetBoxMonData(boxMon, MON_DATA_MOVE4, NULL),
-+               GetBoxMonData(boxMon, MON_DATA_PP1, NULL),
-+               GetBoxMonData(boxMon, MON_DATA_PP2, NULL),
-+               GetBoxMonData(boxMon, MON_DATA_PP3, NULL),
-+               GetBoxMonData(boxMon, MON_DATA_PP4, NULL));
-+#endif
- }
- 
- void CreateMonWithNature(struct Pokemon *mon, u16 species, u8 level, u8 fixedIV, u8 nature)
-@@ -2581,7 +2600,7 @@ void CreateMonWithEVSpreadNatureOTID(struct Pokemon *mon, u16 species, u8 level,
+@@ -2581,7 +2584,7 @@ void CreateMonWithEVSpreadNatureOTID(struct Pokemon *mon, u16 species, u8 level,
          evsBits >>= 1;
      }
  
@@ -12265,7 +12265,7 @@ index 7283e0e4566a32d4b1e633e368e717e83743160e..eaa5cade12d33f80325720951ae09b62
      evsBits = 1;
      for (i = 0; i < NUM_STATS; i++)
      {
-@@ -4074,19 +4093,6 @@ u32 GetBoxMonData2(struct BoxPokemon *boxMon, s32 field) __attribute__((alias("G
+@@ -4074,19 +4077,6 @@ u32 GetBoxMonData2(struct BoxPokemon *boxMon, s32 field) __attribute__((alias("G
  #define SET8(lhs) (lhs) = *data
  #define SET16(lhs) (lhs) = data[0] + (data[1] << 8)
  #define SET32(lhs) (lhs) = data[0] + (data[1] << 8) + (data[2] << 16) + (data[3] << 24)
@@ -12285,7 +12285,7 @@ index 7283e0e4566a32d4b1e633e368e717e83743160e..eaa5cade12d33f80325720951ae09b62
  
  void SetMonData(struct Pokemon *mon, s32 field, const void *dataArg)
  {
-@@ -4276,7 +4282,7 @@ void SetBoxMonData(struct BoxPokemon *boxMon, s32 field, const void *dataArg)
+@@ -4276,7 +4266,7 @@ void SetBoxMonData(struct BoxPokemon *boxMon, s32 field, const void *dataArg)
          SET8(substruct3->pokerus);
          break;
      case MON_DATA_MET_LOCATION:
@@ -12294,29 +12294,7 @@ index 7283e0e4566a32d4b1e633e368e717e83743160e..eaa5cade12d33f80325720951ae09b62
          break;
      case MON_DATA_MET_LEVEL:
      {
-@@ -4666,6 +4672,21 @@ void CopyPlayerPartyMonToBattleData(u8 battler, u8 partyIndex)
-         gBattleMons[battler].pp[i] = GetMonData(&gPlayerParty[partyIndex], MON_DATA_PP1 + i, NULL);
-     }
- 
-+#ifdef PORT_BRIDGE
-+    if (gBattleMons[battler].species == SPECIES_TORCHIC)
-+        printf("[PORT][BMON] b=%u p=%u m=%u,%u,%u,%u pp=%u,%u,%u,%u\n",
-+               battler,
-+               partyIndex,
-+               gBattleMons[battler].moves[0],
-+               gBattleMons[battler].moves[1],
-+               gBattleMons[battler].moves[2],
-+               gBattleMons[battler].moves[3],
-+               gBattleMons[battler].pp[0],
-+               gBattleMons[battler].pp[1],
-+               gBattleMons[battler].pp[2],
-+               gBattleMons[battler].pp[3]);
-+#endif
-+
-     gBattleMons[battler].ppBonuses = GetMonData(&gPlayerParty[partyIndex], MON_DATA_PP_BONUSES, NULL);
-     gBattleMons[battler].friendship = GetMonData(&gPlayerParty[partyIndex], MON_DATA_FRIENDSHIP, NULL);
-     gBattleMons[battler].experience = GetMonData(&gPlayerParty[partyIndex], MON_DATA_EXP, NULL);
-@@ -5734,7 +5755,16 @@ u16 SpeciesToCryId(u16 species)
+@@ -5734,7 +5724,16 @@ u16 SpeciesToCryId(u16 species)
          *(pixels) += (SPOT_COLOR_ADJUSTMENT << (shift)); \
      }
  
@@ -12334,7 +12312,7 @@ index 7283e0e4566a32d4b1e633e368e717e83743160e..eaa5cade12d33f80325720951ae09b62
  {                                                                               \
      s32 i;                                                                      \
      for (i = 0; i < (s32)ARRAY_COUNT(gSpindaSpotGraphics); i++)                 \
-@@ -5746,7 +5776,7 @@ u16 SpeciesToCryId(u16 species)
+@@ -5746,7 +5745,7 @@ u16 SpeciesToCryId(u16 species)
          for (row = 0; row < SPINDA_SPOT_HEIGHT; row++)                          \
          {                                                                       \
              s32 column;                                                         \
@@ -15387,7 +15365,7 @@ index 684c89546a933a19ffb8a6c21f8a8c90d0f862ef..e8cededb39eb4ba397bc7089bb50dd1d
  }
  
 diff --git a/src/scrcmd.c b/src/scrcmd.c
-index 9c7dd864e53704e274e1f5d88dcc131822a1c805..7b156339dbc076f507470064ff8a015fda13dd15 100644
+index 9c7dd864e53704e274e1f5d88dcc131822a1c805..e0feae8094de4b6d64d0dd51a464cad2cace5326 100644
 --- a/src/scrcmd.c
 +++ b/src/scrcmd.c
 @@ -48,6 +48,9 @@
@@ -15521,20 +15499,23 @@ index 9c7dd864e53704e274e1f5d88dcc131822a1c805..7b156339dbc076f507470064ff8a015f
          FreezeObjects_WaitForPlayer();
          SetupNativeScript(ctx, IsFreezePlayerFinished);
          return TRUE;
-@@ -1222,6 +1272,27 @@ bool8 ScrCmd_lock(struct ScriptContext *ctx)
+@@ -1222,6 +1272,30 @@ bool8 ScrCmd_lock(struct ScriptContext *ctx)
      }
      else
      {
 +#ifdef PORT_BRIDGE
 +        struct ObjectEvent *playerObj = &gObjectEvents[gPlayerAvatar.objectEventId];
 +
-+        if (IsPlayerStandingStill())
++        // A selected object still in its step takes the wait below, which
++        // freezes it once the step ends; frozen mid-step it would stand
++        // between tiles, left unfrozen it walks on through the dialogue.
++        if (IsPlayerStandingStill()
++         && !(gObjectEvents[gSelectedObjectEvent].active && gObjectEvents[gSelectedObjectEvent].singleMovementActive))
 +        {
 +            if (gObjectEvents[gSelectedObjectEvent].active)
 +            {
 +                FreezeObjectEventsExceptOne(gSelectedObjectEvent);
-+                if (!gObjectEvents[gSelectedObjectEvent].singleMovementActive)
-+                    FreezeObjectEvent(&gObjectEvents[gSelectedObjectEvent]);
++                FreezeObjectEvent(&gObjectEvents[gSelectedObjectEvent]);
 +            }
 +            else
 +            {
@@ -15549,7 +15530,7 @@ index 9c7dd864e53704e274e1f5d88dcc131822a1c805..7b156339dbc076f507470064ff8a015f
          if (gObjectEvents[gSelectedObjectEvent].active)
          {
              FreezeObjects_WaitForPlayerAndSelected();
-@@ -1242,6 +1313,13 @@ bool8 ScrCmd_releaseall(struct ScriptContext *ctx)
+@@ -1242,6 +1316,13 @@ bool8 ScrCmd_releaseall(struct ScriptContext *ctx)
  
      HideFieldMessageBox();
      playerObjectId = GetObjectEventIdByLocalIdAndMap(LOCALID_PLAYER, 0, 0);
@@ -15563,7 +15544,7 @@ index 9c7dd864e53704e274e1f5d88dcc131822a1c805..7b156339dbc076f507470064ff8a015f
      ObjectEventClearHeldMovementIfFinished(&gObjectEvents[playerObjectId]);
      ScriptMovement_UnfreezeObjectEvents();
      UnfreezeObjectEvents();
-@@ -1268,6 +1346,9 @@ bool8 ScrCmd_message(struct ScriptContext *ctx)
+@@ -1268,6 +1349,9 @@ bool8 ScrCmd_message(struct ScriptContext *ctx)
  
      if (msg == NULL)
          msg = (const u8 *)ctx->data[0];
@@ -15573,7 +15554,7 @@ index 9c7dd864e53704e274e1f5d88dcc131822a1c805..7b156339dbc076f507470064ff8a015f
      ShowFieldMessage(msg);
      return FALSE;
  }
-@@ -1278,6 +1359,9 @@ bool8 ScrCmd_pokenavcall(struct ScriptContext *ctx)
+@@ -1278,6 +1362,9 @@ bool8 ScrCmd_pokenavcall(struct ScriptContext *ctx)
  
      if (msg == NULL)
          msg = (const u8 *)ctx->data[0];
@@ -15583,7 +15564,7 @@ index 9c7dd864e53704e274e1f5d88dcc131822a1c805..7b156339dbc076f507470064ff8a015f
      ShowPokenavFieldMessage(msg);
      return FALSE;
  }
-@@ -1288,6 +1372,9 @@ bool8 ScrCmd_messageautoscroll(struct ScriptContext *ctx)
+@@ -1288,6 +1375,9 @@ bool8 ScrCmd_messageautoscroll(struct ScriptContext *ctx)
  
      if (msg == NULL)
          msg = (const u8 *)ctx->data[0];
@@ -15593,7 +15574,7 @@ index 9c7dd864e53704e274e1f5d88dcc131822a1c805..7b156339dbc076f507470064ff8a015f
      gTextFlags.autoScroll = TRUE;
      gTextFlags.forceMidTextSpeed = TRUE;
      ShowFieldAutoScrollMessage(msg);
-@@ -1301,6 +1388,9 @@ bool8 ScrCmd_messageinstant(struct ScriptContext *ctx)
+@@ -1301,6 +1391,9 @@ bool8 ScrCmd_messageinstant(struct ScriptContext *ctx)
  
      if (msg == NULL)
          msg = (const u8 *)ctx->data[0];
@@ -15603,7 +15584,7 @@ index 9c7dd864e53704e274e1f5d88dcc131822a1c805..7b156339dbc076f507470064ff8a015f
      LoadMessageBoxAndBorderGfx();
      DrawDialogueFrame(0, TRUE);
      AddTextPrinterParameterized(0, FONT_NORMAL, msg, 0, 1, 0, NULL);
-@@ -1487,6 +1577,10 @@ bool8 ScrCmd_braillemessage(struct ScriptContext *ctx)
+@@ -1487,6 +1580,10 @@ bool8 ScrCmd_braillemessage(struct ScriptContext *ctx)
      u8 xWindow, yWindow, xText, yText;
      u8 temp;
  
@@ -15614,7 +15595,7 @@ index 9c7dd864e53704e274e1f5d88dcc131822a1c805..7b156339dbc076f507470064ff8a015f
      // + 6 for the 6 bytes at the start of a braille message (brailleformat macro)
      // In RS these bytes are used to position the text and window, but
      // in Emerald they are unused and position is calculated below instead
-@@ -1820,7 +1914,7 @@ bool8 ScrCmd_updatecoinsbox(struct ScriptContext *ctx)
+@@ -1820,7 +1917,7 @@ bool8 ScrCmd_updatecoinsbox(struct ScriptContext *ctx)
  
  bool8 ScrCmd_trainerbattle(struct ScriptContext *ctx)
  {
@@ -15623,7 +15604,7 @@ index 9c7dd864e53704e274e1f5d88dcc131822a1c805..7b156339dbc076f507470064ff8a015f
      return FALSE;
  }
  
-@@ -1832,13 +1926,13 @@ bool8 ScrCmd_dotrainerbattle(struct ScriptContext *ctx)
+@@ -1832,13 +1929,13 @@ bool8 ScrCmd_dotrainerbattle(struct ScriptContext *ctx)
  
  bool8 ScrCmd_gotopostbattlescript(struct ScriptContext *ctx)
  {
@@ -15639,7 +15620,7 @@ index 9c7dd864e53704e274e1f5d88dcc131822a1c805..7b156339dbc076f507470064ff8a015f
      return FALSE;
  }
  
-@@ -2012,7 +2106,30 @@ bool8 ScrCmd_setrespawn(struct ScriptContext *ctx)
+@@ -2012,7 +2109,30 @@ bool8 ScrCmd_setrespawn(struct ScriptContext *ctx)
  
  bool8 ScrCmd_checkplayergender(struct ScriptContext *ctx)
  {
@@ -16271,7 +16252,7 @@ index c6e78817eb3263af3a35b8778353ca492324772c..50e3e1d9f1adb9827dfe7971abd89c14
 +}
 +#endif
 diff --git a/src/siirtc.c b/src/siirtc.c
-index 35576858502a113d993eab19ac321a035695ce17..9e883d8985803ccb23b729aefe878cee7fc88204 100644
+index 35576858502a113d993eab19ac321a035695ce17..8f7fc0da589494d172784b0f174ad3b85a06e70b 100644
 --- a/src/siirtc.c
 +++ b/src/siirtc.c
 @@ -4,7 +4,8 @@
@@ -16339,15 +16320,17 @@ index 35576858502a113d993eab19ac321a035695ce17..9e883d8985803ccb23b729aefe878cee
      GPIO_PORT_DATA = SCK_HI;
      GPIO_PORT_DATA = SCK_HI | CS_HI;
  
-@@ -156,6 +179,7 @@ bool8 SiiRtcReset(void)
-     GPIO_PORT_DATA = SCK_HI;
+@@ -154,7 +177,9 @@ bool8 SiiRtcReset(void)
  
-     sLocked = FALSE;
+     GPIO_PORT_DATA = SCK_HI;
+     GPIO_PORT_DATA = SCK_HI;
 +#endif
  
-     rtc.status = SIIRTCINFO_24HOUR;
++    // Unlock on every path: left TRUE, each later SiiRtcGet*/Set* would fail.
+     sLocked = FALSE;
  
-@@ -172,7 +196,9 @@ bool8 SiiRtcGetStatus(struct SiiRtcInfo *rtc)
+     rtc.status = SIIRTCINFO_24HOUR;
+@@ -172,7 +197,9 @@ bool8 SiiRtcGetStatus(struct SiiRtcInfo *rtc)
          return FALSE;
  
      sLocked = TRUE;
@@ -16358,7 +16341,7 @@ index 35576858502a113d993eab19ac321a035695ce17..9e883d8985803ccb23b729aefe878cee
      GPIO_PORT_DATA = SCK_HI;
      GPIO_PORT_DATA = SCK_HI | CS_HI;
  
-@@ -191,7 +217,7 @@ bool8 SiiRtcGetStatus(struct SiiRtcInfo *rtc)
+@@ -191,7 +218,7 @@ bool8 SiiRtcGetStatus(struct SiiRtcInfo *rtc)
  
      GPIO_PORT_DATA = SCK_HI;
      GPIO_PORT_DATA = SCK_HI;
@@ -16367,7 +16350,7 @@ index 35576858502a113d993eab19ac321a035695ce17..9e883d8985803ccb23b729aefe878cee
      sLocked = FALSE;
  
      return TRUE;
-@@ -205,7 +231,9 @@ bool8 SiiRtcSetStatus(struct SiiRtcInfo *rtc)
+@@ -205,7 +232,9 @@ bool8 SiiRtcSetStatus(struct SiiRtcInfo *rtc)
          return FALSE;
  
      sLocked = TRUE;
@@ -16378,7 +16361,7 @@ index 35576858502a113d993eab19ac321a035695ce17..9e883d8985803ccb23b729aefe878cee
      GPIO_PORT_DATA = SCK_HI;
      GPIO_PORT_DATA = SCK_HI | CS_HI;
  
-@@ -222,7 +250,7 @@ bool8 SiiRtcSetStatus(struct SiiRtcInfo *rtc)
+@@ -222,7 +251,7 @@ bool8 SiiRtcSetStatus(struct SiiRtcInfo *rtc)
  
      GPIO_PORT_DATA = SCK_HI;
      GPIO_PORT_DATA = SCK_HI;
@@ -16387,7 +16370,7 @@ index 35576858502a113d993eab19ac321a035695ce17..9e883d8985803ccb23b729aefe878cee
      sLocked = FALSE;
  
      return TRUE;
-@@ -236,7 +264,9 @@ bool8 SiiRtcGetDateTime(struct SiiRtcInfo *rtc)
+@@ -236,7 +265,9 @@ bool8 SiiRtcGetDateTime(struct SiiRtcInfo *rtc)
          return FALSE;
  
      sLocked = TRUE;
@@ -16398,7 +16381,7 @@ index 35576858502a113d993eab19ac321a035695ce17..9e883d8985803ccb23b729aefe878cee
      GPIO_PORT_DATA = SCK_HI;
      GPIO_PORT_DATA = SCK_HI | CS_HI;
  
-@@ -253,7 +283,7 @@ bool8 SiiRtcGetDateTime(struct SiiRtcInfo *rtc)
+@@ -253,7 +284,7 @@ bool8 SiiRtcGetDateTime(struct SiiRtcInfo *rtc)
  
      GPIO_PORT_DATA = SCK_HI;
      GPIO_PORT_DATA = SCK_HI;
@@ -16407,7 +16390,7 @@ index 35576858502a113d993eab19ac321a035695ce17..9e883d8985803ccb23b729aefe878cee
      sLocked = FALSE;
  
      return TRUE;
-@@ -267,7 +297,9 @@ bool8 SiiRtcSetDateTime(struct SiiRtcInfo *rtc)
+@@ -267,7 +298,9 @@ bool8 SiiRtcSetDateTime(struct SiiRtcInfo *rtc)
          return FALSE;
  
      sLocked = TRUE;
@@ -16418,7 +16401,7 @@ index 35576858502a113d993eab19ac321a035695ce17..9e883d8985803ccb23b729aefe878cee
      GPIO_PORT_DATA = SCK_HI;
      GPIO_PORT_DATA = SCK_HI | CS_HI;
  
-@@ -280,7 +312,7 @@ bool8 SiiRtcSetDateTime(struct SiiRtcInfo *rtc)
+@@ -280,7 +313,7 @@ bool8 SiiRtcSetDateTime(struct SiiRtcInfo *rtc)
  
      GPIO_PORT_DATA = SCK_HI;
      GPIO_PORT_DATA = SCK_HI;
@@ -16427,7 +16410,7 @@ index 35576858502a113d993eab19ac321a035695ce17..9e883d8985803ccb23b729aefe878cee
      sLocked = FALSE;
  
      return TRUE;
-@@ -294,7 +326,10 @@ bool8 SiiRtcGetTime(struct SiiRtcInfo *rtc)
+@@ -294,7 +327,10 @@ bool8 SiiRtcGetTime(struct SiiRtcInfo *rtc)
          return FALSE;
  
      sLocked = TRUE;
@@ -16439,7 +16422,7 @@ index 35576858502a113d993eab19ac321a035695ce17..9e883d8985803ccb23b729aefe878cee
      GPIO_PORT_DATA = SCK_HI;
      GPIO_PORT_DATA = SCK_HI | CS_HI;
  
-@@ -311,7 +346,7 @@ bool8 SiiRtcGetTime(struct SiiRtcInfo *rtc)
+@@ -311,7 +347,7 @@ bool8 SiiRtcGetTime(struct SiiRtcInfo *rtc)
  
      GPIO_PORT_DATA = SCK_HI;
      GPIO_PORT_DATA = SCK_HI;
@@ -16448,7 +16431,7 @@ index 35576858502a113d993eab19ac321a035695ce17..9e883d8985803ccb23b729aefe878cee
      sLocked = FALSE;
  
      return TRUE;
-@@ -325,7 +360,9 @@ bool8 SiiRtcSetTime(struct SiiRtcInfo *rtc)
+@@ -325,7 +361,9 @@ bool8 SiiRtcSetTime(struct SiiRtcInfo *rtc)
          return FALSE;
  
      sLocked = TRUE;
@@ -16459,7 +16442,7 @@ index 35576858502a113d993eab19ac321a035695ce17..9e883d8985803ccb23b729aefe878cee
      GPIO_PORT_DATA = SCK_HI;
      GPIO_PORT_DATA = SCK_HI | CS_HI;
  
-@@ -338,13 +375,13 @@ bool8 SiiRtcSetTime(struct SiiRtcInfo *rtc)
+@@ -338,13 +376,13 @@ bool8 SiiRtcSetTime(struct SiiRtcInfo *rtc)
  
      GPIO_PORT_DATA = SCK_HI;
      GPIO_PORT_DATA = SCK_HI;
@@ -16475,7 +16458,7 @@ index 35576858502a113d993eab19ac321a035695ce17..9e883d8985803ccb23b729aefe878cee
  {
      u8 i;
      u8 alarmData[2];
-@@ -365,6 +402,9 @@ static bool8 UNUSED SiiRtcSetAlarm(struct SiiRtcInfo *rtc)
+@@ -365,6 +403,9 @@ static bool8 UNUSED SiiRtcSetAlarm(struct SiiRtcInfo *rtc)
          alarmData[0] = rtc->alarmHour | ALARM_PM;
  
      alarmData[1] = rtc->alarmMinute;
@@ -16485,7 +16468,7 @@ index 35576858502a113d993eab19ac321a035695ce17..9e883d8985803ccb23b729aefe878cee
  
      GPIO_PORT_DATA = SCK_HI;
      GPIO_PORT_DATA = SCK_HI | CS_HI;
-@@ -378,12 +418,13 @@ static bool8 UNUSED SiiRtcSetAlarm(struct SiiRtcInfo *rtc)
+@@ -378,12 +419,13 @@ static bool8 UNUSED SiiRtcSetAlarm(struct SiiRtcInfo *rtc)
  
      GPIO_PORT_DATA = SCK_HI;
      GPIO_PORT_DATA = SCK_HI;
@@ -16500,13 +16483,13 @@ index 35576858502a113d993eab19ac321a035695ce17..9e883d8985803ccb23b729aefe878cee
  static int WriteCommand(u8 value)
  {
      u8 i;
-@@ -461,3 +502,4 @@ static void DisableGpioPortRead()
+@@ -461,3 +503,4 @@ static void DisableGpioPortRead()
  {
      GPIO_PORT_READ_ENABLE = FALSE;
  }
 +#endif
 diff --git a/src/slot_machine.c b/src/slot_machine.c
-index da8b3613b3a2234bdff23fed4401d887833fbe4c..b49a2e1148a39e0f9756b45b92e7b56ed11632e7 100644
+index da8b3613b3a2234bdff23fed4401d887833fbe4c..4b130417eb2c41e398a8746f3ca10bb3cad7beb8 100644
 --- a/src/slot_machine.c
 +++ b/src/slot_machine.c
 @@ -27,6 +27,9 @@
@@ -16531,7 +16514,19 @@ index da8b3613b3a2234bdff23fed4401d887833fbe4c..b49a2e1148a39e0f9756b45b92e7b56e
  
  // How ReelTime works
  // ==================
-@@ -719,12 +717,11 @@ static const u8 sSymbolToMatch[];
+@@ -405,7 +403,11 @@ struct SlotMachine
+     /*0x50*/ u8 reelTimeBoltSpriteIds[2];
+     /*0x52*/ u8 reelTimePikachuAuraSpriteIds[2];
+     /*0x54*/ u8 reelTimeDuckSpriteIds[4];
++#ifdef PLATFORM_3DS
++    /*0x58*/ u32 win0h; // with WIN_RANGE's edges past 255 (gba/io_reg.h)
++#else
+     /*0x58*/ u16 win0h;
++#endif
+     /*0x5a*/ u16 win0v;
+     /*0x5c*/ u16 winIn;
+     /*0x5e*/ u16 winOut;
+@@ -719,12 +721,11 @@ static const u8 sSymbolToMatch[];
  static const u8 sReelTimeSymbols[];
  static const u8 sReelSymbols[NUM_REELS][SYMBOLS_PER_REEL];
  static const u16 *const sLitMatchLinePalTable[NUM_MATCH_LINES];
@@ -16545,7 +16540,16 @@ index da8b3613b3a2234bdff23fed4401d887833fbe4c..b49a2e1148a39e0f9756b45b92e7b56e
  static const u16 sReelTimeWindow_Tilemap[];
  static const u16 sEmptyTilemap[];
  static void (*const sDigitalDisplaySceneExitCallbacks[])(void);
-@@ -1254,7 +1251,7 @@ static void SlotMachineSetup_LoadGfxAndTilemaps(void)
+@@ -1206,7 +1207,7 @@ static void InitSlotMachine(void)
+     sSlotMachine->bet = 0;
+     sSlotMachine->currentReel = LEFT_REEL;
+     sSlotMachine->reelSpeed = REEL_NORMAL_SPEED;
+-    sSlotMachine->win0h = DISPLAY_WIDTH;
++    sSlotMachine->win0h = WIN_RANGE(0, DISPLAY_WIDTH);
+     sSlotMachine->win0v = DISPLAY_HEIGHT;
+     sSlotMachine->winIn = WININ_WIN0_BG_ALL | WININ_WIN0_OBJ | WININ_WIN0_CLR;
+     sSlotMachine->winOut = WINOUT_WIN01_BG_ALL | WINOUT_WIN01_OBJ | WINOUT_WIN01_CLR;
+@@ -1254,7 +1255,7 @@ static void SlotMachineSetup_LoadGfxAndTilemaps(void)
      LoadSlotMachineGfx();
      LoadMessageBoxGfx(0, 0x200, BG_PLTT_ID(15));
      LoadUserWindowBorderGfx(0, 0x214, BG_PLTT_ID(14));
@@ -16554,7 +16558,7 @@ index da8b3613b3a2234bdff23fed4401d887833fbe4c..b49a2e1148a39e0f9756b45b92e7b56e
  }
  
  static void CreateSlotMachineSprites(void)
-@@ -1395,9 +1392,9 @@ static bool8 SlotTask_HandleBetInput(struct Task *task)
+@@ -1395,9 +1396,9 @@ static bool8 SlotTask_HandleBetInput(struct Task *task)
  // SLOTTASK_MSG_NEED_3_COINS
  static bool8 SlotTask_PrintMsg_Need3Coins(struct Task *task)
  {
@@ -16567,7 +16571,7 @@ index da8b3613b3a2234bdff23fed4401d887833fbe4c..b49a2e1148a39e0f9756b45b92e7b56e
      sSlotMachine->state = SLOTTASK_WAIT_MSG_NEED_3_COINS;
      return FALSE;
  }
-@@ -1407,7 +1404,7 @@ static bool8 SlotTask_WaitMsg_Need3Coins(struct Task *task)
+@@ -1407,7 +1408,7 @@ static bool8 SlotTask_WaitMsg_Need3Coins(struct Task *task)
  {
      if (JOY_NEW(A_BUTTON | B_BUTTON))
      {
@@ -16576,7 +16580,7 @@ index da8b3613b3a2234bdff23fed4401d887833fbe4c..b49a2e1148a39e0f9756b45b92e7b56e
          sSlotMachine->state = SLOTTASK_BET_INPUT;
      }
      return FALSE;
-@@ -1660,9 +1657,9 @@ static bool8 SlotTask_NoMatches(struct Task *task)
+@@ -1660,9 +1661,9 @@ static bool8 SlotTask_NoMatches(struct Task *task)
  // SLOTTASK_ASK_QUIT
  static bool8 SlotTask_AskQuit(struct Task *task)
  {
@@ -16589,7 +16593,7 @@ index da8b3613b3a2234bdff23fed4401d887833fbe4c..b49a2e1148a39e0f9756b45b92e7b56e
      CreateYesNoMenuParameterized(0x15, 7, 0x214, 0x180, 0xE, 0xF);
      sSlotMachine->state = SLOTTASK_HANDLE_QUIT_INPUT;
      return FALSE;
-@@ -1674,16 +1671,16 @@ static bool8 SlotTask_HandleQuitInput(struct Task *task)
+@@ -1674,16 +1675,16 @@ static bool8 SlotTask_HandleQuitInput(struct Task *task)
      s8 input = Menu_ProcessInputNoWrapClearOnChoose();
      if (input == 0) // Chose to quit
      {
@@ -16609,7 +16613,7 @@ index da8b3613b3a2234bdff23fed4401d887833fbe4c..b49a2e1148a39e0f9756b45b92e7b56e
          sSlotMachine->state = SLOTTASK_BET_INPUT;
      }
      return FALSE;
-@@ -1692,9 +1689,9 @@ static bool8 SlotTask_HandleQuitInput(struct Task *task)
+@@ -1692,9 +1693,9 @@ static bool8 SlotTask_HandleQuitInput(struct Task *task)
  // SLOTTASK_MSG_MAX_COINS
  static bool8 SlotTask_PrintMsg_MaxCoins(struct Task *task)
  {
@@ -16622,7 +16626,7 @@ index da8b3613b3a2234bdff23fed4401d887833fbe4c..b49a2e1148a39e0f9756b45b92e7b56e
      sSlotMachine->state = SLOTTASK_WAIT_MSG_MAX_COINS;
      return FALSE;
  }
-@@ -1704,7 +1701,7 @@ static bool8 SlotTask_WaitMsg_MaxCoins(struct Task *task)
+@@ -1704,7 +1705,7 @@ static bool8 SlotTask_WaitMsg_MaxCoins(struct Task *task)
  {
      if (JOY_NEW(A_BUTTON | B_BUTTON))
      {
@@ -16631,7 +16635,7 @@ index da8b3613b3a2234bdff23fed4401d887833fbe4c..b49a2e1148a39e0f9756b45b92e7b56e
          sSlotMachine->state = SLOTTASK_BET_INPUT;
      }
      return FALSE;
-@@ -1713,9 +1710,9 @@ static bool8 SlotTask_WaitMsg_MaxCoins(struct Task *task)
+@@ -1713,9 +1714,9 @@ static bool8 SlotTask_WaitMsg_MaxCoins(struct Task *task)
  // SLOTTASK_MSG_NO_MORE_COINS
  static bool8 SlotTask_PrintMsg_NoMoreCoins(struct Task *task)
  {
@@ -16644,7 +16648,7 @@ index da8b3613b3a2234bdff23fed4401d887833fbe4c..b49a2e1148a39e0f9756b45b92e7b56e
      sSlotMachine->state = SLOTTASK_WAIT_MSG_NO_MORE_COINS;
      return FALSE;
  }
-@@ -1725,7 +1722,7 @@ static bool8 SlotTask_WaitMsg_NoMoreCoins(struct Task *task)
+@@ -1725,7 +1726,7 @@ static bool8 SlotTask_WaitMsg_NoMoreCoins(struct Task *task)
  {
      if (JOY_NEW(A_BUTTON | B_BUTTON))
      {
@@ -16653,7 +16657,7 @@ index da8b3613b3a2234bdff23fed4401d887833fbe4c..b49a2e1148a39e0f9756b45b92e7b56e
          sSlotMachine->state = SLOTTASK_END;
      }
      return FALSE;
-@@ -1775,6 +1772,11 @@ static bool8 SlotTask_FreeDataStructures(struct Task *task)
+@@ -1775,6 +1776,11 @@ static bool8 SlotTask_FreeDataStructures(struct Task *task)
          FREE_AND_SET_NULL(sReelBackgroundSpriteSheet);
          FREE_AND_SET_NULL(sSlotMachineSpritesheetsPtr);
          FREE_AND_SET_NULL(sSlotMachine);
@@ -16665,7 +16669,7 @@ index da8b3613b3a2234bdff23fed4401d887833fbe4c..b49a2e1148a39e0f9756b45b92e7b56e
      }
      return FALSE;
  }
-@@ -3223,7 +3225,7 @@ static void LightenMatchLine(u8 matchLineId)
+@@ -3223,7 +3229,7 @@ static void LightenMatchLine(u8 matchLineId)
  
  static void DarkenMatchLine(u8 matchLineId)
  {
@@ -16674,7 +16678,7 @@ index da8b3613b3a2234bdff23fed4401d887833fbe4c..b49a2e1148a39e0f9756b45b92e7b56e
  }
  
  // light up the match line for each bet by the player
-@@ -3368,7 +3370,7 @@ static bool8 TryStopSlotMachineLights(void)
+@@ -3368,7 +3374,7 @@ static bool8 TryStopSlotMachineLights(void)
      if (gTasks[taskId].sFlashState == 0)
      {
          DestroyTask(taskId);
@@ -16683,7 +16687,7 @@ index da8b3613b3a2234bdff23fed4401d887833fbe4c..b49a2e1148a39e0f9756b45b92e7b56e
          return TRUE;
      }
      return FALSE;
-@@ -3869,8 +3871,17 @@ static void ReelTime_EndFailure(struct Task *task)
+@@ -3869,8 +3875,17 @@ static void ReelTime_EndFailure(struct Task *task)
  static void LoadReelTimeWindowTilemap(s16 a0, s16 a1)
  {
      s16 i;
@@ -16701,7 +16705,7 @@ index da8b3613b3a2234bdff23fed4401d887833fbe4c..b49a2e1148a39e0f9756b45b92e7b56e
  }
  
  static void ClearReelTimeWindowTilemap(s16 a0)
-@@ -3927,15 +3938,15 @@ static void InfoBox_DrawWindow(struct Task *task)
+@@ -3927,15 +3942,15 @@ static void InfoBox_DrawWindow(struct Task *task)
      DestroyDigitalDisplayScene();
      LoadInfoBoxTilemap();
      AddWindow(&sWindowTemplate_InfoBox);
@@ -16721,7 +16725,7 @@ index da8b3613b3a2234bdff23fed4401d887833fbe4c..b49a2e1148a39e0f9756b45b92e7b56e
      BeginNormalPaletteFade(PALETTES_ALL, 0, 16, 0, RGB_BLACK);
      task->tState++;
  }
-@@ -3944,10 +3955,10 @@ static void InfoBox_WaitInput(struct Task *task)
+@@ -3944,10 +3959,10 @@ static void InfoBox_WaitInput(struct Task *task)
  {
      if (JOY_NEW(B_BUTTON | SELECT_BUTTON))
      {
@@ -16736,7 +16740,34 @@ index da8b3613b3a2234bdff23fed4401d887833fbe4c..b49a2e1148a39e0f9756b45b92e7b56e
          BeginNormalPaletteFade(PALETTES_ALL, 0, 0, 16, RGB_BLACK);
          task->tState++;
      }
-@@ -7881,13 +7892,13 @@ static const u16 *const sLitMatchLinePalTable[NUM_MATCH_LINES] =
+@@ -4957,7 +4972,7 @@ static void SpriteCB_DigitalDisplay_AButtonStart(struct Sprite *sprite)
+                 sprite->data[2] = 208;
+             if (sprite->data[3] < 208)
+                 sprite->data[3] = 208;
+-            sSlotMachine->win0h = (sprite->data[2] << 8) | sprite->data[3];
++            sSlotMachine->win0h = WIN_RANGE(sprite->data[2], sprite->data[3]);
+             if (sprite->sCounter > 51)
+             {
+                 sprite->sState++;
+@@ -4982,7 +4997,7 @@ static void SpriteCB_DigitalDisplay_AButtonStart(struct Sprite *sprite)
+                 sprite->data[2] = 208;
+             if (sprite->data[3] < 208)
+                 sprite->data[3] = 208;
+-            sSlotMachine->win0h = (sprite->data[2] << 8) | sprite->data[3];
++            sSlotMachine->win0h = WIN_RANGE(sprite->data[2], sprite->data[3]);
+             if (sprite->sCounter > 15)
+             {
+                 sprite->sState++;
+@@ -5008,7 +5023,7 @@ static void EndDigitalDisplayScene_Win(void)
+ 
+ static void EndDigitalDisplayScene_InsertBet(void)
+ {
+-    sSlotMachine->win0h = DISPLAY_WIDTH;
++    sSlotMachine->win0h = WIN_RANGE(0, DISPLAY_WIDTH);
+     sSlotMachine->win0v = DISPLAY_HEIGHT;
+     sSlotMachine->winIn = WININ_WIN0_BG_ALL | WININ_WIN0_OBJ | WININ_WIN0_CLR;
+     sSlotMachine->winOut = WINOUT_WIN01_BG_ALL | WINOUT_WIN01_OBJ | WINOUT_WIN01_CLR;
+@@ -7881,13 +7896,13 @@ static const u16 *const sLitMatchLinePalTable[NUM_MATCH_LINES] =
      [MATCH_NESW_DIAG]  = sNESWDiagLit_Pal,
  };
  
@@ -16756,7 +16787,7 @@ index da8b3613b3a2234bdff23fed4401d887833fbe4c..b49a2e1148a39e0f9756b45b92e7b56e
  };
  
  static const u8 sMatchLinePalOffsets[NUM_MATCH_LINES] = {
-@@ -7918,8 +7929,6 @@ static const u16 *const sFlashingLightsPalTable[] =
+@@ -7918,8 +7933,6 @@ static const u16 *const sFlashingLightsPalTable[] =
      sFlashingLightsOutside_Pal,
  };
  
@@ -18655,7 +18686,7 @@ index e9c2984087302e2858d7617fce6d0408d3427513..57c1bd6ff0d3d17e4537480d96d2120b
 diff --git a/src/trainer_card.c b/src/trainer_card.c
 old mode 100755
 new mode 100644
-index 78a4bb56fe5101e676e5d1192483f08e6f5ce25e..398532a1ba3946e84d40732fb51e532840cffbb4
+index 78a4bb56fe5101e676e5d1192483f08e6f5ce25e..8a1411eb78ebce072bb19d154eb597e5906d5a04
 --- a/src/trainer_card.c
 +++ b/src/trainer_card.c
 @@ -77,7 +77,7 @@ struct TrainerCardData
@@ -18677,6 +18708,15 @@ index 78a4bb56fe5101e676e5d1192483f08e6f5ce25e..398532a1ba3946e84d40732fb51e5328
  }
  
  // States for Task_TrainerCard. Skips the initial states, which are done once in order
+@@ -858,7 +861,7 @@ static void InitGpuRegs(void)
+     SetGpuReg(REG_OFFSET_WININ, WININ_WIN0_BG_ALL | WININ_WIN0_OBJ | WININ_WIN0_CLR);
+     SetGpuReg(REG_OFFSET_WINOUT, WINOUT_WIN01_BG1 | WINOUT_WIN01_BG2 | WINOUT_WIN01_BG3 | WINOUT_WIN01_OBJ);
+     SetGpuReg(REG_OFFSET_WIN0V, DISPLAY_HEIGHT);
+-    SetGpuReg(REG_OFFSET_WIN0H, DISPLAY_WIDTH);
++    SetGpuReg(REG_OFFSET_WIN0H, WIN_RANGE(0, DISPLAY_WIDTH));
+     if (gReceivedRemoteLinkPlayers)
+         EnableInterrupts(INTR_FLAG_VBLANK | INTR_FLAG_HBLANK | INTR_FLAG_VCOUNT | INTR_FLAG_TIMER3 | INTR_FLAG_SERIAL);
+     else
 diff --git a/src/trainer_hill.c b/src/trainer_hill.c
 index f2037b20d810011a23495db08989572b3a44251d..40b8ec8ba4a5f792df5ec2eda71c1c0ec47d3480 100644
 --- a/src/trainer_hill.c

@@ -438,7 +438,7 @@ index 602a289..fe04605 100644
          if (gTasks[taskId].tCurrentBlock_Start != gTasks[taskId].tCurrentBlock_End)
          {
              if (gTasks[taskId].tBlockSendDelayTimer == 0)
-@@ -862,12 +934,73 @@ static void Task_HandleSendLinkBuffersData(u8 taskId)
+@@ -862,12 +934,77 @@ static void Task_HandleSendLinkBuffersData(u8 taskId)
  // handled uniformly unless a game specifically decides to do
  // otherwise. Pokemon, evidently, did not specifically decide to do
  // otherwise.
@@ -453,6 +453,10 @@ index 602a289..fe04605 100644
 +    {
 +        dataSize = msg[LINK_BUFF_SIZE_LO] | (msg[LINK_BUFF_SIZE_HI] << 8);
 +        if (dataSize + LINK_BUFF_DATA > len)
++            continue;
++        // From the network: a battler or size no message of ours has would
++        // write past gBattleBufferA/B and the port's per-battler counts.
++        if (msg[LINK_BUFF_ACTIVE_BATTLER] >= MAX_BATTLERS_COUNT || dataSize > sizeof(gBattleBufferA[0]))
 +            continue;
 +        if (gTasks[sLinkReceiveTaskId].tCurrentBlock_End + 9 + dataSize > 0x1000)
 +        {
@@ -512,7 +516,7 @@ index 602a289..fe04605 100644
      if (gReceivedRemoteLinkPlayers && (gBattleTypeFlags & BATTLE_TYPE_LINK_IN_BATTLE))
      {
          DestroyTask_RfuIdle();
-@@ -900,7 +1033,8 @@ void TryReceiveLinkBattleData(void)
+@@ -900,7 +1037,8 @@ void TryReceiveLinkBattleData(void)
      }
  }
  
@@ -522,7 +526,7 @@ index 602a289..fe04605 100644
  {
      u16 blockSize;
      u8 battler;
-@@ -909,7 +1043,8 @@ static void Task_HandleCopyReceivedLinkBuffersData(u8 taskId)
+@@ -909,7 +1047,8 @@ static void Task_HandleCopyReceivedLinkBuffersData(u8 taskId)
      #define BYTE_TO_RECEIVE(offset) \
          gLinkBattleRecvBuffer[gTasks[taskId].tCurrentBlock_Start + offset]
  
@@ -532,7 +536,7 @@ index 602a289..fe04605 100644
      {
          if (gTasks[taskId].tCurrentBlock_Start >  gTasks[taskId].tCurrentBlock_End
           && gTasks[taskId].tCurrentBlock_Start == gTasks[taskId].tCurrentBlock_WrapFrom)
-@@ -924,10 +1059,31 @@ static void Task_HandleCopyReceivedLinkBuffersData(u8 taskId)
+@@ -924,10 +1063,31 @@ static void Task_HandleCopyReceivedLinkBuffersData(u8 taskId)
          {
          case B_COMM_TO_CONTROLLER:
              if (IS_BATTLE_CONTROLLER_ACTIVE_ON_LOCAL(battler))
@@ -565,7 +569,7 @@ index 602a289..fe04605 100644
  
              if (!(gBattleTypeFlags & BATTLE_TYPE_IS_MASTER))
              {
-@@ -942,16 +1098,77 @@ static void Task_HandleCopyReceivedLinkBuffersData(u8 taskId)
+@@ -942,16 +1102,77 @@ static void Task_HandleCopyReceivedLinkBuffersData(u8 taskId)
              break;
          case B_COMM_CONTROLLER_IS_DONE:
              playerId = BYTE_TO_RECEIVE(LINK_BUFF_DATA);

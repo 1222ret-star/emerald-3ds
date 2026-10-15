@@ -114,6 +114,10 @@ static unsigned sDeckCount;
 /* A placement whose cells keep their own metatile (gen_voxel_buildings.py
  * OWN_GROUND). */
 #define OWN_GROUND 0xFFFFu
+/* Whether ground variant (layout, metatile) is drawn from `inst`'s tilesets:
+ * set by voxel_world.c, which knows the game's layouts. Unset (host tools),
+ * a variant is told by its metatile and quarters alone. */
+static bool (*sVariantFits)(const VoxelMapInstance *inst, unsigned layout, unsigned metatile);
 static float sMaxTop;
 /* Kept open for the page reads, which come one slice at a time: opening the
  * file again for every slice cost a RomFS path lookup per slice. */
@@ -917,8 +921,13 @@ bool VoxelBuildings_CellAt(const VoxelMapInstance *inst, int x, int y,
             unsigned own = (unsigned)VoxelWorld_GetMetatileId(x, y);
 
             *groundMetatile = (int)own;
+            /* The generator keeps one variant per tileset, metatile and
+             * quarters: the same metatile id of another secondary tileset
+             * (Slateport's 0x22B, Route 111's) is another variant, one the
+             * atlas of these tilesets never composes (AtlasSourceOf). */
             for (unsigned v = 0; sQuarters[k] != 0 && v < sVariantCount && v < VOXEL_VARIANTS; ++v)
-                if (U16(sVariants + 6u * v + 2) == own && sVariants[6u * v + 4] == sQuarters[k])
+                if (U16(sVariants + 6u * v + 2) == own && sVariants[6u * v + 4] == sQuarters[k]
+                 && (sVariantFits == NULL || sVariantFits(inst, U16(sVariants + 6u * v), own)))
                 {
                     *groundMetatile = (int)(VOXEL_METATILE_REAL + v);
                     break;
@@ -966,6 +975,12 @@ bool VoxelBuildings_DeckAt(const VoxelMapInstance *inst, float worldX, float wor
         }
     }
     return false;
+}
+
+void VoxelBuildings_SetVariantFits(bool (*fits)(const VoxelMapInstance *inst, unsigned layout,
+                                                unsigned metatile))
+{
+    sVariantFits = fits;
 }
 
 bool VoxelBuildings_Variant(unsigned i, unsigned *layout, unsigned *metatile, unsigned *quarters)

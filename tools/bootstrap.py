@@ -32,11 +32,25 @@ import hashlib
 import shutil
 import subprocess
 import sys
+import os
 import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OVERLAY = ["3ds_port", "builder", "tools"]
+
+if "/opt/devkitpro" not in os.environ.get("PATH", ""):
+    extra_paths = [p for p in ("/opt/homebrew/opt/make/libexec/gnubin", "/opt/homebrew/bin",
+                               "/opt/devkitpro/tools/bin", "/opt/devkitpro/devkitARM/bin")
+                   if os.path.isdir(p)]
+    if extra_paths:
+        os.environ["PATH"] = os.pathsep.join(extra_paths + [os.environ.get("PATH", "")])
+os.environ.setdefault("DEVKITPRO", "/opt/devkitpro")
+os.environ.setdefault("DEVKITARM", "/opt/devkitpro/devkitARM")
+libpng_pc = "/opt/homebrew/opt/libpng/lib/pkgconfig"
+if os.path.exists(libpng_pc):
+    current_pkg = os.environ.get("PKG_CONFIG_PATH", "")
+    os.environ["PKG_CONFIG_PATH"] = f"{libpng_pc}{os.pathsep}{current_pkg}" if current_pkg else libpng_pc
 
 
 def run(cmd, cwd=None):

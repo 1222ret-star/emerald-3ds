@@ -18,15 +18,98 @@
  * argv[4] is Route 108's, the open sea that takes the level the world gives
  * up between Route 107 and Slateport (gen_voxel_relief.SEA_RAMPS): a level
  * map, its sea a level down at its west edge and on its base at its east one,
- * lifted straight up - no point of it moved south. */
+ * lifted straight up - no point of it moved south.
+ *
+ * Then every cut cell of the file, asked for through VoxelRelief_Cut's memo
+ * in an order that hits and evicts it, against the table read here. */
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "voxel_relief.h"
 
 static const VoxelMapInstance *sOnly;
+
+static unsigned Le16(const unsigned char *p) { return (unsigned)p[0] | ((unsigned)p[1] << 8); }
+
+static int CompareKey(const void *a, const void *b)
+{
+    unsigned x = *(const unsigned *)a, y = *(const unsigned *)b;
+    return x < y ? -1 : x > y;
+}
+
+/* Every cut cell of the file, and cells beside them sharing their memo
+ * slot, as VoxelRelief_Cut gives them, against the table itself. */
+static void CheckCuts(void)
+{
+    FILE *f = fopen(VOXEL_RELIEF_PATH, "rb");
+    long size;
+    unsigned char *blob;
+    unsigned at, nv, nc, *keys, checked = 0;
+    const unsigned char *cells;
+
+    assert(f != NULL);
+    fseek(f, 0, SEEK_END);
+    size = ftell(f);
+    rewind(f);
+    assert(size > 8);
+    blob = malloc((size_t)size);
+    assert(blob != NULL);
+    if (fread(blob, 1, (size_t)size, f) != (size_t)size)
+        assert(!"relief.bin truncated");
+    fclose(f);
+    assert(memcmp(blob + size - 4, "CUTS", 4) == 0);
+    at = Le16(blob + size - 8) | (Le16(blob + size - 6) << 16);
+    nv = Le16(blob + at);
+    nc = Le16(blob + at + 2);
+    cells = blob + at + 4 + 36u * nv;
+    assert(nc > 0);
+    keys = malloc(nc * sizeof(*keys));
+    assert(keys != NULL);
+    for (unsigned k = 0; k < nc; ++k)
+        keys[k] = (Le16(cells + 14u * k) << 16) | ((unsigned)cells[14u * k + 2] << 8) | cells[14u * k + 3];
+    for (int pass = 0; pass < 2; ++pass)
+        for (unsigned k = 0; k < nc; ++k)
+        {
+            const unsigned char *c = cells + 14u * k;
+            VoxelMapInstance inst = {0};
+            /* the cell, again (a memo hit), and those 8 cells east and
+             * south of it (its memo slot, another cell) */
+            static const int kAsk[][2] = { { 0, 0 }, { 0, 0 }, { 8, 0 }, { 0, 8 }, { 0, 0 } };
+
+            inst.layoutId = (int)Le16(c);
+            inst.originX = pass ? -7 : 0;
+            inst.originY = pass ? 5 : 0;
+            for (unsigned q = 0; q < sizeof(kAsk) / sizeof(kAsk[0]); ++q)
+            {
+                int x = c[2] + kAsk[q][0], y = c[3] + kAsk[q][1], ground = 7, wall = 7, variant;
+                unsigned sides = 7, key = ((unsigned)inst.layoutId << 16) | ((unsigned)x << 8) | (unsigned)y;
+                float foot = 7.0f;
+                const unsigned *hit = x <= 255 && y <= 255
+                                    ? bsearch(&key, keys, nc, sizeof(*keys), CompareKey) : NULL;
+
+                variant = VoxelRelief_Cut(&inst, x + inst.originX, y + inst.originY, &foot, &ground, &wall, &sides);
+                if (hit == NULL)
+                {
+                    assert(variant == -1 && foot == 7.0f && ground == 7 && wall == 7 && sides == 7);
+                    continue;
+                }
+                c = cells + 14u * (unsigned)(hit - keys);
+                assert(variant == (int)Le16(c + 4));
+                assert(foot == (int16_t)Le16(c + 6) / 16.0f);
+                assert(ground == (Le16(c + 8) == 0xFFFFu ? -1 : (int)Le16(c + 8)));
+                assert(wall == (Le16(c + 10) == 0xFFFFu ? -1 : (int)Le16(c + 10)));
+                assert(sides == ((unsigned)c[12] | ((unsigned)c[13] << 8)));
+                c = cells + 14u * k;
+                ++checked;
+            }
+        }
+    assert(checked >= 2 * 3 * nc);
+    free(keys);
+    free(blob);
+}
 
 const VoxelMapInstance *VoxelWorld_GetInstanceAt(int x, int y)
 {
@@ -100,8 +183,9 @@ int main(int argc, char **argv)
         assert(fabsf(last) < 1.0f / 16.0f + 0.001f);
     }
     sOnly = NULL;
+    CheckCuts();
     VoxelRelief_Shutdown();
     puts("PASS relief: ledge lip, a drawn terrace, a carved cave's belt and Route 108's leaning sea "
-         "from the ROMFS file, searched in row order");
+         "from the ROMFS file, searched in row order; every cut cell through the memo");
     return 0;
 }

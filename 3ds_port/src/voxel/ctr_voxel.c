@@ -125,15 +125,20 @@ typedef struct
  * Citro3D's GX queue, which holds 32 per frame - and a full queue is not a
  * wait but svcBreak(USERBREAK_PANIC) in gxCmdQueueAdd. The frame's own splits,
  * its display transfer, one atlas and one page slice come on top of these.
+ * This is only a ceiling: each copy also asks CtrVideo_TryVoxelUpload, which
+ * keeps the frame's reserve free and so allows 4 copies a frame, 2 in stereo
+ * or a voxel battle, shared by chunks, drafts (VOXEL_DRAFT_PER_FRAME is a
+ * ceiling as well), pages and animated texels.
  */
 #define VOXEL_CHUNK_UPLOADS_MAX 8u
 
 /*
- * Vertices held back for the billboards. Sixteen object events of six vertices
- * each, rounded up. Without the reserve a dense town would leave the player
- * undrawn, which is a far worse failure than a missing wall.
+ * Vertices held back for the billboards: six for each sprite slot (objects,
+ * effects and the visible wild ones), and some over. Without the reserve a
+ * dense town would leave the player undrawn, which is a far worse failure
+ * than a missing wall.
  */
-#define VOXEL_SPRITE_RESERVE 128u
+#define VOXEL_SPRITE_RESERVE (VOXEL_SPRITE_SLOTS * 6u + 32u)
 #define VOXEL_REFLECTION_RESERVE (VOXEL_SPRITE_SLOTS * VOXEL_REFLECTION_VERTICES)
 #define VOXEL_DYNAMIC_VERTICES (VOXEL_SPRITE_RESERVE + VOXEL_SHADOW_RESERVE + VOXEL_REFLECTION_RESERVE)
 #define VOXEL_SHADOW_FIRST VOXEL_SPRITE_RESERVE
@@ -993,11 +998,14 @@ static float sLastBuildMs;
 static C3D_Tex sSpriteAtlas;
 static C3D_Tex sTreeAtlas;
 /* The modelled buildings' own art, ground made transparent. Empty when
- * buildings.bin is absent, and then the region extrusion draws them. */
+ * buildings.bin is absent, and then the houses are their cells' flat drawing. */
 static bool sHaveBuildings;
 /* The world's VRAM given back while it is off (CtrVoxel_ParkVram); the
  * buildings' models stay loaded for when it comes back. */
 static bool sParked, sBuildingsLoaded;
+/* Unloaded by CtrVoxel_UnparkVram for want of the pages' VRAM (loaded again
+ * at an unpark that finds it), and the lighting still to forget them. */
+static bool sBuildingsDropped, sBuildingsChanged;
 static unsigned sSpriteVertices;
 static unsigned sReflectionVertices;
 static unsigned sLampVertices, sLampGroundVertices;
@@ -1972,6 +1980,11 @@ static VoxelChunk *FindChunk(bool border, int mapGroup, int mapNum, int cx, int 
  * may take anything not on screen this frame; a build ahead of time may take
  * only what this frame has not touched at all, or the ring would evict itself.
  */
+static bool Evictable(const VoxelChunk *c, bool forView)
+{
+    return c->used && c->viewStamp != sFrame && (forView || c->stamp != sFrame);
+}
+
 static VoxelChunk *OldestChunk(bool forView)
 {
     VoxelChunk *victim = NULL;
@@ -1980,7 +1993,7 @@ static VoxelChunk *OldestChunk(bool forView)
     {
         VoxelChunk *c = &sChunks[i];
 
-        if (!c->used || c->viewStamp == sFrame || (!forView && c->stamp == sFrame))
+        if (!Evictable(c, forView))
             continue;
         if (victim == NULL || c->stamp < victim->stamp)
             victim = c;
@@ -1996,21 +2009,46 @@ static VoxelChunk *FreeChunkSlot(bool forView)
     return OldestChunk(forView);
 }
 
-/* VRAM for one chunk, evicting the least recently needed until there is room. */
+/*
+ * Would evicting everything OldestChunk may take leave a gap of `bytes`? The
+ * arena is first fit: in pieces, a large mesh may find no gap even with the
+ * whole ring gone, and a view job then flushed the ring for nothing.
+ */
+static bool ChunkRoomPossible(unsigned bytes, bool forView)
+{
+    bool freed[VOXEL_CHUNK_SLOTS + 1];
+    uint32_t align = sChunkArena.align;
+
+    memset(freed, 0, sizeof(freed));
+    for (unsigned i = 0; i < VOXEL_CHUNK_SLOTS; ++i)
+        if (Evictable(&sChunks[i], forView))
+        {
+            int piece = VoxelArena_PieceOf(&sChunkArena, sChunks[i].vram);
+
+            if (piece >= 0)
+                freed[piece] = true;
+        }
+    return VoxelArena_LargestGapFreeing(&sChunkArena, freed) >= ((bytes + align - 1u) & ~(align - 1u));
+}
+
+/* VRAM for one chunk, evicting the least recently needed until there is room
+ * - and nothing at all when the room cannot be made (ChunkRoomPossible). */
 static VoxelGpuVertex *ChunkVram(unsigned bytes, bool forView)
 {
+    void *block = VoxelArena_Alloc(&sChunkArena, bytes, false);
+
+    if (block != NULL || !ChunkRoomPossible(bytes, forView))
+        return block;
     for (;;)
     {
-        VoxelChunk *victim;
-        void *block;
+        VoxelChunk *victim = OldestChunk(forView);
 
-        block = VoxelArena_Alloc(&sChunkArena, bytes, false);
-        if (block != NULL)
-            return block;
-        victim = OldestChunk(forView);
         if (victim == NULL)
             return NULL;
         ReleaseChunk(victim);
+        block = VoxelArena_Alloc(&sChunkArena, bytes, false);
+        if (block != NULL)
+            return block;
     }
 }
 
@@ -2099,8 +2137,8 @@ bool CtrVoxel_Init(void)
         goto fail;
     VoxelArena_Init(&sChunkArena, sChunkBlock, VOXEL_CHUNK_VRAM_BUDGET, 16,
                     sChunkPieces, VOXEL_CHUNK_SLOTS + 1);
-    /* Not fatal: without it the houses fall back to the region path, exactly
-     * as without buildings.bin. */
+    /* Not fatal: without it the buildings are not loaded, exactly as without
+     * buildings.bin (the houses stay their cells' flat drawing). */
     sPageBlock = vramAlloc(VOXEL_PAGE_VRAM_BUDGET);
     VoxelArena_Init(&sPageArena, sPageBlock, sPageBlock != NULL ? VOXEL_PAGE_VRAM_BUDGET : 0,
                     128, sPagePieces, VOXEL_PAGE_PIECES);
@@ -2140,7 +2178,7 @@ bool CtrVoxel_Init(void)
         goto fail;
 
     step = "sprite atlas in linear memory";
-    if (!C3D_TexInit(&sSpriteAtlas, VOXEL_SPRITE_ATLAS_DIM, VOXEL_SPRITE_ATLAS_DIM, GPU_RGBA5551))
+    if (!C3D_TexInit(&sSpriteAtlas, VOXEL_SPRITE_ATLAS_W, VOXEL_SPRITE_ATLAS_H, GPU_RGBA5551))
         goto fail;
     C3D_TexSetFilter(&sSpriteAtlas, GPU_NEAREST, GPU_NEAREST);
     C3D_TexSetWrap(&sSpriteAtlas, GPU_CLAMP_TO_EDGE, GPU_CLAMP_TO_EDGE);
@@ -2172,7 +2210,7 @@ bool CtrVoxel_Init(void)
     MakeGloom();
 #endif
 
-    /* Not fatal: without models the houses fall back to the region path. */
+    /* Not fatal: without models the houses stay their cells' flat drawing. */
     for (unsigned i = 0; i < VOXEL_BUILDING_PAGES; ++i)
         sPageSlots[i].page = -1;
     sBuildingsLoaded = sPageBlock != NULL && VoxelBuildings_Init();
@@ -3217,7 +3255,8 @@ static void JobStep(void)
 
 /*
  * Uploads a finished job into its chunk. On NO_STAGING or NO_VRAM nothing is
- * touched and the finished geometry waits for another frame.
+ * touched; on NO_STAGING the finished geometry waits for another frame, on
+ * NO_VRAM RunJobs drops it.
  */
 static BuildResult JobFinish(VoxelChunk *chunk)
 {
@@ -3574,6 +3613,9 @@ typedef struct
 
 static BuildRequest sRequests[VOXEL_REQUESTS_MAX];
 static unsigned sRequestCount;
+/* With the list full: its entry of largest key (Request), and how many were
+ * turned away since the last log. */
+static unsigned sRequestWorst, sRequestsDropped;
 
 /* Retain progress across the frame-local request list, recycling its oldest
  * entry when full. Map identity never uses a mutable instance pointer. */
@@ -3582,6 +3624,7 @@ static struct
     int group, map, cx, cy;
     bool border, used;
     uint32_t seen, progress;
+    uint32_t noRoomUntil; /* not built before this frame (RunJobs, BUILD_NO_VRAM) */
 } sRequestWait[VOXEL_REQUESTS_MAX];
 
 /* The wait table is looked up once per request, every frame: chained by hash
@@ -3601,7 +3644,11 @@ static unsigned WaitBucket(int group, int map, int cx, int cy, bool border)
     return h & (sizeof(sWaitHead) - 1u);
 }
 
-static unsigned RequestWait(const ChunkSite *site)
+/* `reuse`, if not negative, is the record to take on a miss: the one of the
+ * request this one displaces from a full list (Request), its only user. Every
+ * record of a full list was seen this frame, and the oldest would be a live
+ * request's. */
+static unsigned RequestWait(const ChunkSite *site, int reuse)
 {
     unsigned bucket = WaitBucket(site->inst->mapGroup, site->inst->mapNum, site->cx, site->cy,
                                  site->border);
@@ -3624,9 +3671,12 @@ static unsigned RequestWait(const ChunkSite *site)
             return i;
         }
     }
-    for (unsigned i = 0; i < VOXEL_REQUESTS_MAX; ++i)
-        if (!sRequestWait[i].used || sRequestWait[i].seen < sRequestWait[oldest].seen)
-            oldest = i;
+    if (reuse >= 0 && (unsigned)reuse < VOXEL_REQUESTS_MAX)
+        oldest = (unsigned)reuse;
+    else
+        for (unsigned i = 0; i < VOXEL_REQUESTS_MAX; ++i)
+            if (!sRequestWait[i].used || sRequestWait[i].seen < sRequestWait[oldest].seen)
+                oldest = i;
     if (sRequestWait[oldest].used)
     {
         /* Out of its chain before it names another square. */
@@ -3646,6 +3696,7 @@ static unsigned RequestWait(const ChunkSite *site)
     sRequestWait[oldest].border = site->border;
     sRequestWait[oldest].used = true;
     sRequestWait[oldest].seen = sRequestWait[oldest].progress = sFrame;
+    sRequestWait[oldest].noRoomUntil = 0;
     sWaitNext[oldest] = sWaitHead[bucket];
     sWaitHead[bucket] = (uint8_t)(oldest + 1u);
     return oldest;
@@ -3661,6 +3712,9 @@ static bool RequestOverdue(const BuildRequest *r)
     unsigned limit = r->chunk != NULL && r->chunk->draft ? VOXEL_DRAFT_STARVE_FRAMES
                                                           : VOXEL_STARVE_FRAMES;
 
+    /* Waiting for room, not for time: no rescue would find it any. */
+    if (sFrame < sRequestWait[r->waitIndex].noRoomUntil)
+        return false;
     return r->need <= NEED_STALE && sFrame - sRequestWait[r->waitIndex].progress >= limit;
 }
 
@@ -3731,12 +3785,36 @@ static void Request(const ChunkSite *site, VoxelAtlasSlot *atlas, VoxelChunk *ch
                     const uint32_t *hash, unsigned need, float playerX, float playerZ)
 {
     BuildRequest *r;
+    int displaced = -1;
     float dx = (site->x0 + site->x1) * 0.5f - playerX;
     float dz = (site->y0 + site->y1) * 0.5f - playerZ;
+    unsigned key = need * 100000u + (unsigned)(dx * dx + dz * dz);
 
+    /*
+     * Full: the list is visited map by map, so what came first is not what
+     * matters most - a hole of the second map on screen was turned away for
+     * the first map's ring. The new request takes the place of the least
+     * urgent one if it is more urgent.
+     */
     if (sRequestCount >= VOXEL_REQUESTS_MAX)
-        return;
-    r = &sRequests[sRequestCount++];
+    {
+        static uint32_t sDropLogged;
+
+        ++sRequestsDropped;
+        if (sFrame - sDropLogged >= 600u)
+        {
+            sDropLogged = sFrame;
+            CtrLog_Write(CTR_LOG_VIDEO, "VOXEL: request list full (%u), %u turned away",
+                         VOXEL_REQUESTS_MAX, sRequestsDropped);
+            sRequestsDropped = 0;
+        }
+        if (key >= sRequests[sRequestWorst].key)
+            return;
+        r = &sRequests[sRequestWorst];
+        displaced = (int)r->waitIndex;
+    }
+    else
+        r = &sRequests[sRequestCount++];
     r->site = *site;
     r->atlas = atlas;
     r->chunk = chunk;
@@ -3744,8 +3822,16 @@ static void Request(const ChunkSite *site, VoxelAtlasSlot *atlas, VoxelChunk *ch
     r->done = false;
     r->hash = hash != NULL ? *hash : 0;
     r->need = need;
-    r->waitIndex = RequestWait(site);
-    r->key = need * 100000u + (unsigned)(dx * dx + dz * dz);
+    r->waitIndex = RequestWait(site, displaced);
+    r->key = key;
+    if (sRequestCount == VOXEL_REQUESTS_MAX)
+    {
+        /* The new worst: once when the list fills, then after each swap. */
+        sRequestWorst = 0;
+        for (unsigned i = 1; i < VOXEL_REQUESTS_MAX; ++i)
+            if (sRequests[i].key > sRequests[sRequestWorst].key)
+                sRequestWorst = i;
+    }
 }
 
 /* The tiles of a belt square that no map covers. */
@@ -4245,7 +4331,7 @@ static bool StartNextJob(float elapsed, float holeMs, float aheadMs)
         unsigned need = r->need;
         bool forView = need == NEED_HOLE || need == NEED_STALE;
 
-        if (r->done)
+        if (r->done || sFrame < sRequestWait[r->waitIndex].noRoomUntil)
             continue;
         if (sHolesOnly && need != NEED_HOLE && !RequestOverdue(r))
             continue; /* sorted: holes come first */
@@ -4264,6 +4350,33 @@ static bool StartNextJob(float elapsed, float holeMs, float aheadMs)
         return true;
     }
     return false;
+}
+
+/*
+ * A view job finished with no gap for its mesh even once all off screen was
+ * gone (ChunkVram). Its square waits, drawn by its draft or its old mesh,
+ * rather than being built again every frame and thrown away.
+ */
+#define VOXEL_NO_ROOM_FRAMES 60u
+
+static void NoRoomForView(void)
+{
+    static unsigned sNoRoom;
+    static uint32_t sNoRoomLogged;
+
+    sRequestWait[sJob.waitIndex].noRoomUntil = sFrame + VOXEL_NO_ROOM_FRAMES;
+    if (sNoRoom++ == 0 || sFrame - sNoRoomLogged >= 600u)
+    {
+        sNoRoomLogged = sFrame;
+        CtrLog_Write(CTR_LOG_ERROR, "VOXEL: no VRAM for chunk %d,%d of %d:%d%s (%u bytes; arena used %lu KiB,"
+                     " largest gap %lu KiB; %u times): waits %u frames",
+                     sJob.site.cx, sJob.site.cy, sJob.site.inst->mapGroup, sJob.site.inst->mapNum,
+                     sJob.site.border ? " border" : "",
+                     (unsigned)(sBuilder.count * sizeof(VoxelGpuVertex)),
+                     (unsigned long)(sChunkArena.used >> 10),
+                     (unsigned long)(VoxelArena_LargestGap(&sChunkArena) >> 10), sNoRoom,
+                     VOXEL_NO_ROOM_FRAMES);
+    }
 }
 
 /*
@@ -4389,6 +4502,8 @@ static unsigned RunJobs(uint64_t started, float holeMs, float aheadMs, bool inFr
                  * long as the view holds the cache full. */
                 if (!sJob.forView)
                     sAheadBackoff = sFrame + VOXEL_AHEAD_BACKOFF_FRAMES;
+                else
+                    NoRoomForView();
                 sJob.active = false;
                 break;
             }
@@ -5373,7 +5488,11 @@ bool CtrVoxel_Update(void)
          * by another way; one that does is logged and taken as a change.
          */
         uint32_t version = CtrMap_Version(), signature = InstanceSignature();
-        bool changed = version != sMapVersion || signature != sInstanceSignature;
+        /* The buildings came or went (CtrVoxel_UnparkVram): the lighting's
+         * casters with them. */
+        bool changed = version != sMapVersion || signature != sInstanceSignature || sBuildingsChanged;
+
+        sBuildingsChanged = false;
 
         if (changed || sFrame % VOXEL_MAP_CHECK_FRAMES == 0)
         {
@@ -5751,6 +5870,8 @@ void CtrVoxel_ParkVram(void)
     AtlasJobCancel();
     JobCancel();
     ReleaseAllChunks();
+    /* Linear memory: converted again as the chunks place them (JOB_STATICS). */
+    StaticMeshesFree();
     for (unsigned i = 0; i < VOXEL_BUILDING_PAGES; ++i)
         if (sPageSlots[i].tex.data != NULL)
             PageFree(&sPageSlots[i]);
@@ -5776,8 +5897,12 @@ void CtrVoxel_ParkVram(void)
                  (unsigned long)vramSpaceFree());
 }
 
-/* False if the chunk arena does not fit: the caller frees its own surfaces
- * first (they come back on demand) and tries again later. */
+/* False if the chunk arena does not fit, or the pages' when the buildings
+ * are loaded: the caller frees its own surfaces first (they come back on
+ * demand) and tries again later. */
+#define VOXEL_UNPARK_PAGE_TRIES 5u
+static unsigned sUnparkPageFails;
+
 bool CtrVoxel_UnparkVram(void)
 {
     if (!sReady || !sParked)
@@ -5785,9 +5910,39 @@ bool CtrVoxel_UnparkVram(void)
     sChunkBlock = vramAlloc(VOXEL_CHUNK_VRAM_BUDGET);
     if (sChunkBlock == NULL)
         return false;
+    sPageBlock = vramAlloc(VOXEL_PAGE_VRAM_BUDGET);
+    /* Loaded, the buildings' cells are their models' (VoxelBuildings_CellAt):
+     * without the pages to draw them the houses were left out, the ground
+     * under them alone. The whole world waits for the room instead - for a
+     * few tries (the caller's, VOXEL_UNPARK_RETRY_FRAMES apart); then it comes
+     * back without the buildings, unloaded as without buildings.bin, so their
+     * cells are the flat drawing again. */
+    if (sPageBlock == NULL && sBuildingsLoaded)
+    {
+        if (++sUnparkPageFails < VOXEL_UNPARK_PAGE_TRIES)
+        {
+            vramFree(sChunkBlock);
+            sChunkBlock = NULL;
+            return false;
+        }
+        VoxelBuildings_Shutdown();
+        sBuildingsLoaded = false;
+        sBuildingsDropped = sBuildingsChanged = true;
+        CtrLog_Write(CTR_LOG_ERROR, "VOXEL: no VRAM for the building pages in %u tries (largest=%lu):"
+                     " the world comes back without its buildings", sUnparkPageFails,
+                     (unsigned long)CtrGpuMem_LargestVram());
+    }
+    else if (sPageBlock != NULL && sBuildingsDropped)
+    {
+        sBuildingsLoaded = VoxelBuildings_Init();
+        sBuildingsDropped = !sBuildingsLoaded;
+        sBuildingsChanged = true;
+        CtrLog_Write(CTR_LOG_VIDEO, "VOXEL: building pages have room again, buildings %s",
+                     sBuildingsLoaded ? "loaded" : "still unloaded");
+    }
+    sUnparkPageFails = 0;
     VoxelArena_Init(&sChunkArena, sChunkBlock, VOXEL_CHUNK_VRAM_BUDGET, 16,
                     sChunkPieces, VOXEL_CHUNK_SLOTS + 1);
-    sPageBlock = vramAlloc(VOXEL_PAGE_VRAM_BUDGET);
     VoxelArena_Init(&sPageArena, sPageBlock, sPageBlock != NULL ? VOXEL_PAGE_VRAM_BUDGET : 0,
                     128, sPagePieces, VOXEL_PAGE_PIECES);
     memset(sPageRetry, 0, sizeof(sPageRetry));
@@ -6121,6 +6276,9 @@ static void SetGrade(const VoxelLight *light)
 
 #if CTR_VOXEL_LIGHTING
 static float sDappleDrift; /* this frame's, in tiles along the pattern */
+/* The pattern's axes for this frame's sun, worked out once a frame
+ * (DappleFrame): DappleUniforms only adds a draw's own offset. */
+static float sDappleC, sDappleS, sDappleSu, sDappleSv, sDappleU[3], sDappleV[3];
 
 static float DappleLattice(int x, int y, int period, uint32_t seed)
 {
@@ -6196,8 +6354,22 @@ static void MakeDapple(void)
 static void DappleFrame(void)
 {
     double seconds = (double)svcGetSystemTick() / SYSCLOCK_ARM11;
+    float len = sqrtf(VOXEL_SUN_DX * VOXEL_SUN_DX + VOXEL_SUN_DZ * VOXEL_SUN_DZ);
+    float c = VOXEL_SUN_DX / len, s = VOXEL_SUN_DZ / len;
+    float su = 1.0f / VOXEL_DAPPLE_PERIOD;
+    float sv = 1.0f / (VOXEL_DAPPLE_PERIOD * VOXEL_DAPPLE_STRETCH);
 
     sDappleDrift = (float)fmod(seconds * VOXEL_DAPPLE_DRIFT, VOXEL_DAPPLE_PERIOD);
+    sDappleC = c;
+    sDappleS = s;
+    sDappleSu = su;
+    sDappleSv = sv;
+    sDappleU[0] = c * su;
+    sDappleU[1] = (c * VOXEL_SUN_DX + s * VOXEL_SUN_DZ) * su;
+    sDappleU[2] = s * su;
+    sDappleV[0] = -s * sv;
+    sDappleV[1] = (c * VOXEL_SUN_DZ - s * VOXEL_SUN_DX) * sv;
+    sDappleV[2] = c * sv;
 }
 
 /*
@@ -6524,25 +6696,29 @@ static void DrawMotes(const C3D_Mtx *view, const VoxelLight *light, const VoxelL
  * roof and the ground beside it take the patch the same light passed through;
  * then turned so the pattern's long axis and its drift follow the sun. The
  * draw's own corner goes in as a wrapped offset: the shader then only ever
- * sees small coordinates, whatever the map.
+ * sees small coordinates, whatever the map. `lift` is the height the draw is
+ * translated by (a static model's), slid along the sun like its vertices'.
+ * After DappleFrame.
  */
-static void DappleUniforms(int worldX, int worldZ)
+static void DappleUniforms(int worldX, int worldZ, float lift)
 {
     /* Anchored: a crossing moves the origin, and the pattern must not move
      * with it. */
     worldX += sDappleAnchorX;
     worldZ += sDappleAnchorZ;
-    float len = sqrtf(VOXEL_SUN_DX * VOXEL_SUN_DX + VOXEL_SUN_DZ * VOXEL_SUN_DZ);
-    float c = VOXEL_SUN_DX / len, s = VOXEL_SUN_DZ / len;
-    float su = 1.0f / VOXEL_DAPPLE_PERIOD;
-    float sv = 1.0f / (VOXEL_DAPPLE_PERIOD * VOXEL_DAPPLE_STRETCH);
-    float u0 = (c * (float)worldX + s * (float)worldZ - sDappleDrift) * su;
-    float v0 = (c * (float)worldZ - s * (float)worldX) * sv;
+    float c = sDappleC, s = sDappleS;
+    float u0 = (c * (float)worldX + s * (float)worldZ - sDappleDrift) * sDappleSu;
+    float v0 = (c * (float)worldZ - s * (float)worldX) * sDappleSv;
 
+    if (lift != 0.0f)
+    {
+        u0 += sDappleU[1] * lift;
+        v0 += sDappleV[1] * lift;
+    }
     C3D_FVUnifSet(GPU_VERTEX_SHADER, sUniDappleU,
-                  c * su, (c * VOXEL_SUN_DX + s * VOXEL_SUN_DZ) * su, s * su, u0 - floorf(u0));
+                  sDappleU[0], sDappleU[1], sDappleU[2], u0 - floorf(u0));
     C3D_FVUnifSet(GPU_VERTEX_SHADER, sUniDappleV,
-                  -s * sv, (c * VOXEL_SUN_DZ - s * VOXEL_SUN_DX) * sv, c * sv, v0 - floorf(v0));
+                  sDappleV[0], sDappleV[1], sDappleV[2], v0 - floorf(v0));
 }
 
 /*
@@ -6729,7 +6905,8 @@ static uint32_t DappleConstant(const VoxelLight *light)
  *   0: m = k L + (1 - k) c          the dapple factor, halved
  *   1: m x graded colour, doubled   the graded colour, dappled
  *   2: texture x that, doubled
- * Environment 3 is the haze and 4 the screen fade (FadeFor).
+ * Environment 3 is the haze and 4 the screen fade (FadeFor); one stage later
+ * under the windows' glow with the dapples (BuildingGlowEnv).
  */
 static void TerrainTexEnv(const VoxelLight *dapples)
 {
@@ -6792,32 +6969,6 @@ static void ReleaseGlowUnit(void)
     sGlowBound = NULL;
 }
 
-static void BuildingGlowEnv(C3D_Tex *mask, float strength)
-{
-    C3D_TexEnv *env;
-
-    TerrainTexEnv(NULL);
-    if (mask == NULL || strength <= 0.0f)
-    {
-        ReleaseGlowUnit();
-        return;
-    }
-    C3D_TexBind(2, mask);
-    sGlowBound = mask;
-    env = C3D_GetTexEnv(1);
-    C3D_TexEnvSrc(env, C3D_Alpha, GPU_TEXTURE2, GPU_CONSTANT, GPU_CONSTANT);
-    C3D_TexEnvOpAlpha(env, GPU_TEVOP_A_SRC_R, GPU_TEVOP_A_SRC_ALPHA, GPU_TEVOP_A_SRC_ALPHA);
-    C3D_TexEnvFunc(env, C3D_Alpha, GPU_MODULATE);
-    C3D_TexEnvColor(env, (uint32_t)(strength * 255.0f + 0.5f) << 24);
-    env = C3D_GetTexEnv(2);
-    C3D_TexEnvSrc(env, C3D_RGB, GPU_CONSTANT, GPU_PREVIOUS, GPU_PREVIOUS);
-    C3D_TexEnvOpRgb(env, GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_ALPHA);
-    C3D_TexEnvFunc(env, C3D_RGB, GPU_INTERPOLATE);
-    C3D_TexEnvSrc(env, C3D_Alpha, GPU_TEXTURE0, GPU_TEXTURE0, GPU_TEXTURE0);
-    C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
-    C3D_TexEnvColor(env, 0xFFA0D8FFu);
-}
-
 /*
  * The lamps' glass: their warm colour laid over the lantern. Their pools: light
  * added to the ground in proportion to the ground's own colour (blended
@@ -6854,9 +7005,9 @@ static void LampTexEnv(float strength, bool ground)
                    GPU_SRC_ALPHA, GPU_ONE_MINUS_SRC_ALPHA, GPU_ZERO, GPU_ONE);
 }
 
-static void HazeTexEnv(uint32_t colour)
+static void HazeTexEnv(uint32_t colour, int stage)
 {
-    C3D_TexEnv *env = C3D_GetTexEnv(3);
+    C3D_TexEnv *env = C3D_GetTexEnv(stage);
 
     C3D_TexEnvInit(env);
     C3D_TexEnvSrc(env, C3D_RGB, GPU_PREVIOUS, GPU_CONSTANT, GPU_PRIMARY_COLOR);
@@ -6945,9 +7096,9 @@ static uint32_t SpriteHaze(void)
     return FadeColour(1.0f, rgb);
 }
 
-static void FadeTexEnv(const VoxelFade *fade)
+static void FadeTexEnv(const VoxelFade *fade, int stage)
 {
-    C3D_TexEnv *env = C3D_GetTexEnv(4);
+    C3D_TexEnv *env = C3D_GetTexEnv(stage);
 
     C3D_TexEnvInit(env);
     if (fade->amount <= 0.0f)
@@ -6965,8 +7116,53 @@ static void FadeTexEnv(const VoxelFade *fade)
 /* Environments 3 and 4 for what is drawn next: the world's or a sprite's. */
 static void FadeFor(bool sprites)
 {
-    HazeTexEnv(sprites ? SpriteHaze() : FadeColour(1.0f, sHazeRgb));
-    FadeTexEnv(sprites ? &sSpriteFade : &sWorldFade);
+    HazeTexEnv(sprites ? SpriteHaze() : FadeColour(1.0f, sHazeRgb), 3);
+    FadeTexEnv(sprites ? &sSpriteFade : &sWorldFade, 4);
+}
+
+/*
+ * The windows' glow over the lit texel: stage 1's alpha carries the mask x
+ * the strength (its colour never reads the constant), and the glow mixes the
+ * warm colour in after the texture. Plain, that is stage 2. With the dapples
+ * (NULL for none) stages 0-2 are theirs, so the glow is stage 3 and the haze
+ * and the fade move on to 4 and 5; CtrVoxel_Draw puts them back after the
+ * building pass.
+ */
+static void BuildingGlowEnv(C3D_Tex *mask, float strength, const VoxelLight *dapples)
+{
+    C3D_TexEnv *env;
+    bool glow = mask != NULL && strength > 0.0f;
+
+    TerrainTexEnv(dapples);
+    if (dapples != NULL)
+    {
+        HazeTexEnv(FadeColour(1.0f, sHazeRgb), glow ? 4 : 3);
+        FadeTexEnv(&sWorldFade, glow ? 5 : 4);
+        if (!glow)
+            C3D_TexEnvInit(C3D_GetTexEnv(5));
+    }
+    if (!glow)
+    {
+        ReleaseGlowUnit();
+        return;
+    }
+    C3D_TexBind(2, mask);
+    sGlowBound = mask;
+    env = C3D_GetTexEnv(1);
+    C3D_TexEnvSrc(env, C3D_Alpha, GPU_TEXTURE2, GPU_CONSTANT, GPU_CONSTANT);
+    C3D_TexEnvOpAlpha(env, GPU_TEVOP_A_SRC_R, GPU_TEVOP_A_SRC_ALPHA, GPU_TEVOP_A_SRC_ALPHA);
+    C3D_TexEnvFunc(env, C3D_Alpha, GPU_MODULATE);
+    C3D_TexEnvColor(env, (uint32_t)(strength * 255.0f + 0.5f) << 24);
+    /* With the dapples stage 2 passes stage 1's alpha on (TerrainTexEnv). */
+    env = C3D_GetTexEnv(dapples != NULL ? 3 : 2);
+    if (dapples != NULL)
+        C3D_TexEnvInit(env);
+    C3D_TexEnvSrc(env, C3D_RGB, GPU_CONSTANT, GPU_PREVIOUS, GPU_PREVIOUS);
+    C3D_TexEnvOpRgb(env, GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_COLOR, GPU_TEVOP_RGB_SRC_ALPHA);
+    C3D_TexEnvFunc(env, C3D_RGB, GPU_INTERPOLATE);
+    C3D_TexEnvSrc(env, C3D_Alpha, GPU_TEXTURE0, GPU_TEXTURE0, GPU_TEXTURE0);
+    C3D_TexEnvFunc(env, C3D_Alpha, GPU_REPLACE);
+    C3D_TexEnvColor(env, 0xFFA0D8FFu);
 }
 
 /* Outdoors and under the ground; a building keeps the game's own sprites. */
@@ -7379,9 +7575,8 @@ static void SetModelViewAt(const C3D_Mtx *view, float x, float y, float z)
  * state (alpha tested, the terrain's TexEnv and grade). */
 static uint32_t sStaticDrawSliced = ~0u;
 
-static void DrawStatics(const C3D_Mtx *view, bool dapples, bool glowing)
+static void DrawStatics(const C3D_Mtx *view, const VoxelLight *dapples, bool glowing)
 {
-    (void)dapples;
     for (unsigned i = 0; i < sDrawCount; ++i)
     {
         const VoxelChunk *chunk = sDraws[i].chunk;
@@ -7398,7 +7593,7 @@ static void DrawStatics(const C3D_Mtx *view, bool dapples, bool glowing)
             BuildingPageSlot *page = FindPage(chunk->buildingPage);
 
             BuildingGlowEnv(GlowTex(page),
-                            CtrDayNight_Get()->glow);
+                            CtrDayNight_Get()->glow, dapples);
         }
         for (unsigned k = 0; k < chunk->staticCount; ++k)
         {
@@ -7420,9 +7615,10 @@ static void DrawStatics(const C3D_Mtx *view, bool dapples, bool glowing)
             SetModelViewAt(view, x, s->y, z);
 #if CTR_VOXEL_LIGHTING
             /* The dapples are worked out from the model's own frame: whole
-             * tiles of its spot (a model stands on a whole cell). */
-            if (dapples)
-                DappleUniforms((int)floorf(x + 0.5f), (int)floorf(z + 0.5f));
+             * tiles of its spot (a model stands on a whole cell), slid along
+             * the sun by the height it stands at, as the ground there is. */
+            if (dapples != NULL)
+                DappleUniforms((int)floorf(x + 0.5f), (int)floorf(z + 0.5f), s->y);
 #endif
             BindVertices(mesh->vertices);
             C3D_DrawElements(GPU_TRIANGLES, (int)mesh->count, C3D_UNSIGNED_SHORT, mesh->indices);
@@ -7542,7 +7738,7 @@ void CtrVoxel_Draw(C3D_RenderTarget *target, int eye)
             SetModelView(&view, sDraws[i].worldX, sDraws[i].worldZ);
 #if CTR_VOXEL_LIGHTING
             if (dapples)
-                DappleUniforms(sDraws[i].worldX, sDraws[i].worldZ);
+                DappleUniforms(sDraws[i].worldX, sDraws[i].worldZ, 0.0f);
 #endif
             if (boundTex != tex)
             {
@@ -7553,24 +7749,29 @@ void CtrVoxel_Draw(C3D_RenderTarget *target, int eye)
                     BuildingPageSlot *page = FindPage(chunk->buildingPage);
 
                     BuildingGlowEnv(GlowTex(page),
-                                    CtrDayNight_Get()->glow);
+                                    CtrDayNight_Get()->glow, dapples ? &light : NULL);
                 }
             }
             BindVertices(chunk->vram);
             C3D_DrawArrays(GPU_TRIANGLES, (int)first, (int)count);
         }
         if (pass == VOXEL_ATLAS_PAGES + 1u && sHaveBuildings)
-            DrawStatics(&view, dapples, glowing);
+            DrawStatics(&view, dapples ? &light : NULL, glowing);
     }
     ReleaseGlowUnit();
-    TerrainTexEnv(dapples ? &light : NULL);
+    /* The glow over the dapples moved the haze and the fade a stage on
+     * (BuildingGlowEnv): back where every later pass has them. */
+    if (dapples)
+    {
+        FadeFor(false);
+        C3D_TexEnvInit(C3D_GetTexEnv(5));
+    }
 
     /* The reflections, cast shadows and the player's silhouette take no
      * dapples; the unit stays bound for the sprites and the rays, and is
      * released after them (ReleaseDappleUnit: never C3D_TexBind(1, NULL),
      * which reads address 0xC on the console). */
-    if (dapples)
-        TerrainTexEnv(NULL);
+    TerrainTexEnv(NULL);
 
     /* Billboards and shadows: the linear buffer, around the camera's tile. */
     SetModelView(&view, sDynamicX, sDynamicZ);
@@ -7710,7 +7911,7 @@ void CtrVoxel_Draw(C3D_RenderTarget *target, int eye)
         /* Sprites stand in the same light as the ground at their feet. */
         if (dapples)
         {
-            DappleUniforms(sDynamicX, sDynamicZ);
+            DappleUniforms(sDynamicX, sDynamicZ, 0.0f);
             TerrainTexEnv(&light);
         }
 #endif
@@ -7766,7 +7967,7 @@ void CtrVoxel_Draw(C3D_RenderTarget *target, int eye)
 #endif
     C3D_AlphaTest(false, GPU_ALWAYS, 0);
     /* The 2D compositor sets up stage 0 only. */
-    for (int i = 1; i < 5; ++i)
+    for (int i = 1; i < 6; ++i)
         C3D_TexEnvInit(C3D_GetTexEnv(i));
 }
 

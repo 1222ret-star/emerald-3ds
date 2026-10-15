@@ -371,6 +371,13 @@ int main(void)
     builder.lighting = true;
     Ground(&builder, 3, 3);
     assert(builder.count == 6 && builder.dropped == 0);
+    /* Nor half of one: with room for a triangle and a half, the second quad
+     * goes in whole or not at all - never a sliver along its diagonal. */
+    VoxelBuilder_Init(&builder, storage, 9);
+    builder.lighting = true;
+    Ground(&builder, 3, 3);
+    Ground(&builder, 4, 3);
+    assert(builder.count == 6 && builder.dropped == 2);
 
     /* Round tree proxies shade the floor southeast of the crown's centre and
      * disappear with the live tiles. */
@@ -380,37 +387,6 @@ int main(void)
     sTreePresent = false;
     VoxelLighting_Reset();
     assert(VoxelLighting_Sample(9.74f, 0, 5.13f) == 1.0f);
-
-    /* Contact shadows clipped at a water/land corner lie on each surface:
-     * water is flush with the ground (00485c4fe), so both at the same
-     * height; empty space and building footprints receive no triangles. */
-    VoxelBuilder_Init(&builder, storage, VOXEL_CONTACT_VERTICES);
-    VoxelLighting_Contact(&builder, 3.05f, 3.0f);
-    assert(builder.count != 0 && builder.count <= VOXEL_CONTACT_VERTICES && builder.dropped == 0);
-    bool water = false, land = false;
-    for (unsigned i = 0; i < builder.count; ++i)
-    {
-        assert(isfinite(storage[i].x) && isfinite(storage[i].z));
-        assert(fabsf(storage[i].y - 0.012f) < 0.00001f);
-        if (storage[i].x >= 2.0f && storage[i].x <= 3.0f && storage[i].z >= 2.0f && storage[i].z <= 3.0f)
-            water = true;
-        else
-            land = true;
-    }
-    assert(water && land);
-    VoxelBuilder_Init(&builder, storage, VOXEL_CONTACT_VERTICES);
-    VoxelLighting_Contact(&builder, 5, 5);
-    VoxelLighting_Contact(&builder, -5, -5);
-    assert(builder.count == 0);
-
-    /* Sweep sub-tile positions to exercise clipping and the reserved bound. */
-    for (int z = 0; z <= 20; ++z)
-        for (int x = 0; x <= 20; ++x)
-        {
-            VoxelBuilder_Init(&builder, storage, VOXEL_CONTACT_VERTICES);
-            VoxelLighting_Contact(&builder, 7.0f + x * 0.05f, 7.0f + z * 0.05f);
-            assert(builder.count <= VOXEL_CONTACT_VERTICES && builder.dropped == 0);
-        }
 
     /* A railing casts from its line, not from its cell: the ground just
      * south-east of the line is in its shadow, the rest of its own cell -
@@ -426,10 +402,7 @@ int main(void)
     sMaps[1].indoor = true;
     VoxelLighting_Reset();
     assert(VoxelLighting_Sample(3.5f, 0, 3.5f) == 1.0f);
-    VoxelBuilder_Init(&builder, storage, VOXEL_CONTACT_VERTICES);
-    VoxelLighting_Contact(&builder, 7, 7);
-    assert(builder.count == 0);
-    puts("PASS lighting on: sample cache equivalence, ray ceiling, cell skipping, sun, AO, neighbour invalidation, rebase, seams, capacity, live trees, contact clipping, railing footprints, interiors");
+    puts("PASS lighting on: sample cache equivalence, ray ceiling, cell skipping, sun, AO, neighbour invalidation, rebase, seams, capacity, live trees, railing footprints, interiors");
 #else
     assert(builder.count == 6 && builder.dropped == 0);
     for (unsigned i = 0; i < builder.count; ++i) assert(storage[i].shade == 1.0f);

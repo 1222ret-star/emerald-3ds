@@ -100,6 +100,24 @@ static void ReadEngineAbi(void)
     }
 }
 
+/* The ABI `staging.py devdata` writes into the loose data's marker
+ * ("abi %08x"); false when it has none (older tooling, or a forced loose
+ * backend without a marker). */
+static bool ReadLooseAbi(uint32_t *abi)
+{
+    FILE *file = fopen(CTR_DATA_LOOSE_MARKER, "r");
+    unsigned long value;
+    bool found;
+
+    if (file == NULL)
+        return false;
+    found = fscanf(file, " abi %lx", &value) == 1;
+    fclose(file);
+    if (found)
+        *abi = (uint32_t)value;
+    return found;
+}
+
 static const CtrPakEntry *FindEntry(const char *path)
 {
     return CtrPak_Find(sEntries, sEntryCount, path);
@@ -215,8 +233,22 @@ bool CtrData_Init(void)
         sBackend = CTR_DATA_ROMFS;
         break;
     case 2:
+    {
+        uint32_t looseAbi;
+
+        /* Only reported: the ABI covers every data file, so it also changes
+         * when one generator's output is copied over during development,
+         * which is what the loose backend is for. After an engine change a
+         * mismatch here explains the crash that follows. */
+        if (!ReadLooseAbi(&looseAbi) || sEngineAbi == 0)
+            CtrLog_Write(CTR_LOG_FS, "data: loose data ABI not checked (unknown)");
+        else if (looseAbi != sEngineAbi)
+            CtrLog_Write(CTR_LOG_ERROR, "data: loose data staged for ABI %08lX, engine is %08lX "
+                         "(make devdata again if the engine changed)",
+                         (unsigned long)looseAbi, (unsigned long)sEngineAbi);
         sBackend = CTR_DATA_LOOSE;
         break;
+    }
     default:
         if (!OpenPak())
             return false;
