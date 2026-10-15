@@ -93,14 +93,6 @@
 - The builder rejects a modified French (BPEF) ROM, by @andyst-dev (pull
   request #62).
 
-- People far off in the overworld no longer vanish while on screen, in 2D
-  and in the voxel view (most visible up the map, to the north). The game
-  has room for 16 map objects; the window they were spawned in reached past
-  the 2D screen and short of what the voxel camera sees, and the first come
-  kept the room. The window now follows the view (the voxel camera's pitch
-  and zoom included), and when it holds more people than there is room for,
-  those on screen and nearest come first, a far one giving its room up.
-
 - Local wireless play (experimental, expect bugs) between 3DS systems nearby, by @eathanpage (pull
   request #76): the Union Room, the Direct Corner's Trade Center and
   Colosseum, the Berry Blender, the wireless minigames, link contests and the
