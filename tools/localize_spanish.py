@@ -19,8 +19,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "builder"))
+sys.path.insert(0, str(ROOT / "tools"))
 from emerald3ds_builder.rom import load_rom
 from emerald3ds_builder.recipe import lz77_decompress
+from locale_lists import stage_id_lists
 
 
 def encoded(data: bytes) -> str:
@@ -188,6 +190,8 @@ def stage(tree: Path, rom_path: Path) -> None:
     writes[path] = text.encode()
     writes[tree / "build/spanish-reference.s"] = gzip.decompress(
         (ROOT / "tools/locales/spanish-symbols.s.gz").read_bytes())
+    # Easy Chat's move and Pokemon lists in this ROM's alphabetical order.
+    stage_id_lists(tree, source, ROOT / "tools/locales/spanish-symbols.s.gz", writes)
     # Validate all source and ROM references before modifying the staged tree.
     for path, data in writes.items():
         path.parent.mkdir(parents=True, exist_ok=True)

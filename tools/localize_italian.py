@@ -26,8 +26,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "builder"))
+sys.path.insert(0, str(ROOT / "tools"))
 from emerald3ds_builder.rom import load_rom
 from emerald3ds_builder.recipe import lz77_decompress
+from locale_lists import stage_id_lists
 
 ITALIAN_SHA1 = "1692db322400c3141c5de2db38469913ceb1f4d4"
 
@@ -180,6 +182,8 @@ def stage(tree: Path, rom_path: Path) -> None:
     else:
         print("note: tools/locales/italian-symbols.s.gz is not generated yet "
               "(build the localized tree once, then emit it from the .map)")
+    # Easy Chat's move and Pokemon lists in this ROM's alphabetical order.
+    stage_id_lists(tree, source, ROOT / "tools/locales/italian-symbols.s.gz", writes)
     # Validate all source and ROM references before modifying the staged tree.
     for path, data in writes.items():
         path.parent.mkdir(parents=True, exist_ok=True)
