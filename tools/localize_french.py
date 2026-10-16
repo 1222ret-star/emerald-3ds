@@ -9,7 +9,7 @@ graphics. Run after bootstrap applies the pinned source patches.
 
 Verification status: the manifest is generated and self-checked against BPEF
 (every text edit is re-encoded from the French decomp and byte-compared to the
-ROM; 99 graphics are located and their LZ77 streams decompressed and compared
+ROM; 101 graphics are located and their LZ77 streams decompressed and compared
 with the uncompressed assets; the 55 credits pages and the four Trainer Hill
 floor tables are derived from the ROM directly). New integrations still require
 their own hardware play testing.
@@ -27,8 +27,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "builder"))
+sys.path.insert(0, str(ROOT / "tools"))
 from emerald3ds_builder.rom import load_rom
 from emerald3ds_builder.recipe import lz77_decompress
+from locale_lists import stage_id_lists
 
 FRENCH_SHA1 = "ca666651374d89ca439007bed54d839eb7bd14d0"
 
@@ -182,6 +184,8 @@ def stage(tree: Path, rom_path: Path) -> None:
     else:
         print("note: tools/locales/french-symbols.s.gz is not generated yet "
               "(build the localized tree once, then emit it from the .map)")
+    # Easy Chat's move and Pokemon lists in this ROM's alphabetical order.
+    stage_id_lists(tree, source, ROOT / "tools/locales/french-symbols.s.gz", writes)
     # Validate all source and ROM references before modifying the staged tree.
     for path, data in writes.items():
         path.parent.mkdir(parents=True, exist_ok=True)

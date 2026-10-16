@@ -33,6 +33,11 @@
   piece of the last battle's info box in place of the Pokémon; a box is now
   forgotten once its sprites are gone.
 
+- Spanish, French and Italian: Easy Chat lists the moves (and, in French,
+  the Pokémon) in the language's own alphabetical order, read from your ROM,
+  instead of the English one; the French link trainer card and Pokéblock
+  menu use the French ROM's layout.
+
 - The camera: past a map's corner it shows the nearest map's border, and a
   small town no longer changes the zoom.
 
