@@ -423,6 +423,8 @@ static float sShiftZoom = 1.0f;
 static bool sStageRequested, sStage;
 /* A stage whose every layer fades into the margins (CtrVideo_SetStageFaded). */
 static bool sStageFadedRequested, sStageFaded;
+/* A stage magnified to fit the screen (CtrVideo_SetStageZoomed). */
+static bool sStageZoomedRequested, sStageZoomed;
 static bool sCentred;
 static unsigned sCentredRequested, sCentredScreen;
 static bool sBattleRequested, sBattle;
@@ -5865,8 +5867,10 @@ static void WindowSpan(unsigned limits, unsigned over, bool vertical, int *first
     if (sCentred && !vertical && *first > *last) *first -= 256;
     if (!gba) return;
     if ((limits & 255) > extent || (limits >> 8) > (limits & 255)) *last = (int)extent;
-    /* A transition is composed as the GBA picture, margins added after. */
-    if (*first >= *last || sTransitionCompose) return;
+    /* A transition is composed as the GBA picture, margins added after; a
+     * magnified stage is the GBA picture alone (RenderEye), its windows - the
+     * cutscenes' black bars, the descent's ray of light - the GBA's own. */
+    if (*first >= *last || sTransitionCompose || sStageZoomed) return;
     if (vertical && sBattle && !BattleCurtain())
     {
         if (*first == 0) *first = VIEW_TOP;
@@ -7581,6 +7585,8 @@ int CtrVideo_BottomPictureY(int y)
     return -1;
 }
 
+static void SurfaceFilter(GPU_TEXTURE_FILTER_PARAM filter);
+
 static void RenderEye(C3D_RenderTarget *target, uint32_t clear, float parallax)
 {
     const Tex3DS_SubTexture logical = {CTR_GAME_WIDTH, CTR_GAME_HEIGHT, 0, 1,
@@ -7632,6 +7638,47 @@ static void RenderEye(C3D_RenderTarget *target, uint32_t clear, float parallax)
         C2D_ViewReset();
         Blend(5, false, false);
         C2D_DrawImageAt((C2D_Image){&sSurface, &middle}, 0, 0, 0, NULL, 1, 1);
+    }
+    else if (sStageZoomed)
+    {
+        /* The GBA picture alone, out of the margins composed round it,
+         * magnified and centred, smooth as no whole number of pixels fits.
+         * A scene shown through window 0 alone with a bar at its top and its
+         * bottom (the charge) fills the width, the bars' outer lines cut off;
+         * one whose window is open at an edge (the chase, its top bar left
+         * where the art cuts Rayquaza's tail off: rayquaza_scene.c,
+         * DUO_LOWER) is the window's lines alone, covering the screen, a few
+         * columns at its sides cut off; one without is shown whole, fitted
+         * to the height. */
+        int y0 = 0, y1 = 160;
+        float scale = (float)CTR_GAME_HEIGHT / 160.0f;
+
+        if ((Reg(0) & 0xE000) == 0x2000 && !(Reg(0x4a) & 31))
+        {
+            unsigned v = Reg(0x44);
+            int top = (int)(v >> 8), bottom = (int)(v & 255);
+
+            if (bottom > 160 || top > bottom) bottom = 160;
+            scale = (float)CTR_GAME_WIDTH / 240.0f;
+            if ((top == 0) != (bottom == 160) && bottom - top >= 16)
+            {
+                y0 = top;
+                y1 = bottom;
+                scale = fmaxf(scale, (float)CTR_GAME_HEIGHT / (float)(y1 - y0));
+            }
+        }
+        {
+            const Tex3DS_SubTexture picture = {240, (u16)(y1 - y0),
+                CTR_STAGE_X / 512.0f, 1 - (CTR_STAGE_Y + y0) / 256.0f,
+                (CTR_STAGE_X + 240) / 512.0f, 1 - (CTR_STAGE_Y + y1) / 256.0f};
+
+            C2D_ViewReset();
+            Blend(5, false, false);
+            SurfaceFilter(GPU_LINEAR);
+            C2D_DrawImageAt((C2D_Image){&sSurface, &picture}, (CTR_GAME_WIDTH - 240 * scale) / 2,
+                            (CTR_GAME_HEIGHT - (y1 - y0) * scale) / 2, 0, NULL, scale, scale);
+            SurfaceFilter(GPU_NEAREST);
+        }
     }
     else
     {
@@ -10699,6 +10746,7 @@ void CtrVideo_Present(void)
      */
     sStage = sStageRequested;
     sStageFaded = sStage && sStageFadedRequested;
+    sStageZoomed = sStage && sStageZoomedRequested;
     sCentred = sCentredRequested != CTR_CENTRED_NONE && !sStage;
     sCentredScreen = sCentred ? sCentredRequested : CTR_CENTRED_NONE;
     sBattle = sBattleRequested && !sStage && !sCentred;
@@ -10994,6 +11042,8 @@ void CtrVideo_Present(void)
     bool planesMissing = stereo && !overworld && !sStage && !sBattle && !planes;
     if (planesMissing) stereo = false;
     if (bottom) stereo = planes = battleStereo = false;
+    /* A magnified stage is one flat picture (RenderEye). */
+    if (sStageZoomed) stereo = planes = false;
     if (stereo != sStereo) { gfxSet3D(stereo); sStereo = stereo; }
     /* The voxel world reports the slider in tenths, the 2D path its pixels. */
     sStats.stereo = !stereo ? 0 : voxelStereo ? (uint32_t)ceilf(slider * 10.0f)
@@ -11242,6 +11292,8 @@ const CtrVideoStats *CtrVideo_GetStats(void) { return &sStats; }
 
 void CtrVideo_SetStage(bool stage) { sStageRequested = stage; }
 void CtrVideo_SetStageFaded(bool faded) { sStageFadedRequested = faded; }
+void CtrVideo_SetStageZoomed(bool zoomed) { sStageZoomedRequested = zoomed; }
+bool CtrVideo_StageZoomed(void) { return sStageZoomedRequested; }
 void CtrVideo_SetCentred(unsigned screen) { sCentredRequested = screen < CTR_CENTRED_SCREENS ? screen : CTR_CENTRED_NONE; }
 void CtrVideo_SetBattle(bool battle) { sBattleRequested = battle; }
 void CtrVideo_SetTransition(bool transition) { sTransitionRequested = transition; }

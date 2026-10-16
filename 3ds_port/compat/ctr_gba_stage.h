@@ -14,7 +14,12 @@
 #ifndef CTR_GBA_STAGE_H
 #define CTR_GBA_STAGE_H
 
-#ifdef CTR_STAGE_FADED
+#if defined(CTR_STAGE_ZOOMED)
+/* The legendaries' cutscenes: magnified to fit the screen (3ds_video.c,
+ * RenderEye). */
+void CtrStageZoomed_SetVBlankCallback(void (*callback)(void));
+#define SetVBlankCallback CtrStageZoomed_SetVBlankCallback
+#elif defined(CTR_STAGE_FADED)
 /* The cable car: its scrolling layers too fade into the margins, like the
  * intro's still ones (3ds_video.c, DrawStageBg). */
 void CtrStageFaded_SetVBlankCallback(void (*callback)(void));

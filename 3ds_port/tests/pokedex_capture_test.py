@@ -290,7 +290,7 @@ static struct { bool active; } gPaletteFade;
 static struct { TaskFunc func; int16_t data[16]; bool active; } gTasks[16];
 static struct { struct { u8 priority, paletteNum; } oam; void (*callback)(void *); } gSprites[1];
 static IntrCallback gPokedexVBlankCB;
-static bool videoStage, videoStageFaded, videoBattle, videoTransition;
+static bool videoStage, videoStageFaded, videoStageZoomed, videoBattle, videoTransition;
 static unsigned videoCentred, newEntryPrints, freedWindows, cries, battleVBlanks;
 static u16 newKeys;
 static const u32 monPalette[1];
@@ -303,10 +303,12 @@ static void SpriteCB_SlideCaughtMonToCenter(void *sprite) { (void)sprite; }
 static void SetVBlankCallback(IntrCallback callback) { gMain.vblankCallback = callback; }
 static void CtrVideo_SetStage(bool active) { videoStage = active; }
 static void CtrVideo_SetStageFaded(bool faded) { videoStageFaded = faded; }
+static void CtrVideo_SetStageZoomed(bool zoomed) { videoStageZoomed = zoomed; }
 static void CB2_OverworldBasic(void) {}
 static void CtrVideo_SetCentred(unsigned screen) { videoCentred = screen; }
 static void CtrVideo_SetBattle(bool active) { videoBattle = active; }
 static void CtrVideo_SetTransition(bool active) { videoTransition = active; }
+static void CtrBattleHud_Warm(void) {}
 static u8 CreateTask(TaskFunc func, u8 priority) {
     (void)priority;
     for (u8 taskId = 0; taskId < 16; ++taskId) {
@@ -390,7 +392,7 @@ static void CheckCaught(void) {
     assert(CtrPokedex_IsCaughtMonPage());
     assert(gMain.inBattle);
     assert(videoCentred == CTR_CENTRED_POKEDEX_CAUGHT);
-    assert(!videoStage && !videoStageFaded && !videoBattle && !videoTransition);
+    assert(!videoStage && !videoStageFaded && !videoStageZoomed && !videoBattle && !videoTransition);
     assert(sCentred.count <= 1);
     if (sCentred.count) {
         assert(sCentred.callbacks[0] == VBlankCB_CaughtMonPage);

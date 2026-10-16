@@ -165,10 +165,14 @@ build/root/%.o: $(ROOT)/%.c Makefile full.mk
 # Screens staged as one whole GBA picture: GBA geometry, and their VBlank
 # callbacks reported to the bridge (compat/ctr_gba_stage.h). The cable car too:
 # built wide, its scene sat in a corner of the screen with black around it.
-CTR_GBA_STAGE_SRCS := intro title_screen credits intro_credits_graphics cable_car
+CTR_GBA_STAGE_SRCS := intro title_screen credits intro_credits_graphics cable_car rayquaza_scene
 CTR_GBA_STAGE_OBJS := $(patsubst %,build/root/src/%.o,$(CTR_GBA_STAGE_SRCS))
 # Its scenery scrolls, but its margins fade like the intro's.
 build/root/src/cable_car.o: FULLCFLAGS += -DCTR_STAGE_FADED
+# The legendaries' cutscenes (Groudon and Kyogre's fight, Rayquaza's arrival):
+# built wide, they were drawn off in a corner of the screen. Staged and shown
+# as large as the screen holds them, centred.
+build/root/src/rayquaza_scene.o: FULLCFLAGS += -DCTR_STAGE_ZOOMED
 $(CTR_GBA_STAGE_OBJS): FULLCFLAGS += -DCTR_GBA_STAGE -include $(abspath compat/ctr_gba_stage.h)
 $(CTR_GBA_STAGE_OBJS): compat/ctr_gba_stage.h $(ROOT)/include/gba/defines.h
 # GBA screens shown centred, margins only from layers that wrap on the GBA
