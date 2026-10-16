@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://i.postimg.cc/Sxn0bM2v/logo.png" alt="Emerald 3DS" width="480">
+  <img src="https://i.postimg.cc/XJRQB9cc/logo2.png" alt="Emerald 3DS" width="480">
 </p>
 
 <h1 align="center">Emerald 3DS</h1>
@@ -88,83 +88,85 @@ interface on the bottom screen replaces the START menu. Enable the optional
 | :--- | :--- |
 | **Native 3DS homebrew** | Runs directly on the console's ARM11 using libctru, Citro2D and Citro3D, without an emulator. |
 | **Two screens, one adventure** | The game on top, with a dedicated touch interface below in place of the START menu. |
-| **Optional voxel overworld** | Modelled buildings, trees, signposts and terrain relief, with adjustable camera angle and zoom. |
-| **Optional day/night lighting** | Eased morning, daylight, sunset and night outdoors in both 2D and voxel mode, an independently adjustable visual clock, and experimental moving solar shadows, warm glass on supported voxel buildings and original Rustboro lamps. |
+| **Four languages** | English, Spanish, French and Italian, each built from your own cartridge of that language: texts, graphics and credits come from your ROM. |
+| **Optional voxel overworld** | Modelled buildings, trees, signposts and terrain relief, with adjustable camera angle and zoom, and real stereoscopic 3D on a New 3DS. |
+| **HD battle interface** | Info boxes and text box drawn at the top screen's full resolution; optional 3D battles over the voxel world. |
+| **Follower Pokémon** | Optional: your lead Pokémon walks behind you with its HeartGold/SoulSilver overworld sprite and answers when you talk to it. |
+| **Optional day/night lighting** | Morning, daylight, sunset and night outdoors in 2D and voxel mode, lit windows and street lamps, and a clock that can run up to 120X. |
+| **Local wireless play** *(experimental)* | Union Room, trades, battles, Berry Blender, minigames and link contests between 3DS systems nearby. |
+| **Enhancements** | All optional: physical/special split, IVs and EVs on the summary, infinite TMs, running indoors, Repel prompt, visible wild Pokémon, faster speeds and more. |
 | **Built from your own cartridge** | The builder generates the game data locally from your own dump. No ROM content is distributed. |
 
 ### A new perspective on Hoenn
 
 The voxel overworld is **off by default**. Open **OPTION** on the bottom
 screen and enable **VOXEL 3D**, then adjust **3D ANGLE** and **3D ZOOM** to
-set your camera.
+set your camera. On a New 3DS, raise the 3D slider for a stereoscopic world;
+**3D WORLD** and **3D DEPTH** (OPTION → SETTINGS, second page) control it.
 
-> **3D mode is a work in progress.** Only some buildings, trees, signposts
-> and terrain relief are modelled today. Most of the map and nearly all
-> interiors are still shown flat. More areas will be modelled as the
-> project moves forward.
+> **3D mode is a work in progress.** Many towns and routes now have modelled
+> buildings and relief, but large parts of the map and most interiors are
+> still shown flat, and the Battle Frontier is only an early start. More
+> areas will be modelled as the project moves forward.
 
-## Getting started
-
-### Day/night and clock speed
+### Day and night
 
 In **OPTION → ENHANCEMENTS**, set **DAY / NIGHT** to **AUTO** to enable
 outdoor lighting inspired by HeartGold/SoulSilver. It is **OFF by default**;
-indoors, caves, underwater areas, menus and classic battles retain their
-original colours. Voxel battle scenery follows the outdoor lighting.
-
-The moonlight refinement adds a restrained blue ambience instead of only
-darkening the world. Night colours remain more readable, while supported voxel
-windows and street lamps retain their warm emission. It uses the same AUTO
-setting and eased transitions and has user-reported physical-console acceptance.
+indoors, caves, underwater areas, menus and classic battles keep their
+original colours. Nights have a soft moonlit blue, and supported voxel
+windows and street lamps glow warm.
 
 **CLOCK SPEED** selects **1X, 6X, 12X, 24X, 60X or 120X**. At 1X, lighting
-follows Emerald's local clock, including the time set at the start of the
-game. Higher speeds advance a separate feature clock: 60X completes a day
-in 24 real minutes and 120X in 12 minutes. Game speed does not accelerate
-this clock. The experimental follow-up also accelerates berry growth;
-daily events and the GBA save format remain original.
+follows Emerald's own clock; higher speeds advance a separate clock (60X is
+a day in 24 real minutes) and berries grow with it. Daily events and the
+GBA save format stay original, and time with the console asleep or off runs
+at 1X. Back up `emerald3ds.clock` and `emerald3ds.clock.bak` together with
+`emerald3ds.sav`.
 
-The settings survive a restart. Initially, the accelerated clock starts from
-the game's local time. Saving also preserves its accumulated offset and pending
-berry fractions in an auxiliary file. Changing speeds, returning to 1X or
-disabling the visual consumers keeps the offset instead of resetting it.
-Console sleep and offline time advance at 1X, not the selected accelerated rate.
+**WILD POKEMON → TIMED** changes some grass encounters by morning, day and
+night on routes 101–104, 110, 116–117, 119–121 and 123 (**ORIGINAL**, the
+default, keeps the original tables). **SHOW CLOCK → ON** adds the time to the
+bottom screen's map. More in the [day/night guide](docs/DAY_NIGHT.md).
 
-**WILD POKEMON → TIMED** optionally changes selected grass slots by morning,
-day and night on routes 101–104, 110, 116–117, 119–121 and 123.
-**ORIGINAL** is the default and preserves the original tables. Levels, rates,
-rare slots, water, fishing, caves and special encounters stay unchanged.
-Random encounters, Sweet Scent and new visible Pokémon share the schedule.
+### Follower Pokémon and local wireless
 
-**SHOW CLOCK → ON** adds `HH:MM`, the time band and rate below the location
-name on the bottom MAP screen. It is OFF by default. The clock, encounters
-and lighting work independently and share the selected clock speed.
-See the [day/night test guide](docs/DAY_NIGHT.md) before publishing a build.
-The [city-lighting extension](docs/CITY_LIGHTS.md) extends voxel emission to
-shared Pokémon Centers, marts, gyms, Rustboro apartment blocks and Devon,
-plus the original street lamps and small ground-light pools. It follows
-the same clock without a separate setting and has user-reported 3DS acceptance.
-Unmodelled buildings and classic 2D windows do not receive local emission.
-The follow-up adds [Dewford exterior models](docs/DEWFORD_3D.md) and
-isolates the [caught-mon Pokédex layout](docs/POKEDEX_CAPTURE.md) from voxel
-battles. Its window masks use a fixed startup pool; the user confirms lights
-and Dewford models on a physical 3DS, followed by acceptance of the gym-side sign
-and caught-mon Pokédex clipping/scroll corrections on October 12, 2026.
-The experimental follow-up also accelerates berry growth and preserves the
-clock offset and pending fractions alongside the save. Daily events remain
-on the original RTC; sleep/offline time advances at 1X. Back up the auxiliary
-`emerald3ds.clock` and `.clock.bak` files together with `emerald3ds.sav`.
+**OPTION → ENHANCEMENTS → FOLLOWER** makes your lead Pokémon walk behind you.
+Its sprites and messages come from HeartGold/SoulSilver: the builder
+downloads them while it builds (the only step that needs an Internet
+connection; without one, the game is built without them).
+
+**Local wireless play is experimental**: two to four consoles with the same
+version and language can meet in the Union Room and use the link features of
+Pokémon Centers, the Berry Blender, contests and the Battle Tower. Expect
+bugs, and back up your save before trying it.
+
+## Getting started
 
 ### Recommended: use the website
 
 1. Open **[emerald-3ds.com](https://emerald-3ds.com/)** and follow the instructions for your console or emulator.
-2. Select your **own clean, supported Pokémon Emerald ROM** in the web builder. Check the website for supported versions and languages.
+2. Select your **own clean, supported Pokémon Emerald ROM** in the web builder (see [supported cartridges](#supported-cartridges)).
 3. Generate and download the game files, then follow the website's installation guide to place them correctly.
 4. Complete the **sound setup** described in the guide before launching the game.
 
 **Everything is generated in your browser. You do not need to download or install the Windows builder, Python or this repository.** You only download the resulting game files. Your ROM is processed locally in your browser and is not uploaded.
 
 For a physical console, you need a **Nintendo 3DS / 2DS family console with custom firmware** and access to its SD card. Follow the website's instructions for the available launch methods.
+
+### Supported cartridges
+
+The game is built in the language of the cartridge you dump. Only clean,
+unmodified dumps are accepted:
+
+| Language | Cartridge | Game code |
+| :--- | :--- | :--- |
+| English | Pokémon Emerald Version (USA, Europe) | BPEE |
+| Spanish | Pokémon Edición Esmeralda (Spain) | BPES |
+| French | Pokémon Version Émeraude (France) | BPEF |
+| Italian | Pokémon Versione Smeraldo (Italy) | BPEI |
+
+Other languages (German, Japanese) and ROM hacks are not supported.
 
 ### Updating or having trouble?
 
@@ -184,7 +186,7 @@ For a physical console, you need a **Nintendo 3DS / 2DS family console with cust
 2. Run `Emerald3DS-Builder.exe`, choose your supported ROM and your SD card, then press **Install**.
 3. Follow the [installation guide](docs/INSTALLATION.md), including sound setup, and launch the game from the Homebrew Launcher.
 
-The builder writes `/3ds/emerald3ds/Emerald3DS.3dsx`, `Emerald3DS.smdh` and `emerald3ds.pak`. Your ROM is only read, not copied, uploaded or modified. The desktop builder needs no Internet connection.
+The builder writes `/3ds/emerald3ds/Emerald3DS.3dsx`, `Emerald3DS.smdh` and `emerald3ds.pak`. Your ROM is only read, not copied, uploaded or modified. The desktop builder needs an Internet connection only to download the optional follower sprites.
 
 ### Linux and macOS
 
