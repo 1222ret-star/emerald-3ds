@@ -155,6 +155,10 @@ void CtrVideo_SetStage(bool stage);
 /* Every layer of the stage fades into the margins, scrolling or not (the
  * cable car). */
 void CtrVideo_SetStageFaded(bool faded);
+/* A stage shown magnified, as large as the top screen holds what can be seen
+ * of it, centred (the legendaries' cutscenes; 3ds_video.c, RenderEye). */
+void CtrVideo_SetStageZoomed(bool zoomed);
+bool CtrVideo_StageZoomed(void);
 /* Whether a field move's banner is up: BG0 then wraps across the whole
  * screen instead of being the text band (src/field_effect.c). */
 void CtrVideo_SetFieldBanner(bool banner);

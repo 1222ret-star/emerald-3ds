@@ -2596,6 +2596,10 @@ static u8 CurrentMode(void)
         sInGame = TRUE;
     if (!sInGame || !gSaveBlock1Ptr || !gSaveBlock2Ptr)
         return MODE_OFF;
+    /* The legendaries' cutscenes have the top screen to themselves, the
+     * bottom one dark under them. */
+    if (CtrVideo_StageZoomed())
+        return MODE_OFF;
     if (CtrPokenav_IsOpen())
         return MODE_POKENAV;
     if (CtrPokedex_IsOpen())

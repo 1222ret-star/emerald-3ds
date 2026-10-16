@@ -33,6 +33,13 @@
   piece of the last battle's info box in place of the Pokémon; a box is now
   forgotten once its sprites are gone.
 
+- Evolution and the legendaries' cutscenes, by @eathanpage (pull request
+  #92): the evolution scene no longer shows a battle platform at the screen's
+  left edge. Groudon and Kyogre's fight and Rayquaza's arrival fill the top
+  screen, centred, instead of sitting in a corner of it; Rayquaza's descent
+  shows its ray of light again, the chase has no black bars, and the bottom
+  screen stays dark while they play.
+
 - Spanish, French and Italian: Easy Chat lists the moves (and, in French,
   the Pokémon) in the language's own alphabetical order, read from your ROM,
   instead of the English one; the French link trainer card and Pokéblock
