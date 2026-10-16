@@ -4267,7 +4267,7 @@ index 6997f0b40aa0c43fd576454fa588fc68502f9fad..e2ed0ef7f9aa45c5ea5541bfaa29a2a3
          StartFieldEffectForObjectEvent(FLDEFF_SHADOW, objectEvent);
      }
 diff --git a/src/evolution_scene.c b/src/evolution_scene.c
-index f09425720ab4ceb002215d1d01c27b5f3d365369..ad0288a4c552b611298b04b9fbc662e627253ed6 100644
+index f09425720ab4ceb002215d1d01c27b5f3d365369..32e5800a8c110aa2b0d251548cc6e7a5f7ccfb4d 100644
 --- a/src/evolution_scene.c
 +++ b/src/evolution_scene.c
 @@ -33,6 +33,9 @@
@@ -4280,7 +4280,48 @@ index f09425720ab4ceb002215d1d01c27b5f3d365369..ad0288a4c552b611298b04b9fbc662e6
  
  extern struct Evolution gEvolutionTable[][EVOS_PER_MON];
  
-@@ -738,14 +741,18 @@ static void Task_EvolutionScene(u8 taskId)
+@@ -206,6 +209,20 @@ void BeginEvolutionScene(struct Pokemon *mon, u16 postEvoSpecies, bool8 canStopE
+     SetMainCallback2(CB2_BeginEvolutionScene);
+ }
+ 
++#ifdef PLATFORM_3DS
++/*
++ * The scene shows the right half of the battle's background (BG3 at x 256):
++ * plain stripes. The 3DS's wider screen carries BG3 out past the GBA's edges,
++ * and on the left that wrapped into the half with the battle's platforms, an
++ * opponent's platform at the screen's left edge. That half is never seen on
++ * the GBA here: it is made the same stripes.
++ */
++static void CtrPlainBackgroundBothHalves(void)
++{
++    CpuCopy16((void *)BG_SCREEN_ADDR(27), (void *)BG_SCREEN_ADDR(26), BG_SCREEN_SIZE);
++}
++#endif
++
+ void EvolutionScene(struct Pokemon *mon, u16 postEvoSpecies, bool8 canStopEvo, u8 partyId)
+ {
+     u8 name[POKEMON_NAME_BUFFER_SIZE];
+@@ -241,6 +258,9 @@ void EvolutionScene(struct Pokemon *mon, u16 postEvoSpecies, bool8 canStopEvo, u
+ 
+     InitBattleBgsVideo();
+     LoadBattleTextboxAndBackground();
++#ifdef PLATFORM_3DS
++    CtrPlainBackgroundBothHalves();
++#endif
+     ResetSpriteData();
+     ScanlineEffect_Stop();
+     ResetTasks();
+@@ -347,6 +367,9 @@ static void CB2_EvolutionSceneLoadGraphics(void)
+ 
+     InitBattleBgsVideo();
+     LoadBattleTextboxAndBackground();
++#ifdef PLATFORM_3DS
++    CtrPlainBackgroundBothHalves();
++#endif
+     ResetSpriteData();
+     FreeAllSpritePalettes();
+     gReservedSpritePaletteCount = 4;
+@@ -738,14 +761,18 @@ static void Task_EvolutionScene(u8 taskId)
          }
          break;
      case EVOSTATE_RESTORE_SCREEN: // stop music, return screen to pre-fade state
@@ -4299,7 +4340,7 @@ index f09425720ab4ceb002215d1d01c27b5f3d365369..ad0288a4c552b611298b04b9fbc662e6
          break;
      case EVOSTATE_EVO_MON_ANIM:
          if (!gPaletteFade.active)
-@@ -755,8 +762,10 @@ static void Task_EvolutionScene(u8 taskId)
+@@ -755,8 +782,10 @@ static void Task_EvolutionScene(u8 taskId)
          }
          break;
      case EVOSTATE_SET_MON_EVOLVED:
@@ -4310,7 +4351,7 @@ index f09425720ab4ceb002215d1d01c27b5f3d365369..ad0288a4c552b611298b04b9fbc662e6
              StringExpandPlaceholders(gStringVar4, gText_CongratsPkmnEvolved);
              BattlePutTextOnWindow(gStringVar4, B_WIN_MSG);
              PlayBGM(MUS_EVOLVED);
-@@ -767,7 +776,9 @@ static void Task_EvolutionScene(u8 taskId)
+@@ -767,7 +796,9 @@ static void Task_EvolutionScene(u8 taskId)
              GetSetPokedexFlag(SpeciesToNationalPokedexNum(gTasks[taskId].tPostEvoSpecies), FLAG_SET_SEEN);
              GetSetPokedexFlag(SpeciesToNationalPokedexNum(gTasks[taskId].tPostEvoSpecies), FLAG_SET_CAUGHT);
              IncrementGameStat(GAME_STAT_EVOLVED_POKEMON);
@@ -4320,7 +4361,7 @@ index f09425720ab4ceb002215d1d01c27b5f3d365369..ad0288a4c552b611298b04b9fbc662e6
          break;
      case EVOSTATE_TRY_LEARN_MOVE:
          if (!IsTextPrinterActive(0))
-@@ -1581,12 +1592,21 @@ static void Task_AnimateBg(u8 taskId)
+@@ -1581,12 +1612,21 @@ static void Task_AnimateBg(u8 taskId)
  static void InitMovingBgPalette(u16 *palette)
  {
      s32 i, j;
@@ -15094,6 +15135,7 @@ index c799daf57bbf54738ee761676271ed9a7955c709..4b368f5c175ff8ec3b80bd677051e704
 +}
 +#endif
 diff --git a/src/rayquaza_scene.c b/src/rayquaza_scene.c
+index d97d4631353cc1974d16279deef161099395755f..937e869f05c6fe234667f3a0df104c5fc4c233a0 100644
 --- a/src/rayquaza_scene.c
 +++ b/src/rayquaza_scene.c
 @@ -4,6 +4,7 @@
@@ -15104,7 +15146,7 @@ diff --git a/src/rayquaza_scene.c b/src/rayquaza_scene.c
  #include "malloc.h"
  #include "palette.h"
  #include "scanline_effect.h"
-@@ -1284,7 +1285,7 @@
+@@ -1284,7 +1285,7 @@ static const struct BgTemplate sBgTemplates_ChasesAway[] =
      }
  };
  
@@ -15113,7 +15155,7 @@ diff --git a/src/rayquaza_scene.c b/src/rayquaza_scene.c
  {
      sRayScene = AllocZeroed(sizeof(*sRayScene));
      sRayScene->animId = animId;
-@@ -2275,6 +2276,38 @@
+@@ -2275,6 +2276,38 @@ static void HBlankCB_RayDescends(void)
      }
  }
  
@@ -15152,7 +15194,7 @@ diff --git a/src/rayquaza_scene.c b/src/rayquaza_scene.c
  #define tState data[0]
  #define tTimer data[1]
  
-@@ -2300,6 +2333,10 @@
+@@ -2300,6 +2333,10 @@ static void Task_RayDescendsAnim(u8 taskId)
  static void Task_HandleRayDescends(u8 taskId)
  {
      s16 *data = gTasks[taskId].data;
@@ -15163,7 +15205,7 @@ diff --git a/src/rayquaza_scene.c b/src/rayquaza_scene.c
      switch (tState)
      {
      case 0:
-@@ -2695,6 +2732,26 @@
+@@ -2695,6 +2732,26 @@ static void Task_RayChasesAwayAnim(u8 taskId)
      InitChasesAwaySceneBgs();
      LoadChasesAwaySceneGfx();
      SetWindowsHideVertBorders();
@@ -15190,7 +15232,7 @@ diff --git a/src/rayquaza_scene.c b/src/rayquaza_scene.c
      ClearGpuRegBits(REG_OFFSET_DISPCNT, DISPCNT_BG2_ON);
      SetGpuReg(REG_OFFSET_BLDCNT, BLDCNT_TGT1_BG0 | BLDCNT_TGT2_BG1 | BLDCNT_EFFECT_BLEND);
      SetGpuReg(REG_OFFSET_BLDALPHA, BLDALPHA_BLEND(9, 14));
-@@ -2843,22 +2900,34 @@
+@@ -2843,22 +2900,34 @@ static void Task_RayChasesAwayEnd(u8 taskId)
  #define tKyogreSpriteId   taskData[4]
  #define tRayquazaSpriteId taskData[5]
  
@@ -15230,7 +15272,7 @@ diff --git a/src/rayquaza_scene.c b/src/rayquaza_scene.c
      gSprites[tKyogreSpriteId].oam.priority = 1;
      gSprites[spriteData[0]].oam.priority = 1;
      gSprites[spriteData[1]].oam.priority = 1;
-@@ -2990,9 +3059,9 @@
+@@ -2990,9 +3059,9 @@ static void SpriteCB_ChasesAway_KyogreLeave(struct Sprite *sprite)
      }
      if (sprite->data[5] == 128)
      {
@@ -15242,7 +15284,7 @@ diff --git a/src/rayquaza_scene.c b/src/rayquaza_scene.c
          gSprites[sprite->data[7]].oam.priority = 1;
          gSprites[sprite->data[7]].hFlip = 1;
          sprite->data[5]++;
-@@ -3025,9 +3094,27 @@
+@@ -3025,9 +3094,27 @@ static void SpriteCB_ChasesAway_KyogreLeave(struct Sprite *sprite)
  #define sTailFloatDelay  data[4]
  #define sTailFloatPeak   data[5]
  
