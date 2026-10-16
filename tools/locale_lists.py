@@ -37,6 +37,9 @@ def stage_id_lists(tree: Path, source: bytes, symbols_path: Path, writes: dict) 
     symbols = gzip.decompress(symbols_path.read_bytes()).decode()
     for name, relative, constants in GROUPS:
         path = tree / relative
+        if not path.is_file():
+            # A partial tree (the staging tests' synthetic ones): nothing to order.
+            continue
         text = path.read_text(encoding="utf-8")
         names = re.findall(r"^[ \t]*((?:MOVE|SPECIES)_\w+),[ \t]*$", text, re.M)
         defines = dict(re.findall(r"^#define\s+((?:MOVE|SPECIES)_\w+)\s+(\d+)\b",

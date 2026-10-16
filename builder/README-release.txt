@@ -1,13 +1,14 @@
 Emerald 3DS
-===============================
+===========
 
 A native Nintendo 3DS port of Pokémon Emerald that uses both screens.
 
 This download does NOT contain the game. You need your own dump of your own
-Pokémon Emerald (USA, Europe) or Pokémon Esmeralda (Spain) cartridge; the game
-is built in that ROM's language. The builder reads that ROM on this
-computer and generates the game's data pack from it. The ROM is not uploaded,
-copied or modified, and no Internet connection is needed.
+Pokémon Emerald (USA, Europe), Pokémon Esmeralda (Spain), Pokémon Émeraude
+(France) or Pokémon Smeraldo (Italy) cartridge; the game is built in that
+ROM's language. The builder reads that ROM on this computer and generates the
+game's data pack from it. The ROM is not uploaded, copied or modified. An
+Internet connection is only used to download the optional follower sprites.
 
 What you need
 -------------

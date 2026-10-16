@@ -6,9 +6,12 @@ Download the ZIP attached to the release, not the automatically generated
 source-code archives.
 
 The download **does not contain the game**. You need a clean dump of your own
-Pokémon Emerald (USA, Europe) cartridge. The builder generates the game's data
-pack locally from your ROM; it does not upload, copy or modify the ROM, and it
-needs no Internet connection.
+Pokémon Emerald (USA, Europe), Pokémon Esmeralda (Spain), Pokémon Émeraude
+(France) or Pokémon Smeraldo (Italy) cartridge; the game is built in its
+language. The builder generates the game's data pack locally from your ROM; it
+does not upload, copy or modify the ROM, and it needs an Internet connection
+only to download the optional follower sprites (without one, the game is built
+without them).
 
 ## What you need
 
