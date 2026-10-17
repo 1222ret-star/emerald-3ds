@@ -14,13 +14,13 @@ Collaborators must follow the protected workflow below. Prefer PRs for traceabil
 The contribution flow is:
 
 ```text
-working branch -> PR -> integration -> PR -> dev -> PR -> main
+working branch -> direct merge OR optional PR -> integration -> PR -> dev -> PR -> main
 ```
 
 | Branch | Purpose | Who integrates changes? |
 | --- | --- | --- |
 | Your working branch | One feature, fix or documentation task. Start from the latest `integration`. | Collaborators with Write can create branches and push normally. |
-| `integration` | Shared area for reviewing and testing contributions together; it may contain unfinished or unstable work. | Collaborators with Write can review, approve and merge other collaborators' PRs. One approval is required. |
+| `integration` | Shared development and testing area; it may be unstable. | Collaborators with Write can merge their branches directly, merge their own PRs and handle PRs from other collaborators or external contributors. No PR or approving review is mandatory. |
 | `dev` | Administrator-controlled staging area for changes selected from `integration`. | Repository administrators only. |
 | `main` | Latest released version. | Repository administrators only, normally through a PR from `dev`. |
 
@@ -43,7 +43,8 @@ git switch -c feature/alex-touch-menu origin/integration
 
 If you already have a clone, start at `git fetch origin` with a clean working
 tree (commit or stash any work first). Always create a separate branch for each
-task; do not work directly on `integration`, `dev` or `main`.
+task. Develop on your working branch, then integrate it into `integration`.
+Only administrators can update `dev` or `main`.
 
 Make your changes, run the relevant checks described below and in
 [the development guide](docs/DEVELOPMENT.md), then commit only the intended files:
@@ -59,7 +60,30 @@ Replace `path/to/changed-file` and the commit message with your actual changes.
 Check `git diff --cached` before committing. Never include the files listed under
 [Never commit](#never-commit).
 
-### 2. Open a PR into integration
+### 2. Merge your branch directly into integration
+
+A collaborator with Write can integrate tested work without a PR, another
+person's approval or administrator involvement. From a clean working tree:
+
+```sh
+git fetch origin
+git switch -c integrate/alex-touch-menu origin/integration
+git merge --no-ff feature/alex-touch-menu
+# Resolve conflicts, stage the resolved files and finish the merge if needed.
+# Run the relevant checks on the merged result before pushing.
+git push origin HEAD:integration
+```
+
+Use your actual working branch and a new name for the local merge branch. If
+someone updates `integration` before your push, run `git fetch origin`, then
+`git merge origin/integration` on your merge branch, resolve conflicts, test again
+and retry `git push origin HEAD:integration`. Never force push over others' work.
+
+Allowing direct Git merges also allows ordinary fast-forward pushes and direct
+commits to `integration`: GitHub cannot distinguish those normal updates with
+these rules. Prefer working branches and test the merged result before pushing.
+
+### 3. Open an optional PR into integration
 
 On GitHub, choose **Pull requests -> New pull request** and explicitly select:
 
@@ -69,26 +93,28 @@ On GitHub, choose **Pull requests -> New pull request** and explicitly select:
 
 Explain the problem, the change, how you tested it and any known limitations.
 Link the related issue when there is one. Use a draft PR while the work is not
-ready. Request review from another collaborator with Write access.
+ready. Review by another collaborator is welcome but optional.
 
-A PR into `integration` requires **one approving review** from someone with Write
-access or higher. You cannot approve your own PR. Read-only users' reviews do not
-satisfy this requirement. New commits dismiss previous approvals, so request a
-fresh review after updating the PR.
+A PR into `integration` requires **zero approving reviews**. Collaborators with
+Write may merge their own PRs without another person's approval. GitHub does not
+let authors approve their own PRs, but approval is not needed to merge here.
+Adding commits does not introduce a mandatory approval or reapproval step.
 
-### 3. Review and merge another collaborator's PR
+### 4. Review and merge PRs from collaborators or external contributors
 
 A collaborator with Write access can open **Files changed**, inspect and test the
 change, then use **Review changes -> Approve** (or **Request changes** when fixes
-are needed). Once the required approval is present, conflicts are resolved and
-GitHub permits merging, a collaborator with Write can use **Merge pull request**,
+are needed). Approval is optional. Once conflicts are resolved and GitHub permits
+merging, a collaborator with Write can use **Merge pull request**,
 **Squash and merge** or **Rebase and merge**, as appropriate for the change.
 
-Approval and merge are separate actions; the author may merge their own PR after
-another eligible collaborator approves it. Follow the repository's testing
-requirements even when GitHub does not enforce a check as a merge requirement.
+This includes PRs from forks submitted by people without Write access. Those
+contributors cannot push or merge into this repository themselves; a collaborator
+with Write or an administrator reviews and integrates their changes. The author
+of a PR who has Write may also merge their own PR without approval. Follow the
+repository's testing requirements even when checks are not enforced by GitHub.
 
-### 4. Keep your branch up to date and resolve conflicts
+### 5. Keep your branch up to date and resolve conflicts
 
 Run these commands **on your own working branch**, with a clean working tree:
 
@@ -101,13 +127,13 @@ git merge origin/integration
 git push
 ```
 
-Run the relevant checks again and request a fresh approval. If you cannot resolve
+Run the relevant checks again; no mandatory reapproval is required. If you cannot resolve
 the conflicts safely, ask another collaborator for help. Do not force push to a
 shared integration or release branch. After a PR is merged, you may delete your
 own working branch if it is no longer needed; start the next task on a fresh
 branch from the latest `origin/integration`.
 
-### 5. Promotion to dev and main is an administrator decision
+### 6. Promotion to dev and main is an administrator decision
 
 Merging into `integration` does **not** automatically publish a release or move
 changes into `dev`. The administrator reviews and selects what is ready, normally
@@ -122,8 +148,9 @@ reviewed preparation branch.
 
 ### Protections and common blockers
 
-- `integration`: PR required, one approval, stale approvals dismissed for
-  collaborators. Only `Repository admin` has **Always allow** bypass.
+- `integration`: collaborators with Write may merge directly, push normally,
+  merge their own optional PRs and handle third-party PRs. No PR or approval is
+  required. Force pushes and deletion remain blocked for collaborators.
 - `main` and `dev`: updates and merges restricted to administrators. PRs are
   configured with zero mandatory approvals. Only `Repository admin` has
   **Always allow** bypass, so administrators can also make an exceptional direct
@@ -136,28 +163,31 @@ reviewed preparation branch.
 - The rulesets do not enforce the source branch of a PR or automatically promote
   changes. Selecting the correct base and following this flow are team practices.
 
-If GitHub rejects a push, check whether you targeted a protected branch and push
-your work to your own branch instead. If merge is blocked, check the PR base,
-required approval, new commits since approval and merge conflicts. A collaborator
+If GitHub rejects a normal push to `integration`, check your Write access and
+whether the remote branch advanced; fetch and merge its latest changes before
+retrying. Do not force push. If a PR merge is blocked, check its base, conflicts
+and any other GitHub merge blockers. A collaborator
 being unable to merge into `dev` or `main` is expected; ask the administrator to
 review the promotion rather than changing protections.
 
 Contributors without Write access should fork the repository, create a working
 branch from this repository's `integration` and open a cross-repository PR with
 **base: integration**. Push to your fork, not to this repository. A collaborator
-with Write or an administrator must review and merge it under the same rules.
+with Write or an administrator handles its review and merge; no approving review
+is mandatory.
 
 The current rules can be inspected on the repository's
 [Rules page](https://github.com/ZallaxDev/pokeemerald-3Ds-dualscreen/rules).
 
 ## Guía rápida en español
 
-**Flujo:** rama de trabajo -> PR -> `integration` -> PR -> `dev` -> PR -> `main`.
+**Flujo:** rama de trabajo -> merge directo o PR opcional -> `integration` -> PR
+administrativa -> `dev` -> PR administrativa -> `main`.
 
 | Rama | Cómo utilizarla |
 | --- | --- |
 | Tu rama de trabajo | Créala desde `origin/integration` para una sola tarea. Puedes hacer commits y push normalmente si tienes Write. |
-| `integration` | Destino de los PR de colaboradores. Sirve para revisar y probar cambios juntos; puede ser inestable. |
+| `integration` | Con Write puedes fusionar directamente tus ramas sin PR ni aprobación ajena, fusionar tus propios PR y gestionar PR de terceros sin permisos. Sirve para probar cambios juntos y puede ser inestable. |
 | `dev` | El administrador decide qué cambios de `integration` pasan aquí. Los colaboradores no pueden hacer push ni merge. |
 | `main` | Última versión publicada. Solo el administrador integra los cambios, normalmente desde `dev`. |
 
@@ -166,34 +196,39 @@ The current rules can be inspected on the repository's
 2. Realiza los cambios, comprueba lo que vas a incluir y ejecuta las pruebas
    correspondientes. Añade los archivos concretos, haz commit y publica tu rama
    con `git push -u origin fix/tu-nombre-descripcion`.
-3. Abre un PR seleccionando **base: integration** y **compare: tu rama**.
-   GitHub puede sugerir `main`: cambia el destino antes de crear el PR.
-4. Explica qué has cambiado y cómo lo has probado. Pide revisión a otra persona
-   con Write o a un administrador. Nadie puede aprobar su propio PR.
-5. Hace falta **una aprobación válida**. Si añades nuevos commits, las
-   aprobaciones anteriores se descartan y debes pedir otra revisión.
-6. Una vez aprobado y sin conflictos ni otros bloqueos, una persona con Write
-   puede hacer merge, incluido el autor del PR. Para revisar un PR ajeno, usa
-   **Files changed -> Review changes -> Approve**.
+3. Puedes integrar sin PR usando los comandos de **Merge your branch directly
+   into integration**: prepara el merge desde la última `origin/integration`,
+   resuelve los conflictos, prueba el resultado y haz push a `integration`.
+4. Si prefieres un PR, selecciona **base: integration / compare: tu rama**.
+   Puedes hacer merge tú mismo: no necesitas aprobación ajena ni del administrador.
+5. Puedes revisar y fusionar PR de terceros sin Write. Esas personas deben usar
+   un fork y no pueden hacer push ni merge en este repositorio por sí mismas.
+6. Para revisar un PR ajeno puedes usar **Files changed -> Review changes ->
+   Approve**, pero esa aprobación es opcional. Añadir commits no exige otra
+   aprobación. Resuelve conflictos y prueba los cambios antes de hacer merge.
 7. El administrador decide cuándo promover `integration -> dev -> main`;
    integrar tu PR en `integration` no publica automáticamente una versión.
 
 Para actualizar tu trabajo, ejecuta `git fetch origin` y
 `git merge origin/integration` **desde tu propia rama**. Resuelve los conflictos,
-haz commit si corresponde, vuelve a probar y ejecuta `git push`. Después pide
-una nueva aprobación. Los ejemplos de comandos completos están arriba.
+haz commit si corresponde, vuelve a probar y ejecuta `git push`. No hace falta
+pedir aprobación. Los ejemplos de comandos completos están arriba.
 
-Los colaboradores no pueden hacer push directo a `integration`, ni force push
-o eliminar `integration`, `dev` o `main`. **Solo `Repository admin` tiene bypass
+Los colaboradores con Write pueden hacer merge directo y push normal a
+`integration`, pero no force push ni eliminar `integration`, `dev` o `main`.
+Permitir merges locales también permite commits directos a `integration`;
+GitHub no distingue esas actualizaciones mediante estas reglas. Usa ramas de
+trabajo y prueba el resultado antes de integrar. **Solo `Repository admin` tiene bypass
 Always allow en los tres Rulesets**: el administrador conserva permiso para push
 directo, merge sin PR ni aprobación, force push y eliminación en las tres ramas.
-Se recomienda usar PR para mantener la trazabilidad. Las ramas personales no
+Puedes usar PR opcionales para mantener la trazabilidad. Las ramas personales no
 tienen estas restricciones, aunque cualquier colaborador con Write puede
 técnicamente escribir en ellas: coordínate con su autor.
 
 Si no tienes Write, utiliza un fork y envía el PR al repositorio original con
-**base: integration**. Si un PR está bloqueado, revisa su destino, la aprobación
-y los conflictos; para promover a `dev` o `main`, contacta con el administrador.
+**base: integration**. Un colaborador con Write puede encargarse de revisarlo y
+fusionarlo. Si está bloqueado, revisa su destino y los conflictos; para promover
+a `dev` o `main`, contacta con el administrador.
 
 ## Never commit
 
@@ -220,8 +255,8 @@ pinned commit, one file per topic; see the headers of the existing patches).
 
 - C99/GNU99. Native units build with `-Werror`.
 - Match the surrounding code; comments explain *why*.
-- Open contribution pull requests against `integration`; administrator-only
-  promotion PRs move selected changes to `dev` and then `main`.
+- Integrate contributions into `integration` with a direct merge or optional PR;
+  only administrators promote selected changes to `dev` and then `main`.
 - Run `make verify` and the builder's tests before opening a pull request.
 - Test on hardware when you touch rendering, memory, timing or file I/O, and
   say what you tested in the pull request.
