@@ -6,6 +6,12 @@ Thanks for your interest. A few rules keep this repository publishable.
 
 [Guía rápida en español](#guía-rápida-en-español).
 
+**For collaborators with Write:** You can merge your own branches directly into
+`integration`, without a PR or anyone else's approval. You can also merge your
+own PRs and review and merge PRs submitted by people without repository Write
+access. All these merges target `integration`. Only administrators can push or
+merge into `dev` and `main`.
+
 **Administrator exception:** All three protected branches grant **Always allow**
 bypass exclusively to **Repository admin**. Administrators can push or merge
 without a PR or approval, and can bypass force-push and deletion restrictions.
@@ -181,6 +187,12 @@ The current rules can be inspected on the repository's
 
 ## Guía rápida en español
 
+**Si tienes Write, puedes fusionar tus propias ramas directamente a `integration`
+sin PR ni aprobación de otra persona. También puedes fusionar tus propios PR y
+revisar y fusionar a `integration` los PR de terceros que no tienen permisos.**
+No necesitas intervención del administrador para estas integraciones. Solo el
+administrador puede hacer push o merge a `dev` y `main`.
+
 **Flujo:** rama de trabajo -> merge directo o PR opcional -> `integration` -> PR
 administrativa -> `dev` -> PR administrativa -> `main`.
 
@@ -201,8 +213,9 @@ administrativa -> `dev` -> PR administrativa -> `main`.
    resuelve los conflictos, prueba el resultado y haz push a `integration`.
 4. Si prefieres un PR, selecciona **base: integration / compare: tu rama**.
    Puedes hacer merge tú mismo: no necesitas aprobación ajena ni del administrador.
-5. Puedes revisar y fusionar PR de terceros sin Write. Esas personas deben usar
-   un fork y no pueden hacer push ni merge en este repositorio por sí mismas.
+5. Si tienes Write, puedes revisar y fusionar a `integration` los PR cuyos autores
+   no tienen Write. Esos autores deben usar un fork y no pueden hacer push ni
+   merge en este repositorio por sí mismos.
 6. Para revisar un PR ajeno puedes usar **Files changed -> Review changes ->
    Approve**, pero esa aprobación es opcional. Añadir commits no exige otra
    aprobación. Resuelve conflictos y prueba los cambios antes de hacer merge.
