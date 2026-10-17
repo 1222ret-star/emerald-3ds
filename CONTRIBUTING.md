@@ -6,6 +6,11 @@ Thanks for your interest. A few rules keep this repository publishable.
 
 [Guía rápida en español](#guía-rápida-en-español).
 
+**Administrator exception:** All three protected branches grant **Always allow**
+bypass exclusively to **Repository admin**. Administrators can push or merge
+without a PR or approval, and can bypass force-push and deletion restrictions.
+Collaborators must follow the protected workflow below. Prefer PRs for traceability.
+
 The contribution flow is:
 
 ```text
@@ -117,14 +122,15 @@ reviewed preparation branch.
 
 ### Protections and common blockers
 
-- `integration`: PR required, one approval, stale approvals dismissed, no bypass.
-  Direct pushes are blocked for administrators as well as collaborators.
+- `integration`: PR required, one approval, stale approvals dismissed for
+  collaborators. Only `Repository admin` has **Always allow** bypass.
 - `main` and `dev`: updates and merges restricted to administrators. PRs are
   configured with zero mandatory approvals. Only `Repository admin` has
   **Always allow** bypass, so administrators can also make an exceptional direct
   push or merge without approval; PRs remain the normal documented workflow.
-- All three branches block **force pushes and deletion**, including for
-  administrators, through a separate ruleset with no bypass actors.
+- All three branches block **force pushes and deletion** for collaborators.
+  The separate protection ruleset also grants **Always allow** bypass exclusively
+  to `Repository admin`, so administrators retain full control.
 - Working branches have no additional ruleset restrictions: normal branch
   creation and pushes remain available to collaborators with Write.
 - The rulesets do not enforce the source branch of a PR or automatically promote
@@ -177,11 +183,13 @@ Para actualizar tu trabajo, ejecuta `git fetch origin` y
 haz commit si corresponde, vuelve a probar y ejecuta `git push`. Después pide
 una nueva aprobación. Los ejemplos de comandos completos están arriba.
 
-No se permiten pushes directos a `integration`, ni force pushes o eliminación
-de `integration`, `dev` o `main`. El bypass administrativo de `dev` y `main`
-permite excepciones al PR, pero no al bloqueo independiente de force push y
-eliminación. Las ramas personales no tienen estas restricciones, aunque cualquier
-colaborador con Write puede técnicamente escribir en ellas: coordínate con su autor.
+Los colaboradores no pueden hacer push directo a `integration`, ni force push
+o eliminar `integration`, `dev` o `main`. **Solo `Repository admin` tiene bypass
+Always allow en los tres Rulesets**: el administrador conserva permiso para push
+directo, merge sin PR ni aprobación, force push y eliminación en las tres ramas.
+Se recomienda usar PR para mantener la trazabilidad. Las ramas personales no
+tienen estas restricciones, aunque cualquier colaborador con Write puede
+técnicamente escribir en ellas: coordínate con su autor.
 
 Si no tienes Write, utiliza un fork y envía el PR al repositorio original con
 **base: integration**. Si un PR está bloqueado, revisa su destino, la aprobación
