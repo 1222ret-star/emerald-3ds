@@ -9,7 +9,9 @@
 Every Buildings and Terrain cell of the tables is one item (a `—` cell is
 not counted: nothing to do there). Each item scores by its mark:
 
-    ⬜ 0    🟦 0.5    🟧 0.75    🟩 0.9    ✅ 1
+    ⬜ 0    🟦 0.5    🟨 0.6    🟧 0.75    ✅ 1
+
+(🟨 is modelled but not reviewed, so below 🟧, whose faults are known.)
 
 "Progress" is the mean score; "complete" is the share of items at ✅. Rows
 count as they are listed, so a layout shared by N maps counts N times, as
@@ -31,7 +33,7 @@ import sys
 from collections import OrderedDict
 from pathlib import Path
 
-SCORES = OrderedDict([("⬜", 0.0), ("🟦", 0.5), ("🟧", 0.75), ("🟩", 0.9), ("✅", 1.0)])
+SCORES = OrderedDict([("⬜", 0.0), ("🟦", 0.5), ("🟨", 0.6), ("🟧", 0.75), ("✅", 1.0)])
 NONE = "—"
 START, END = "<!-- voxel-progress:start -->", "<!-- voxel-progress:end -->"
 
