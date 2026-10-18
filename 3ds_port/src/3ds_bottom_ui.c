@@ -2607,13 +2607,16 @@ static u8 CurrentMode(void)
     /* Before the boxes: the bag can be opened from them, whole screen too. */
     if (gMain.callback2 == CB2_BagMenuRun && gBagMenu)
         return MODE_BAG_MENU;
-    /* A summary opened from the boxes is on the whole screen too. */
-    if (CtrStorage_IsOpen() || CtrVideo_BottomWhole())
-        return MODE_STORAGE;
+    /* Before the boxes too: the party menu from a battle, a contest or a
+     * facility has the whole screen (CTR_CENTRED_PARTY_WHOLE), and as
+     * MODE_STORAGE its taps would go to the summary. */
     if (FuncIsActiveTask(Task_HandleChooseMonInput))
         sPartyMenuCallback = gMain.callback2;
     if (sPartyMenuCallback && gMain.callback2 == sPartyMenuCallback)
         return MODE_PARTY_MENU;
+    /* A summary opened from the boxes is on the whole screen too. */
+    if (CtrStorage_IsOpen() || CtrVideo_BottomWhole())
+        return MODE_STORAGE;
     if (gMain.inBattle)
     {
         if (gMain.callback2 == BattleMainCB2 && !gPaletteFade.active)
