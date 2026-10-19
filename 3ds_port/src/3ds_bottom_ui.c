@@ -1099,6 +1099,7 @@ typedef struct
     const u16 *glyphs;
     const u8 *widths;
     u8 height, lineHeight;
+    u8 hangulFace, hangulWidth; /* Korean build: the Hangul face and cell width */
 } Font;
 
 static Font sSmall, sNormal;
@@ -1119,10 +1120,36 @@ static void ResolveFonts(void)
     sSmall.widths = gFontSmallLatinGlyphWidths;
     sSmall.height = 13;
     sSmall.lineHeight = 13;
+    sSmall.hangulFace = HANGUL_FACE_SMALL;
+    sSmall.hangulWidth = 8;
     sNormal.glyphs = ResolveFontBase(gFontNormalLatinGlyphs);
     sNormal.widths = gFontNormalLatinGlyphWidths;
     sNormal.height = 16;
     sNormal.lineHeight = 16;
+    sNormal.hangulFace = HANGUL_FACE_NORMAL;
+    sNormal.hangulWidth = 11;
+}
+
+/* Glyph ids from 0x3700 up are whole Hangul codes (Korean build). */
+#define HANGUL_GLYPH 0x3700
+
+static inline int GlyphWidth(const Font *font, u16 glyph)
+{
+    if (glyph >= HANGUL_GLYPH)
+        return font->hangulWidth;
+    return font->widths[glyph];
+}
+
+/* The glyph's 2bpp tiles, or NULL when the Hangul font is missing. */
+static inline const u16 *GlyphBase(const Font *font, u16 glyph)
+{
+    if (glyph >= HANGUL_GLYPH)
+    {
+        const u16 *hangul = Port_HangulGlyphs(font->hangulFace);
+
+        return hangul ? hangul + (glyph - HANGUL_GLYPH) * 0x20 : NULL;
+    }
+    return font->glyphs + glyph * 0x20;
 }
 
 /* Walks a game string: returns the next glyph, 0xFFFE for a line break or
@@ -1158,6 +1185,11 @@ static u16 NextGlyph(const u8 **str)
                 return 0xFFFF;
             return 0x100 | *(*str)++;
         default:
+#if GAME_LANGUAGE == LANGUAGE_KOREAN
+            /* A Hangul lead byte and its trail byte make one glyph. */
+            if ((u8)(c - 0x37) <= 0x41 - 0x37 && **str != EOS)
+                return (c << 8) | *(*str)++;
+#endif
             return c;
         }
     }
@@ -1177,22 +1209,22 @@ static int StrWidth(const Font *font, const u8 *str)
             width = 0;
             continue;
         }
-        width += font->widths[g];
+        width += GlyphWidth(font, g);
     }
     return width > best ? width : best;
 }
 
 static int DrawGlyph(const Font *font, u16 glyph, int x, int y, u16 fg, u16 shadow)
 {
-    const u16 *base = font->glyphs + glyph * 0x20;
-    int width = font->widths[glyph];
+    const u16 *base = GlyphBase(font, glyph);
+    int width = GlyphWidth(font, glyph);
     int sx = x + sOX;
     bool8 inside = sx >= sClipX0 && y >= sClipY0 && sx + width <= sClipX1 && y + font->height <= sClipY1;
     u16 *origin = sDst + (inside ? sx * H + (H - 1 - y) : 0);
 
     /* Wholly outside the clip: nothing to write. */
-    if (sx >= sClipX1 || y >= sClipY1 || sx + width <= sClipX0 || y + font->height <= sClipY0)
-        return font->widths[glyph];
+    if (base == NULL || sx >= sClipX1 || y >= sClipY1 || sx + width <= sClipX0 || y + font->height <= sClipY0)
+        return GlyphWidth(font, glyph);
     if (width > 16)
         width = 16;
     for (int row = 0; row < font->height; ++row)
@@ -1218,7 +1250,7 @@ static int DrawGlyph(const Font *font, u16 glyph, int x, int y, u16 fg, u16 shad
             }
         }
     }
-    return font->widths[glyph];
+    return GlyphWidth(font, glyph);
 }
 
 /* Draws a game string; returns the x where it ended. */
@@ -1254,7 +1286,8 @@ static void DrawStrCentered(const Font *font, const u8 *str, int cx, int y, u16 
 /* Whether a glyph paints (glyph or shadow) the pixel at column px of row. */
 static bool8 GlyphInk(const Font *font, u16 glyph, int px, int row)
 {
-    u16 bits = font->glyphs[glyph * 0x20 + (row >= 8 ? 0x10 : 0) + (px / 8) * 8 + (row & 7)];
+    const u16 *base = GlyphBase(font, glyph);
+    u16 bits = base ? base[(row >= 8 ? 0x10 : 0) + (px / 8) * 8 + (row & 7)] : 0;
     u8 byte = (px & 7) < 4 ? bits >> 8 : bits & 0xFF;
     u8 v = (byte >> (6 - 2 * (px & 3))) & 3;
 
@@ -1271,7 +1304,7 @@ static void InkColumns(const Font *font, const u8 *str, int *x0, int *x1)
     *x1 = 0;
     for (u16 g; (g = NextGlyph(&str)) != 0xFFFF && g != 0xFFFE;)
     {
-        int width = font->widths[g] > 16 ? 16 : font->widths[g];
+        int width = GlyphWidth(font, g) > 16 ? 16 : GlyphWidth(font, g);
 
         for (int px = 0; px < width; ++px)
             for (int row = 0; row < font->height; ++row)
@@ -1281,7 +1314,7 @@ static void InkColumns(const Font *font, const u8 *str, int *x0, int *x1)
                     if (x + px + 1 > *x1) *x1 = x + px + 1;
                     break;
                 }
-        x += font->widths[g];
+        x += GlyphWidth(font, g);
     }
 }
 
@@ -1615,8 +1648,14 @@ static void StepSmoothJob(void)
                 sJob.glyphX = x;
                 return;
             }
-            const u16 *base = font->glyphs + g * 0x20;
-            int width = font->widths[g] > 16 ? 16 : font->widths[g];
+            const u16 *base = GlyphBase(font, g);
+            int width = GlyphWidth(font, g) > 16 ? 16 : GlyphWidth(font, g);
+
+            if (base == NULL)
+            {
+                x += GlyphWidth(font, g);
+                continue;
+            }
 
             for (int row = 0; row < font->height; ++row)
                 for (int px = 0; px < width; ++px)
@@ -1629,7 +1668,7 @@ static void StepSmoothJob(void)
                     for (int dy = 0; dy < k; ++dy)
                         memset(glyph + ((SMOOTH_PAD + row) * k + dy) * w4 + (x + px) * k, 255, k);
                 }
-            x += font->widths[g];
+            x += GlyphWidth(font, g);
         }
         /* The outline: blurred and hardened, and never thinner than a dilation. */
         memcpy(ring, glyph, (size_t)w4 * h4);
@@ -1816,8 +1855,14 @@ static void DrawFlatStr(const Font *font, const u8 *str, int x, int y, int k, Rg
 
         for (u16 g; (g = NextGlyph(&s)) != 0xFFFF && g != 0xFFFE;)
         {
-            const u16 *base = font->glyphs + g * 0x20;
-            int width = font->widths[g] > 16 ? 16 : font->widths[g];
+            const u16 *base = GlyphBase(font, g);
+            int width = GlyphWidth(font, g) > 16 ? 16 : GlyphWidth(font, g);
+
+            if (base == NULL)
+            {
+                gx += GlyphWidth(font, g);
+                continue;
+            }
 
             for (int row = 0; row < font->height; ++row)
                 for (int px = 0; px < width; ++px)
@@ -1834,7 +1879,7 @@ static void DrawFlatStr(const Font *font, const u8 *str, int x, int y, int k, Rg
                     else
                         FillRect(x0, y0, x1 - x0, y1 - y0, colours[1]);
                 }
-            gx += font->widths[g];
+            gx += GlyphWidth(font, g);
         }
     }
 }
@@ -3283,7 +3328,7 @@ enum { PLATE_NORMAL, PLATE_CHOSEN, PLATE_PRESSED, PLATE_OFF };
 static void DrawColumnButton(const ViewState *s, int i, u8 state)
 {
     const u8 *labels[SCR_COUNT] = {
-        Ascii(CTR_TEXT("MAP", "MAPA", "CARTE", "MAPPA")), gText_MenuPokemon, gText_MenuBag, s->name, gText_MenuPokedex, gText_MenuPokenav,
+        Ascii(CTR_TEXT("MAP", "MAPA", "CARTE", "MAPPA", "지도")), gText_MenuPokemon, gText_MenuBag, s->name, gText_MenuPokedex, gText_MenuPokenav,
         gText_MenuSave, gText_MenuOption,
     };
     const Icon *icon = &sRes.column[i];
@@ -3594,8 +3639,8 @@ static void DrawRegionName(const ViewState *s)
 static void DrawMapClock(const ViewState *s)
 {
     static const char *const phases[] = {
-        CTR_TEXT("MORNING", "MAÑANA", "MATIN", "MATTINA"), CTR_TEXT("DAY", "DÍA", "JOUR", "GIORNO"),
-        CTR_TEXT("EVENING", "TARDE", "SOIR", "SERA"), CTR_TEXT("NIGHT", "NOCHE", "NUIT", "NOTTE")
+        CTR_TEXT("MORNING", "MAÑANA", "MATIN", "MATTINA", "아침"), CTR_TEXT("DAY", "DÍA", "JOUR", "GIORNO", "낮"),
+        CTR_TEXT("EVENING", "TARDE", "SOIR", "SERA", "저녁"), CTR_TEXT("NIGHT", "NOCHE", "NUIT", "NOTTE", "밤")
     };
     char time[8], speed[8];
     int top = CLOCK_Y, bottom = CLOCK_Y + CLOCK_H;
@@ -4066,7 +4111,7 @@ static void DrawSave(const ViewState *s)
 
     DrawSaveFile(s);
     if (s->saveStep == SAVE_DONE)
-        DrawSavePlate(64, 112, Ascii(CTR_TEXT("OK", "VALE", "OK", "OK")), TRUE, s->pressed == HIT_OK, TRUE, HIT_OK);
+        DrawSavePlate(64, 112, Ascii(CTR_TEXT("OK", "VALE", "OK", "OK", "확인")), TRUE, s->pressed == HIT_OK, TRUE, HIT_OK);
     else
     {
         DrawSavePlate(10, 106, gText_Yes, TRUE, s->pressed == HIT_YES, s->canSave, HIT_YES);
@@ -4316,7 +4361,7 @@ static void DrawExtraCell(const ViewState *s, int row, const CtrExtra *extra, bo
 /* The tabs: SETTINGS (the options) and each page that has extras. */
 static void DrawOptionTabs(const ViewState *s)
 {
-    static const char *const names[CTR_EXTRAS_PAGES] = {CTR_TEXT("SETTINGS", "AJUSTES", "RÉGLAGES", "OPZIONI"), CTR_TEXT("ENHANCEMENTS", "MEJORAS", "AMÉLIOR.", "MIGLIORIE"), CTR_TEXT("CHEATS", "TRUCOS", "ASTUCES", "TRUCCHI")};
+    static const char *const names[CTR_EXTRAS_PAGES] = {CTR_TEXT("SETTINGS", "AJUSTES", "RÉGLAGES", "OPZIONI", "설정"), CTR_TEXT("ENHANCEMENTS", "MEJORAS", "AMÉLIOR.", "MIGLIORIE", "추가 기능"), CTR_TEXT("CHEATS", "TRUCOS", "ASTUCES", "TRUCCHI", "치트")};
     u8 pages[CTR_EXTRAS_PAGES], count = 0;
     int capTop, capBottom, cap, widths[CTR_EXTRAS_PAGES], need = 0, x = 4;
     bool8 fit = TRUE;
@@ -4377,9 +4422,9 @@ static void OptionNames(const u8 *names[OPTION_ROWS])
 {
     const u8 *const table[OPTION_ROWS] = {
         gText_TextSpeed, gText_BattleScene, gText_BattleStyle, gText_Sound,
-        gText_ButtonMode, gText_Frame, Ascii(CTR_TEXT("SHOW FPS", "MOSTRAR FPS", "AFFICH. FPS", "MOSTRA FPS")), Ascii("VOXEL 3D"),
-        Ascii(CTR_TEXT("3D ANGLE", "ÁNGULO 3D", "ANGLE 3D", "ANGOLO 3D")), Ascii(CTR_TEXT("3D ZOOM", "ZOOM 3D", "ZOOM 3D", "ZOOM 3D")),
-        Ascii(CTR_TEXT("3D BLUR", "DESENFOQUE 3D", "FLOU 3D", "SFOC. 3D")), Ascii(CTR_TEXT("3D BATTLE", "COMBATE 3D", "COMBAT 3D", "BATTAGLIA 3D"))};
+        gText_ButtonMode, gText_Frame, Ascii(CTR_TEXT("SHOW FPS", "MOSTRAR FPS", "AFFICH. FPS", "MOSTRA FPS", "FPS 표시")), Ascii("VOXEL 3D"),
+        Ascii(CTR_TEXT("3D ANGLE", "ÁNGULO 3D", "ANGLE 3D", "ANGOLO 3D", "3D 각도")), Ascii(CTR_TEXT("3D ZOOM", "ZOOM 3D", "ZOOM 3D", "ZOOM 3D", "3D 줌")),
+        Ascii(CTR_TEXT("3D BLUR", "DESENFOQUE 3D", "FLOU 3D", "SFOC. 3D", "3D 흐림")), Ascii(CTR_TEXT("3D BATTLE", "COMBATE 3D", "COMBAT 3D", "BATTAGLIA 3D", "3D 배틀"))};
 
     memcpy(names, table, sizeof(table));
 }
@@ -4707,6 +4752,7 @@ static const u8 *ActionLabel(bool8 safari, int index)
     static u8 out[4][24];
     const u8 *src = safari ? gText_SafariZoneMenu : gText_BattleMenu;
     int part = 0, n = 0;
+    bool8 inWord = FALSE;
 
     while (*src != EOS && part <= index)
     {
@@ -4714,10 +4760,14 @@ static const u8 *ActionLabel(bool8 safari, int index)
         {
             if (*src++ == EXT_CTRL_CODE_BEGIN && *src != EOS)
                 src += GetExtCtrlCodeLength(*src);
-            if (n || part < index)
+            /* Only a word ends a part: a control code in front of the first
+             * one (the Korean menu sets its colours there) is no separator. */
+            if (inWord)
                 ++part;
+            inWord = FALSE;
             continue;
         }
+        inWord = TRUE;
         if (part == index && n < (int)sizeof(out[0]) - 1)
             out[index][n++] = *src;
         ++src;
@@ -5073,11 +5123,11 @@ static void MoveBody(const ViewState *s, int i)
     PpColours(s->moves4.currentPp[i], s->moves4.maxPp[i], &fg, &sh);
     DrawStrRight(&sNormal, text, x + MOVE_W - 12, oy + 32, fg, sh);
     {
-        int tx = DrawStr(&sSmall, Ascii(CTR_TEXT("POW ", "POT. ", "PUISS. ", "POT. ")), x + 12, oy + 56, TXT_DARK, TXT_LIGHT);
+        int tx = DrawStr(&sSmall, Ascii(CTR_TEXT("POW ", "POT. ", "PUISS. ", "POT. ", "위력 ")), x + 12, oy + 56, TXT_DARK, TXT_LIGHT);
 
         DrawStr(&sSmall, data->power > 1 ? Number(data->power, 3, STR_CONV_MODE_LEFT_ALIGN) : Ascii("---"), tx,
                 oy + 56, TXT_DARK, TXT_LIGHT);
-        StringCopy(text, Ascii(CTR_TEXT("ACC ", "PREC. ", "PRÉC. ", "PREC. ")));
+        StringCopy(text, Ascii(CTR_TEXT("ACC ", "PREC. ", "PRÉC. ", "PREC. ", "명중 ")));
         StringAppend(text, data->accuracy ? Number(data->accuracy, 3, STR_CONV_MODE_LEFT_ALIGN) : Ascii("---"));
         DrawStrRight(&sSmall, text, x + MOVE_W - 12, oy + 56, TXT_DARK, TXT_LIGHT);
     }

@@ -594,8 +594,13 @@ static const u16 *FontGlyphs(void)
     return resolved;
 }
 
+/* Glyph ids from 0x3700 up are whole Hangul codes (Korean build). */
+#define HANGUL_GLYPH 0x3700
+
 static int GlyphWidth(unsigned glyph)
 {
+    if (glyph >= HANGUL_GLYPH)
+        return 11;
     return gFontNormalLatinGlyphWidths[glyph];
 }
 
@@ -632,6 +637,11 @@ static int NextGlyph(const uint8_t **str)
         case CHAR_PROMPT_CLEAR:
             break;
         default:
+#if GAME_LANGUAGE == LANGUAGE_KOREAN
+            /* A Hangul lead byte and its trail byte make one glyph. */
+            if ((uint8_t)(c - 0x37) <= 0x41 - 0x37 && **str != EOS)
+                return (c << 8) | *(*str)++;
+#endif
             return c;
         }
     }
@@ -650,6 +660,15 @@ static int DrawGlyph(uint32_t *pic, const u16 *glyphs, unsigned glyph, int x, in
 {
     const u16 *base = glyphs + glyph * 0x20;
     int width = GlyphWidth(glyph);
+
+    if (glyph >= HANGUL_GLYPH)
+    {
+        const u16 *hangul = Port_HangulGlyphs(HANGUL_FACE_NORMAL);
+
+        if (hangul == NULL)
+            return width;
+        base = hangul + (glyph - HANGUL_GLYPH) * 0x20;
+    }
 
     for (int row = 0; row < 16; ++row)
         for (int half = 0; half < 2 && half * 8 < width; ++half)

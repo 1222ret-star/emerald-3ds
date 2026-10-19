@@ -1,0 +1,304 @@
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Korean particles
+Applies after 0057-korean-text.patch; apply with tools/bootstrap.py.
+
+Korean build only (GAME_LANGUAGE == LANGUAGE_KOREAN). The Korean texts follow a
+placeholder with a particle placeholder whose form depends on whether the text
+before it ends on a final consonant: 은/는, 이/가, 을/를, (으)로, (이)다, 과/와,
+아/야 are 0x10-0x16 in field texts and 0x35-0x3B in battle texts. Field
+placeholders 0x0E/0x0F are forms of address by the player's gender.
+include/hangul.h holds the final-consonant tables of KS X 1001. Korean also puts
+"wild" and "foe" before a Pokemon's name, as English does.
+
+diff --git a/src/battle_message.c b/src/battle_message.c
+index 64d7f69..f69ae28 100644
+--- a/src/battle_message.c
++++ b/src/battle_message.c
+@@ -28,6 +28,16 @@
+ #include "constants/trainers.h"
+ #include "constants/trainer_hill.h"
+ #include "constants/weather.h"
++
++#if defined(PORT_BRIDGE) && GAME_LANGUAGE == LANGUAGE_KOREAN
++#include "hangul.h"
++// Korean battle texts follow a placeholder with a particle placeholder
++// (0x35-0x3B), whose form depends on the text written before it.
++#define B_TXT_PARTICLE_FIRST 0x35
++#define KOREAN_PARTICLES 1
++#else
++#define KOREAN_PARTICLES 0
++#endif
+ #ifdef PORT_BRIDGE
+ #include "port_platform.h"
+ #endif
+@@ -2300,7 +2310,8 @@ static const u8 *TryGetStatusString(u8 *src)
+     return NULL;
+ }
+ 
+-#if GAME_LANGUAGE == LANGUAGE_ENGLISH
++// Korean puts "wild" and "foe" before the name, like English.
++#if GAME_LANGUAGE == LANGUAGE_ENGLISH || GAME_LANGUAGE == LANGUAGE_KOREAN
+ #define HANDLE_NICKNAME_STRING_CASE(battler, monIndex)                \
+     if (GetBattlerSide(battler) != B_SIDE_PLAYER)                     \
+     {                                                                   \
+@@ -2387,6 +2398,13 @@ u32 BattleStringExpandPlaceholders(const u8 *src, u8 *dst)
+         if (*src == PLACEHOLDER_BEGIN)
+         {
+             src++;
++#if KOREAN_PARTICLES
++            if (*src >= B_TXT_PARTICLE_FIRST && *src < B_TXT_PARTICLE_FIRST + HANGUL_PARTICLE_COUNT)
++                toCpy = HangulParticle(*src - B_TXT_PARTICLE_FIRST,
++                                       dstID >= 2 ? HangulFinalBefore(&dst[dstID]) : HANGUL_FINAL_NONE);
++            else if (toCpy == NULL)
++                toCpy = gText_EmptyString2;
++#endif
+             switch (*src)
+             {
+             case B_TXT_BUFF1:
+diff --git a/src/string_util.c b/src/string_util.c
+index ecf0f57..57502e8 100644
+--- a/src/string_util.c
++++ b/src/string_util.c
+@@ -12,6 +12,16 @@ EWRAM_DATA u8 gStringVar3[0x100] = {0};
+ EWRAM_DATA u8 gStringVar4[0x3E8] = {0};
+ EWRAM_DATA static u8 sUnknownStringVar[16] = {0};
+ 
++#if defined(PORT_BRIDGE) && GAME_LANGUAGE == LANGUAGE_KOREAN
++#include "hangul.h"
++#define KOREAN_PARTICLES 1
++// Whether the text written before the latest placeholder ended on a final
++// consonant: the particle placeholders that follow pick their form from it.
++EWRAM_DATA static u8 sHangulFinal = 0;
++#else
++#define KOREAN_PARTICLES 0
++#endif
++
+ static const u8 sDigits[] = __("0123456789ABCDEF");
+ 
+ #ifdef PORT_BRIDGE
+@@ -384,6 +394,9 @@ u8 *StringExpandPlaceholders(u8 *dest, const u8 *src)
+         {
+         case PLACEHOLDER_BEGIN:
+             placeholderId = *src++;
++#if KOREAN_PARTICLES
++            sHangulFinal = HangulFinalBefore(dest);
++#endif
+             expandedString = GetExpandedPlaceholder(placeholderId);
+             dest = StringExpandPlaceholders(dest, expandedString);
+             break;
+@@ -540,6 +553,59 @@ static const u8 *ExpandPlaceholder_Groudon(void)
+     return gText_ExpandedPlaceholder_Groudon;
+ }
+ 
++#if KOREAN_PARTICLES
++// Placeholders 0x0E-0x16 of the Korean text: forms of address by the
++// player's gender, and particles by the final consonant before them.
++static const u8 sText_Hyeong[] = {0x40, 0x67, EOS};             // 형
++static const u8 sText_Nuna[] = {0x38, 0x92, 0x38, 0x35, EOS};   // 누나
++static const u8 sText_Oppa[] = {0x3D, 0x08, 0x3B, 0x4C, EOS};   // 오빠
++static const u8 sText_Eonni[] = {0x3C, 0xC9, 0x38, 0xB8, EOS};  // 언니
++static const u8 *ExpandPlaceholder_OlderBrotherOrSister(void)
++{
++    return gSaveBlock2Ptr->playerGender == MALE ? sText_Hyeong : sText_Nuna;
++}
++
++static const u8 *ExpandPlaceholder_OlderBrotherOrSisterOfGirl(void)
++{
++    return gSaveBlock2Ptr->playerGender == MALE ? sText_Oppa : sText_Eonni;
++}
++
++static const u8 *ExpandPlaceholder_ParticleTopic(void)
++{
++    return HangulParticle(HANGUL_PARTICLE_TOPIC, sHangulFinal);
++}
++
++static const u8 *ExpandPlaceholder_ParticleSubject(void)
++{
++    return HangulParticle(HANGUL_PARTICLE_SUBJECT, sHangulFinal);
++}
++
++static const u8 *ExpandPlaceholder_ParticleObject(void)
++{
++    return HangulParticle(HANGUL_PARTICLE_OBJECT, sHangulFinal);
++}
++
++static const u8 *ExpandPlaceholder_ParticleDirection(void)
++{
++    return HangulParticle(HANGUL_PARTICLE_DIRECTION, sHangulFinal);
++}
++
++static const u8 *ExpandPlaceholder_ParticleCopula(void)
++{
++    return HangulParticle(HANGUL_PARTICLE_COPULA, sHangulFinal);
++}
++
++static const u8 *ExpandPlaceholder_ParticleAnd(void)
++{
++    return HangulParticle(HANGUL_PARTICLE_AND, sHangulFinal);
++}
++
++static const u8 *ExpandPlaceholder_ParticleVocative(void)
++{
++    return HangulParticle(HANGUL_PARTICLE_VOCATIVE, sHangulFinal);
++}
++#endif
++
+ const u8 *GetExpandedPlaceholder(u32 id)
+ {
+     typedef const u8 *(*ExpandPlaceholderFunc)(void);
+@@ -560,6 +626,17 @@ const u8 *GetExpandedPlaceholder(u32 id)
+         [PLACEHOLDER_ID_MAXIE]        = ExpandPlaceholder_Maxie,
+         [PLACEHOLDER_ID_KYOGRE]       = ExpandPlaceholder_Kyogre,
+         [PLACEHOLDER_ID_GROUDON]      = ExpandPlaceholder_Groudon,
++#if KOREAN_PARTICLES
++        [0x0E] = ExpandPlaceholder_OlderBrotherOrSister,
++        [0x0F] = ExpandPlaceholder_OlderBrotherOrSisterOfGirl,
++        [0x10] = ExpandPlaceholder_ParticleTopic,
++        [0x11] = ExpandPlaceholder_ParticleSubject,
++        [0x12] = ExpandPlaceholder_ParticleObject,
++        [0x13] = ExpandPlaceholder_ParticleDirection,
++        [0x14] = ExpandPlaceholder_ParticleCopula,
++        [0x15] = ExpandPlaceholder_ParticleAnd,
++        [0x16] = ExpandPlaceholder_ParticleVocative,
++#endif
+     };
+ 
+     if (id >= ARRAY_COUNT(funcs))
+diff --git a/include/hangul.h b/include/hangul.h
+new file mode 100644
+index 0000000..a06a14f
+--- /dev/null
++++ b/include/hangul.h
+@@ -0,0 +1,133 @@
++#ifndef GUARD_HANGUL_H
++#define GUARD_HANGUL_H
++
++// Korean build: Hangul text is two bytes, a lead byte 0x37-0x41 and a trail
++// byte 0x01-0xEF. Leads 0x37-0x40 hold the 2350 syllables of KS X 1001 in
++// order (index = (lead - 0x37) * 239 + trail - 1); lead 0x41 holds jamo.
++
++#define HANGUL_LEAD_FIRST 0x37
++#define HANGUL_LEAD_LAST  0x41
++#define HANGUL_SYLLABLES  2350
++
++static inline bool8 IsHangulLead(u8 c)
++{
++    return (u8)(c - HANGUL_LEAD_FIRST) <= HANGUL_LEAD_LAST - HANGUL_LEAD_FIRST;
++}
++
++// Syllables with a final consonant (batchim), and with the final ㄹ, by
++// KS X 1001 index. Derived from the character set, not from any game data.
++static const u8 sHangulHasFinal[] = {
++    0xFE, 0xFF, 0xFB, 0xF7, 0xED, 0xFF, 0xF7, 0xF7, 0x7F, 0xEF, 0xFF, 0xFD,
++    0xFB, 0xFE, 0xDE, 0xFF, 0xFB, 0xFA, 0xED, 0x3F, 0xFF, 0xF7, 0x7F, 0xFF,
++    0xF6, 0xDF, 0xF7, 0xF9, 0xDF, 0xDB, 0xE7, 0xBF, 0xFB, 0x3D, 0xFF, 0xF7,
++    0xF7, 0xFF, 0xEF, 0xDF, 0xF7, 0xFF, 0xFE, 0xFD, 0xEB, 0x7F, 0xF7, 0xFD,
++    0xFE, 0xE5, 0x7D, 0xFF, 0xB7, 0xFF, 0xFE, 0xFF, 0xFB, 0xE7, 0xFF, 0xFB,
++    0xF7, 0xFA, 0x7F, 0xEB, 0xF3, 0x57, 0xDF, 0xFB, 0xCF, 0xFF, 0xFE, 0xFB,
++    0xF7, 0x7F, 0xFF, 0x7A, 0xE9, 0xE7, 0xFB, 0x7B, 0xBF, 0xFF, 0xFB, 0xF7,
++    0xFE, 0xFB, 0xFB, 0x77, 0x7F, 0xF7, 0xFB, 0xFE, 0xF2, 0xFB, 0xFB, 0xDF,
++    0xDF, 0xFF, 0xEF, 0xBF, 0xFB, 0xDF, 0xBF, 0x3F, 0xFF, 0xDD, 0xF7, 0xFE,
++    0xBF, 0x67, 0xEF, 0xFD, 0xBF, 0xFF, 0xDF, 0x7F, 0xF7, 0xBF, 0xFF, 0xFE,
++    0xF5, 0x6F, 0x7D, 0xFD, 0xBF, 0x79, 0xDF, 0xEF, 0x7F, 0xFF, 0xFB, 0xB7,
++    0x7F, 0xFD, 0x7E, 0xFA, 0xF5, 0xFE, 0xFE, 0xBF, 0x7F, 0x7F, 0xEF, 0xFF,
++    0xF7, 0xEF, 0xDF, 0xFD, 0xEF, 0x7D, 0xDF, 0xDF, 0xFF, 0xF5, 0xFD, 0x7D,
++    0xFF, 0xFE, 0xF7, 0xDF, 0xBF, 0x7F, 0xF7, 0xEF, 0x7A, 0x7E, 0xD9, 0xDF,
++    0xFD, 0xFD, 0xFF, 0xFD, 0xFB, 0xDF, 0xFD, 0xFF, 0xFB, 0xFB, 0xFF, 0xFB,
++    0xFD, 0xBF, 0x7F, 0xDF, 0xDF, 0xDF, 0x7F, 0x7F, 0xBF, 0xBF, 0x7F, 0xFF,
++    0xBF, 0xF7, 0xFF, 0xFD, 0xBF, 0x7F, 0xBF, 0xFD, 0xF7, 0xF7, 0xF3, 0x7F,
++    0xDF, 0x7E, 0xF7, 0x5F, 0x7E, 0xF7, 0xF7, 0xFF, 0xFE, 0xF7, 0x6F, 0xFF,
++    0xEA, 0xDF, 0xF5, 0xFD, 0xC6, 0xFD, 0xFB, 0xDF, 0xBF, 0xEF, 0xDF, 0xDF,
++    0xF6, 0x77, 0xBF, 0xFE, 0xEA, 0xF7, 0xFE, 0xFE, 0xFB, 0xFB, 0xB7, 0xFF,
++    0xFE, 0xFE, 0xFC, 0x7D, 0xE5, 0xEF, 0xFA, 0xBB, 0xDF, 0xDF, 0x7F, 0xFF,
++    0xFA, 0xEF, 0x6F, 0xFD, 0xCB, 0xF9, 0xCB, 0xEF, 0xFD, 0x7B, 0x7F, 0xFF,
++    0xF7, 0xAF, 0x7F, 0x7F, 0xBF, 0xFB, 0xAB, 0xF7, 0x5F, 0xEF, 0xFB, 0xFE,
++    0xFE, 0xFD, 0xEB, 0xDF, 0xDF, 0xBF, 0xFB, 0xEF, 0x7B, 0xBF, 0xF7, 0xF7,
++    0xDE, 0xDF, 0xEF, 0xFF, 0xBE, 0x3F,
++};
++
++static const u8 sHangulFinalRieul[] = {
++    0x10, 0x00, 0x20, 0x40, 0x08, 0x01, 0x20, 0x00, 0x01, 0x02, 0x01, 0x10,
++    0x10, 0x08, 0x04, 0x02, 0x20, 0x20, 0x08, 0x01, 0x08, 0x80, 0x00, 0x04,
++    0x84, 0x00, 0x20, 0x40, 0x80, 0x80, 0x80, 0x80, 0x20, 0x08, 0x08, 0x40,
++    0x00, 0x01, 0x80, 0x00, 0x81, 0x00, 0x08, 0x10, 0x80, 0x00, 0x22, 0x10,
++    0x10, 0x40, 0x08, 0x04, 0x20, 0x02, 0x20, 0x00, 0x20, 0x00, 0x02, 0x20,
++    0x20, 0x40, 0x00, 0x42, 0x40, 0x00, 0x82, 0x40, 0x00, 0x02, 0x08, 0x20,
++    0x40, 0x00, 0x04, 0x20, 0x81, 0x40, 0x40, 0x10, 0x02, 0x02, 0x20, 0x00,
++    0x08, 0x20, 0x20, 0x00, 0x04, 0x20, 0x10, 0x08, 0x40, 0x20, 0x20, 0x00,
++    0x01, 0x04, 0x80, 0x00, 0x21, 0x00, 0x01, 0x02, 0x08, 0x80, 0x20, 0x20,
++    0x00, 0x41, 0x42, 0x20, 0x00, 0x10, 0x00, 0x01, 0x80, 0x00, 0x04, 0x08,
++    0x80, 0x00, 0x10, 0x20, 0x80, 0x20, 0x02, 0x81, 0x00, 0x04, 0x20, 0x00,
++    0x04, 0x00, 0x08, 0x20, 0x20, 0x08, 0x20, 0x00, 0x02, 0x04, 0x02, 0x04,
++    0x40, 0x80, 0x80, 0x20, 0x80, 0x08, 0x02, 0x01, 0x02, 0x40, 0x10, 0x08,
++    0x04, 0x10, 0x80, 0x00, 0x01, 0x02, 0x82, 0x00, 0x10, 0x08, 0x00, 0x81,
++    0x10, 0x40, 0x00, 0x10, 0x20, 0x80, 0x40, 0x00, 0x20, 0x40, 0x00, 0x10,
++    0x10, 0x00, 0x02, 0x00, 0x01, 0x01, 0x01, 0x04, 0x04, 0x02, 0x02, 0x04,
++    0x00, 0x41, 0x00, 0x40, 0x00, 0x02, 0x08, 0x11, 0x40, 0x20, 0x40, 0x00,
++    0x02, 0x04, 0x40, 0x00, 0x08, 0x42, 0x80, 0x00, 0x10, 0x40, 0x00, 0x04,
++    0x80, 0x80, 0x20, 0x10, 0x00, 0x10, 0x40, 0x00, 0x01, 0x82, 0x00, 0x01,
++    0x40, 0x20, 0x02, 0x08, 0x40, 0x20, 0x08, 0x10, 0x20, 0x20, 0x00, 0x04,
++    0x08, 0x04, 0x10, 0x10, 0x84, 0x40, 0x20, 0x10, 0x02, 0x01, 0x01, 0x04,
++    0x20, 0x80, 0x00, 0x10, 0x00, 0x20, 0x00, 0x41, 0x20, 0x10, 0x04, 0x08,
++    0x40, 0x00, 0x02, 0x04, 0x82, 0x20, 0x00, 0x81, 0x00, 0x42, 0x10, 0x08,
++    0x08, 0x10, 0x80, 0x00, 0x01, 0x01, 0x21, 0x80, 0x00, 0x04, 0x41, 0x20,
++    0x08, 0x01, 0x01, 0x02, 0x04, 0x02,
++};
++
++static inline s32 HangulSyllableIndex(u8 lead, u8 trail)
++{
++    s32 index;
++
++    if (lead < HANGUL_LEAD_FIRST || lead >= HANGUL_LEAD_LAST || trail == 0 || trail > 0xEF)
++        return -1;
++    index = (lead - HANGUL_LEAD_FIRST) * 239 + trail - 1;
++    return index < HANGUL_SYLLABLES ? index : -1;
++}
++
++enum {
++    HANGUL_FINAL_NONE,
++    HANGUL_FINAL_OTHER,
++    HANGUL_FINAL_RIEUL,
++};
++
++// The final consonant of the syllable that ends at end[-1], if it is one.
++static inline u8 HangulFinalBefore(const u8 *end)
++{
++    s32 index = HangulSyllableIndex(end[-2], end[-1]);
++
++    if (index < 0 || !(sHangulHasFinal[index >> 3] & (1 << (index & 7))))
++        return HANGUL_FINAL_NONE;
++    if (sHangulFinalRieul[index >> 3] & (1 << (index & 7)))
++        return HANGUL_FINAL_RIEUL;
++    return HANGUL_FINAL_OTHER;
++}
++
++// Particles whose form depends on the final consonant before them.
++enum {
++    HANGUL_PARTICLE_TOPIC,      // 은/는
++    HANGUL_PARTICLE_SUBJECT,    // 이/가
++    HANGUL_PARTICLE_OBJECT,     // 을/를
++    HANGUL_PARTICLE_DIRECTION,  // 으(로)/(로): a final ㄹ takes 로
++    HANGUL_PARTICLE_COPULA,     // 이(다)/(다)
++    HANGUL_PARTICLE_AND,        // 과/와
++    HANGUL_PARTICLE_VOCATIVE,   // 아/야
++    HANGUL_PARTICLE_COUNT,
++};
++
++static inline const u8 *HangulParticle(u8 particle, u8 final)
++{
++    static const u8 sParticles[HANGUL_PARTICLE_COUNT][2][3] = {
++        [HANGUL_PARTICLE_TOPIC]     = {{0x38, 0xAB, EOS}, {0x3D, 0x60, EOS}}, // 는, 은
++        [HANGUL_PARTICLE_SUBJECT]   = {{0x37, 0x01, EOS}, {0x3D, 0x72, EOS}}, // 가, 이
++        [HANGUL_PARTICLE_OBJECT]    = {{0x3A, 0x29, EOS}, {0x3D, 0x61, EOS}}, // 를, 을
++        [HANGUL_PARTICLE_DIRECTION] = {{EOS},             {0x3D, 0x5E, EOS}}, // -, 으
++        [HANGUL_PARTICLE_COPULA]    = {{EOS},             {0x3D, 0x72, EOS}}, // -, 이
++        [HANGUL_PARTICLE_AND]       = {{0x3D, 0x15, EOS}, {0x37, 0x5A, EOS}}, // 와, 과
++        [HANGUL_PARTICLE_VOCATIVE]  = {{0x3C, 0xB8, EOS}, {0x3C, 0x9F, EOS}}, // 야, 아
++    };
++    bool8 withFinal = final != HANGUL_FINAL_NONE;
++
++    if (particle == HANGUL_PARTICLE_DIRECTION && final == HANGUL_FINAL_RIEUL)
++        withFinal = FALSE;
++    return sParticles[particle][withFinal];
++}
++
++#endif // GUARD_HANGUL_H

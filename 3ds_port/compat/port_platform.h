@@ -54,6 +54,9 @@ const void *Port_ResolveSpriteFramePointer(const void *base, u32 size, u32 offse
 const void *Port_PeekSpriteFramePointer(const void *base, u32 size, u32 offset);
 const void *Port_ResolveFontPointer(const void *ptr);
 void Port_PreloadLatinFonts(void);
+/* Korean build: the Hangul glyph table of a face, NULL when it is missing. */
+enum { HANGUL_FACE_SMALL, HANGUL_FACE_NORMAL, HANGUL_FACE_NARROW, HANGUL_FACE_COUNT };
+const u16 *Port_HangulGlyphs(u8 face);
 u32 Port_GetDecompressedAssetSize(const void *ptr);
 const void *Port_ResolveEventPointer(const void *ptr);
 const u8 *Port_ResolveScriptPointer(const u8 *ptr);

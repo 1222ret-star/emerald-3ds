@@ -1,0 +1,83 @@
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Korean battle yes/no box
+Applies after 0060-korean-naming-screen.patch; apply with tools/bootstrap.py.
+
+Korean build only (GAME_LANGUAGE == LANGUAGE_KOREAN): the battle yes/no box is
+two tiles wider, to the left, so that 아니오 fits; its cursor moves with it.
+
+diff --git a/include/battle_script_commands.h b/include/battle_script_commands.h
+index fe6e98d..3dd8fc3 100644
+--- a/include/battle_script_commands.h
++++ b/include/battle_script_commands.h
+@@ -8,7 +8,14 @@
+ #define WINDOW_BG1   (1 << 7)
+ 
+ // Arguments for 'xStart, yStart, xEnd, yEnd' in HandleBattleWindow
++// The yes/no box: two tiles wider in Korean, for "아니오".
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++#define YESNOBOX_X_Y 22, 8, 29, 13
++#define YESNOBOX_CURSOR_X 0x17
++#else
+ #define YESNOBOX_X_Y 24, 8, 29, 13
++#define YESNOBOX_CURSOR_X 0x19
++#endif
+ 
+ void AI_CalcDmg(u8 attacker, u8 defender);
+ u8 TypeCalc(u16 move, u8 attacker, u8 defender);
+diff --git a/src/battle_bg.c b/src/battle_bg.c
+index 6b1e6b2..54988bd 100644
+--- a/src/battle_bg.c
++++ b/src/battle_bg.c
+@@ -272,9 +272,15 @@ static const struct WindowTemplate sStandardBattleWindowTemplates[] =
+     },
+     [B_WIN_YESNO] = {
+         .bg = 0,
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++        .tilemapLeft = 24,
++        .tilemapTop = 9,
++        .width = 5,
++#else
+         .tilemapLeft = 26,
+         .tilemapTop = 9,
+         .width = 3,
++#endif
+         .height = 4,
+         .paletteNum = 5,
+         .baseBlock = 0x0100,
+@@ -493,9 +499,15 @@ static const struct WindowTemplate sBattleArenaWindowTemplates[] =
+     },
+     [B_WIN_YESNO] = {
+         .bg = 0,
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++        .tilemapLeft = 24,
++        .tilemapTop = 9,
++        .width = 5,
++#else
+         .tilemapLeft = 26,
+         .tilemapTop = 9,
+         .width = 3,
++#endif
+         .height = 4,
+         .paletteNum = 5,
+         .baseBlock = 0x0100,
+diff --git a/src/battle_script_commands.c b/src/battle_script_commands.c
+index 4ae4c71..1f85b59 100644
+--- a/src/battle_script_commands.c
++++ b/src/battle_script_commands.c
+@@ -10317,7 +10317,7 @@ void BattleCreateYesNoCursorAt(u8 cursorPosition)
+     src[0] = 1;
+     src[1] = 2;
+ 
+-    CopyToBgTilemapBufferRect_ChangePalette(0, src, 0x19, 9 + (2 * cursorPosition), 1, 2, 0x11);
++    CopyToBgTilemapBufferRect_ChangePalette(0, src, YESNOBOX_CURSOR_X, 9 + (2 * cursorPosition), 1, 2, 0x11);
+     CopyBgTilemapBufferToVram(0);
+ }
+ 
+@@ -10327,7 +10327,7 @@ void BattleDestroyYesNoCursorAt(u8 cursorPosition)
+     src[0] = 0x1016;
+     src[1] = 0x1016;
+ 
+-    CopyToBgTilemapBufferRect_ChangePalette(0, src, 0x19, 9 + (2 * cursorPosition), 1, 2, 0x11);
++    CopyToBgTilemapBufferRect_ChangePalette(0, src, YESNOBOX_CURSOR_X, 9 + (2 * cursorPosition), 1, 2, 0x11);
+     CopyBgTilemapBufferToVram(0);
+ }
+ 

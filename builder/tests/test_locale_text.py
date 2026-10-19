@@ -66,13 +66,13 @@ int main(void)
     assert(tiny[0] == 0x1B && tiny[1] == 0xff);
 
 #if GAME_LANGUAGE == LANGUAGE_FRENCH
-    assert(strcmp(CTR_TEXT("EN", "ES", "FR", "IT"), "FR") == 0);
+    assert(strcmp(CTR_TEXT("EN", "ES", "FR", "IT", "KO"), "FR") == 0);
 #elif GAME_LANGUAGE == LANGUAGE_SPANISH
-    assert(strcmp(CTR_TEXT("EN", "ES", "FR", "IT"), "ES") == 0);
+    assert(strcmp(CTR_TEXT("EN", "ES", "FR", "IT", "KO"), "ES") == 0);
 #elif GAME_LANGUAGE == LANGUAGE_ITALIAN
-    assert(strcmp(CTR_TEXT("EN", "ES", "FR", "IT"), "IT") == 0);
+    assert(strcmp(CTR_TEXT("EN", "ES", "FR", "IT", "KO"), "IT") == 0);
 #else
-    assert(strcmp(CTR_TEXT("EN", "ES", "FR", "IT"), "EN") == 0);
+    assert(strcmp(CTR_TEXT("EN", "ES", "FR", "IT", "KO"), "EN") == 0);
 #endif
     return 0;
 }

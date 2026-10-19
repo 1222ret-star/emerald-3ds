@@ -1,0 +1,776 @@
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Korean naming screen
+Applies after 0059-korean-name-lengths.patch; apply with tools/bootstrap.py.
+
+Korean build only (GAME_LANGUAGE == LANGUAGE_KOREAN): the keyboard of the Korean
+ROM, ten columns with the Hangul jamo (2-beolsik) on the letters page and
+digits and Latin letters on the other two, and syllable composition as the
+jamo are typed: double vowels and finals, a final moving on to the next
+syllable before a vowel, and Back taking one jamo off. Syllables are the 2350
+of KS X 1001 (include/hangul_ks.h). The entry box shows one character per
+8-pixel slot, Hangul in the narrow font, and a name holds half as many slots
+as the template's bytes; the cursor starts 11 pixels further left, under the
+Korean keys.
+
+diff --git a/src/naming_screen.c b/src/naming_screen.c
+index 3928ed5..e17bd79 100644
+--- a/src/naming_screen.c
++++ b/src/naming_screen.c
+@@ -46,9 +46,35 @@ enum {
+ #define KBROW_COUNT 4
+ #if defined(PORT_BRIDGE) && GAME_LANGUAGE == LANGUAGE_FRENCH
+ #define KBCOL_COUNT 9
++#elif defined(PORT_BRIDGE) && GAME_LANGUAGE == LANGUAGE_KOREAN
++// The Korean keyboard: ten columns, the Hangul jamo on the letters page
++// (2-beolsik), digits and Latin letters on the other two.
++#define KBCOL_COUNT 10
++#define KOREAN_INPUT 1
+ #else
+ #define KBCOL_COUNT 8
+ #endif
++#ifndef KOREAN_INPUT
++#define KOREAN_INPUT 0
++#endif
++
++// The Korean entry box shows a character, Latin or Hangul, in each 8-pixel
++// slot (Hangul in the 8-pixel narrow font), as the Korean ROM does. Hangul is
++// two bytes, so a name holds half as many slots as the template's bytes.
++#if KOREAN_INPUT
++#define ENTRY_SLOTS (sNamingScreen->template->maxChars / 2)
++#else
++#define ENTRY_SLOTS (sNamingScreen->template->maxChars)
++#endif
++
++// The cursor's x on the first column. The Korean keys start at the window's
++// left edge, the English ones 11 pixels in ({CLEAR 11}): the Korean ROM
++// moves the cursor as many pixels left.
++#if KOREAN_INPUT
++#define KEYBOARD_CURSOR_X 27
++#else
++#define KEYBOARD_CURSOR_X 38
++#endif
+ 
+ enum {
+     GFXTAG_BACK_BUTTON,
+@@ -281,6 +307,56 @@ static const struct WindowTemplate sWindowTemplates[WIN_COUNT + 1] =
+ 
+ // This handles what characters get inserted when a key is pressed
+ // The keys shown on the keyboard are handled separately by sNamingScreenKeyboardText
++#if KOREAN_INPUT
++#include "hangul_ks.h"
++
++// On the Hangul page, 1-40 are jamo: 1-19 the initial consonants and 20-40
++// the vowels, in Unicode order (they print as the 0x41 codes of the font).
++#define KEYBOARD_HANGUL KEYBOARD_LETTERS_UPPER
++#define JAMO_CONSONANTS 19
++#define JAMO_COUNT 40
++
++// Composition of the syllable being typed, which sits at the end of the text
++// as a two-byte code: a whole syllable when KS X 1001 has it, else a lone
++// jamo (0x41 0x01-0x28). JAMO_NONE in a field: not there yet.
++#define JAMO_NONE 0xFF
++#define NO_COMPOSITION 0xFF
++
++static u8 sHangulAt = NO_COMPOSITION; // index of the syllable in textBuffer
++static u8 sHangulCho, sHangulJung, sHangulJong; // jong 0 = no final
++
++static const u8 sKeyboardChars[KBPAGE_COUNT][KBROW_COUNT][KBCOL_COUNT] = {
++    [KEYBOARD_LETTERS_LOWER] = {
++        {0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xA1}, // 1234567890
++        {0xBB, 0xBC, 0xBD, 0xBE, 0xBF, 0xC0, 0xC1, 0xC2, 0xC3, 0xC4}, // ABCDEFGHIJ
++        {0xC5, 0xC6, 0xC7, 0xC8, 0xC9, 0xCA, 0xCB, 0xCC, 0xCD, 0xCE}, // KLMNOPQRST
++        {0xCF, 0xD0, 0xD1, 0xD2, 0xD3, 0xD4, 0xB3, 0xB4, 0xB1, 0xB2}, // UVWXYZ‘'“”
++    },
++    [KEYBOARD_HANGUL] = {
++        {9, 14, 5, 2, 11, 0xAB, 0xAC, 0xAE, 23, 27},  // ㅃㅉㄸㄲㅆ!?-ㅒㅖ
++        {8, 13, 4, 1, 10, 32, 26, 22, 21, 25},        // ㅂㅈㄷㄱㅅㅛㅕㅑㅐㅔ
++        {7, 3, 12, 6, 19, 28, 24, 20, 40, 0xBA},      // ㅁㄴㅇㄹㅎㅗㅓㅏㅣ/
++        {16, 17, 15, 18, 0x00, 37, 33, 38, 0xB8, 0xAD}, // ㅋㅌㅊㅍ ㅠㅜㅡ,.
++    },
++    [KEYBOARD_SYMBOLS] = {
++        {0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xA1}, // 1234567890
++        {0xD5, 0xD6, 0xD7, 0xD8, 0xD9, 0xDA, 0xDB, 0xDC, 0xDD, 0xDE}, // abcdefghij
++        {0xDF, 0xE0, 0xE1, 0xE2, 0xE3, 0xE4, 0xE5, 0xE6, 0xE7, 0xE8}, // klmnopqrst
++        {0xE9, 0xEA, 0xEB, 0xEC, 0xED, 0xEE, 0xB5, 0xB6, 0xAE, 0xAF}, // uvwxyz♂♀-‥
++    },
++};
++
++static const u8 sPageColumnCounts[KBPAGE_COUNT] = {
++    [KEYBOARD_LETTERS_LOWER] = KBCOL_COUNT,
++    [KEYBOARD_LETTERS_UPPER] = KBCOL_COUNT,
++    [KEYBOARD_SYMBOLS]       = KBCOL_COUNT
++};
++static const u8 sPageColumnXPos[KBPAGE_COUNT][KBCOL_COUNT] = {
++    [KEYBOARD_LETTERS_LOWER] = {0, 16, 32, 48, 64, 80, 96, 112, 128, 144},
++    [KEYBOARD_LETTERS_UPPER] = {0, 16, 32, 48, 64, 80, 96, 112, 128, 144},
++    [KEYBOARD_SYMBOLS]       = {0, 16, 32, 48, 64, 80, 96, 112, 128, 144}
++};
++#else
+ static const u8 sKeyboardChars[KBPAGE_COUNT][KBROW_COUNT][KBCOL_COUNT] = {
+     [KEYBOARD_LETTERS_LOWER] = {
+         __("abcdef ."),
+@@ -313,6 +389,8 @@ static const u8 sPageColumnXPos[KBPAGE_COUNT][KBCOL_COUNT] = {
+     [KEYBOARD_SYMBOLS]       = {0, 22, 44, 66, 88, 110}
+ };
+ 
++#endif
++
+ static const struct NamingScreenTemplate *const sNamingScreenTemplates[];
+ static const struct SubspriteTable sSubspriteTable_PageSwapFrame[];
+ static const struct SubspriteTable sSubspriteTable_PageSwapText[];
+@@ -378,7 +456,9 @@ static void DrawTextEntryBox(void);
+ static u8 GetTextEntryPosition(void);
+ static void DeleteTextCharacter(void);
+ static bool8 AddTextCharacter(void);
++#if !KOREAN_INPUT
+ static void BufferCharacter(u8);
++#endif
+ static void SaveInputText(void);
+ static void LoadGfx(void);
+ static void CreateHelperTasks(void);
+@@ -477,11 +557,14 @@ static void NamingScreen_Init(void)
+     sNamingScreen->bgToHide = 1;
+     sNamingScreen->template = sNamingScreenTemplates[sNamingScreen->templateNum];
+     sNamingScreen->currentPage = sNamingScreen->template->initialPage;
+-    sNamingScreen->inputCharBaseXPos = (DISPLAY_WIDTH - sNamingScreen->template->maxChars * 8) / 2 + 6;
++    sNamingScreen->inputCharBaseXPos = (DISPLAY_WIDTH - ENTRY_SLOTS * 8) / 2 + 6;
+     if (sNamingScreen->templateNum == NAMING_SCREEN_WALDA)
+         sNamingScreen->inputCharBaseXPos += 11;
+     sNamingScreen->keyRepeatStartDelayCopy = gKeyRepeatStartDelay;
+     memset(sNamingScreen->textBuffer, EOS, sizeof(sNamingScreen->textBuffer));
++#if KOREAN_INPUT
++    sHangulAt = NO_COMPOSITION;
++#endif
+     if (sNamingScreen->template->copyExistingString)
+         StringCopy(sNamingScreen->textBuffer, sNamingScreen->destBuffer);
+     gKeyRepeatStartDelay = 16;
+@@ -1129,7 +1212,7 @@ static void CreateSprites(void)
+ 
+ static void CreateCursorSprite(void)
+ {
+-    sNamingScreen->cursorSpriteId = CreateSprite(&sSpriteTemplate_Cursor, 38, 88, 1);
++    sNamingScreen->cursorSpriteId = CreateSprite(&sSpriteTemplate_Cursor, KEYBOARD_CURSOR_X, 88, 1);
+     SetCursorInvisibility(TRUE);
+     gSprites[sNamingScreen->cursorSpriteId].oam.priority = 1;
+     gSprites[sNamingScreen->cursorSpriteId].oam.objMode = ST_OAM_OBJ_BLEND;
+@@ -1143,7 +1226,7 @@ static void SetCursorPos(s16 x, s16 y)
+     struct Sprite *cursorSprite = &gSprites[sNamingScreen->cursorSpriteId];
+ 
+     if (x < sPageColumnCounts[CurrentPageToKeyboardId()])
+-        cursorSprite->x = sPageColumnXPos[CurrentPageToKeyboardId()][x] + 38;
++        cursorSprite->x = sPageColumnXPos[CurrentPageToKeyboardId()][x] + KEYBOARD_CURSOR_X;
+     else
+         cursorSprite->x = 0;
+ 
+@@ -1366,7 +1449,7 @@ static void CreateTextEntrySprites(void)
+     gSprites[spriteId].oam.priority = 3;
+     gSprites[spriteId].invisible = TRUE;
+     xPos = sNamingScreen->inputCharBaseXPos;
+-    for (i = 0; i < sNamingScreen->template->maxChars; i++, xPos += 8)
++    for (i = 0; i < ENTRY_SLOTS; i++, xPos += 8)
+     {
+         spriteId = CreateSprite(&sSpriteTemplate_Underscore, xPos + 3, 60, 0);
+         gSprites[spriteId].oam.priority = 3;
+@@ -1782,7 +1865,7 @@ static void DrawGenderIcon(void)
+             StringCopy(text, gText_FemaleSymbol);
+             isFemale = TRUE;
+         }
+-        AddTextPrinterParameterized3(sNamingScreen->windows[WIN_TEXT_ENTRY], FONT_NORMAL, (POKEMON_NAME_LENGTH * 4) + 64, 1, sGenderColors[isFemale], TEXT_SKIP_DRAW, text);
++        AddTextPrinterParameterized3(sNamingScreen->windows[WIN_TEXT_ENTRY], FONT_NORMAL, (ENTRY_SLOTS * 4) + 64, 1, sGenderColors[isFemale], TEXT_SKIP_DRAW, text);
+     }
+ }
+ 
+@@ -1792,10 +1875,19 @@ static u8 GetCharAtKeyboardPos(s16 x, s16 y)
+ }
+ 
+ 
++#if KOREAN_INPUT
++static u8 HangulTextSlots(void);
++#endif
++
+ static u8 GetTextEntryPosition(void)
+ {
+     u8 i;
+ 
++#if KOREAN_INPUT
++    i = HangulTextSlots();
++    return i < ENTRY_SLOTS ? i : ENTRY_SLOTS - 1;
++#endif
++
+     for (i = 0; i < sNamingScreen->template->maxChars; i++)
+     {
+         if (sNamingScreen->textBuffer[i] == EOS)
+@@ -1816,16 +1908,263 @@ static u8 GetPreviousTextCaretPosition(void)
+     return 0;
+ }
+ 
++#if KOREAN_INPUT
++static inline bool8 IsHangulLeadByte(u8 c)
++{
++    return (u8)(c - 0x37) <= 0x41 - 0x37;
++}
++
++// Initial consonant (0-18) -> final (1-27); 0: it cannot end a syllable.
++static const u8 sChoToJong[JAMO_CONSONANTS] = {1, 2, 4, 7, 0, 8, 16, 17, 0, 19, 20, 21, 22, 0, 23, 24, 25, 26, 27};
++
++// Final (1-27) -> initial consonant (0-18), for a single final.
++static const u8 sJongToCho[28] = {
++    JAMO_NONE, 0, 1, JAMO_NONE, 2, JAMO_NONE, JAMO_NONE, 3, 5, JAMO_NONE, JAMO_NONE, JAMO_NONE, JAMO_NONE,
++    JAMO_NONE, JAMO_NONE, JAMO_NONE, 6, 7, JAMO_NONE, 9, 10, 11, 12, 14, 15, 16, 17, 18,
++};
++
++// Double finals: {first final, added initial consonant, double final}.
++static const u8 sDoubleJong[][3] = {
++    {1, 9, 3}, {4, 12, 5}, {4, 18, 6}, {8, 0, 9}, {8, 6, 10}, {8, 7, 11}, {8, 9, 12},
++    {8, 16, 13}, {8, 17, 14}, {8, 18, 15}, {17, 9, 18},
++};
++
++// Double vowels: {first vowel, added vowel, double vowel} (0-20).
++static const u8 sDoubleJung[][3] = {
++    {8, 0, 9}, {8, 1, 10}, {8, 20, 11}, {13, 4, 14}, {13, 5, 15}, {13, 20, 16}, {18, 20, 19},
++};
++
++static u8 HangulTextLength(void)
++{
++    u8 i;
++
++    for (i = 0; i < sNamingScreen->template->maxChars; i++)
++    {
++        if (sNamingScreen->textBuffer[i] == EOS)
++            return i;
++    }
++    return sNamingScreen->template->maxChars;
++}
++
++// The characters in the text: the slots they take.
++static u8 HangulTextSlots(void)
++{
++    u8 i, slots = 0;
++
++    for (i = 0; i < sNamingScreen->template->maxChars && sNamingScreen->textBuffer[i] != EOS; i++, slots++)
++    {
++        if (IsHangulLeadByte(sNamingScreen->textBuffer[i]))
++            i++;
++    }
++    return slots;
++}
++
++static u8 DoubleJong(u8 jong, u8 cho)
++{
++    u8 i;
++
++    for (i = 0; i < ARRAY_COUNT(sDoubleJong); i++)
++    {
++        if (sDoubleJong[i][0] == jong && sDoubleJong[i][1] == cho)
++            return sDoubleJong[i][2];
++    }
++    return 0;
++}
++
++static u8 DoubleJung(u8 jung, u8 added)
++{
++    u8 i;
++
++    for (i = 0; i < ARRAY_COUNT(sDoubleJung); i++)
++    {
++        if (sDoubleJung[i][0] == jung && sDoubleJung[i][1] == added)
++            return sDoubleJung[i][2];
++    }
++    return JAMO_NONE;
++}
++
++static bool8 HangulExists(u8 cho, u8 jung, u8 jong)
++{
++    return HangulKsIndex(cho, jung, jong) >= 0;
++}
++
++// Writes the composition at index: the syllable, or the lone jamo.
++static void WriteHangul(u8 index, u8 cho, u8 jung, u8 jong)
++{
++    u8 *dest = &sNamingScreen->textBuffer[index];
++
++    if (cho != JAMO_NONE && jung != JAMO_NONE)
++    {
++        s16 ks = HangulKsIndex(cho, jung, jong);
++
++        dest[0] = 0x37 + ks / 239;
++        dest[1] = ks % 239 + 1;
++    }
++    else
++    {
++        dest[0] = 0x41;
++        dest[1] = cho != JAMO_NONE ? cho + 1 : JAMO_CONSONANTS + 1 + jung;
++    }
++}
++
++// Starts a new syllable at the end of the text; FALSE when it is full.
++static bool8 StartHangul(u8 cho, u8 jung)
++{
++    u8 length = HangulTextLength();
++
++    if (HangulTextSlots() >= ENTRY_SLOTS)
++        return FALSE;
++    sHangulAt = length;
++    sHangulCho = cho;
++    sHangulJung = jung;
++    sHangulJong = 0;
++    WriteHangul(length, cho, jung, 0);
++    return TRUE;
++}
++
++// The parts of a double final, or {jong, JAMO_NONE} for a single one.
++static void SplitJong(u8 jong, u8 *keep, u8 *moved)
++{
++    u8 i;
++
++    *keep = 0;
++    *moved = sJongToCho[jong];
++    for (i = 0; i < ARRAY_COUNT(sDoubleJong); i++)
++    {
++        if (sDoubleJong[i][2] == jong)
++        {
++            *keep = sDoubleJong[i][0];
++            *moved = sDoubleJong[i][1];
++        }
++    }
++}
++
++// Types jamo 1-40 (see sKeyboardChars) with the 2-beolsik rules.
++static void InputJamo(u8 jamo)
++{
++    bool8 composing = sHangulAt != NO_COMPOSITION;
++
++    if (jamo <= JAMO_CONSONANTS)
++    {
++        u8 cho = jamo - 1;
++
++        if (composing && sHangulCho != JAMO_NONE && sHangulJung != JAMO_NONE)
++        {
++            u8 jong = sHangulJong ? DoubleJong(sHangulJong, cho) : sChoToJong[cho];
++
++            if (jong && HangulExists(sHangulCho, sHangulJung, jong))
++            {
++                sHangulJong = jong;
++                WriteHangul(sHangulAt, sHangulCho, sHangulJung, jong);
++                return;
++            }
++        }
++        if (!StartHangul(cho, JAMO_NONE))
++            sHangulAt = NO_COMPOSITION;
++    }
++    else
++    {
++        u8 jung = jamo - JAMO_CONSONANTS - 1;
++
++        if (composing && sHangulJong)
++        {
++            // The final moves on to start the next syllable: 각 + ㅏ = 가가.
++            u8 keep, moved;
++
++            SplitJong(sHangulJong, &keep, &moved);
++            if (moved != JAMO_NONE && HangulExists(sHangulCho, sHangulJung, keep)
++             && HangulExists(moved, jung, 0)
++             && HangulTextSlots() < ENTRY_SLOTS)
++            {
++                WriteHangul(sHangulAt, sHangulCho, sHangulJung, keep);
++                StartHangul(moved, jung);
++                return;
++            }
++        }
++        else if (composing && sHangulJung == JAMO_NONE)
++        {
++            if (HangulExists(sHangulCho, jung, 0))
++            {
++                sHangulJung = jung;
++                WriteHangul(sHangulAt, sHangulCho, jung, 0);
++                return;
++            }
++        }
++        else if (composing)
++        {
++            u8 doubled = DoubleJung(sHangulJung, jung);
++
++            // Only on a consonant: the font has no lone double vowels.
++            if (doubled != JAMO_NONE && sHangulCho != JAMO_NONE && HangulExists(sHangulCho, doubled, 0))
++            {
++                sHangulJung = doubled;
++                WriteHangul(sHangulAt, sHangulCho, doubled, 0);
++                return;
++            }
++        }
++        if (!StartHangul(JAMO_NONE, jung))
++            sHangulAt = NO_COMPOSITION;
++    }
++}
++
++// Back: one jamo off the syllable being typed, else the last character.
++static void DeleteHangulOrCharacter(void)
++{
++    u8 length = HangulTextLength();
++    u8 i;
++
++    if (sHangulAt != NO_COMPOSITION && sHangulAt + 2 == length)
++    {
++        if (sHangulJong)
++        {
++            u8 keep, moved;
++
++            SplitJong(sHangulJong, &keep, &moved);
++            sHangulJong = keep;
++            WriteHangul(sHangulAt, sHangulCho, sHangulJung, keep);
++            return;
++        }
++        if (sHangulCho != JAMO_NONE && sHangulJung != JAMO_NONE)
++        {
++            u8 single = JAMO_NONE;
++
++            for (i = 0; i < ARRAY_COUNT(sDoubleJung); i++)
++            {
++                if (sDoubleJung[i][2] == sHangulJung)
++                    single = sDoubleJung[i][0];
++            }
++            sHangulJung = single;
++            WriteHangul(sHangulAt, sHangulCho, single, 0);
++            return;
++        }
++    }
++    sHangulAt = NO_COMPOSITION;
++    if (length == 0)
++        return;
++    if (length >= 2 && IsHangulLeadByte(sNamingScreen->textBuffer[length - 2]))
++        length--;
++    memset(&sNamingScreen->textBuffer[length - 1], EOS, sNamingScreen->template->maxChars - length + 1);
++}
++#endif
++
+ static void DeleteTextCharacter(void)
+ {
+     u8 index;
+     u8 keyRole;
+ 
++#if KOREAN_INPUT
++    index = GetPreviousTextCaretPosition(); // unused: Back works on whole characters
++    (void)index;
++    DeleteHangulOrCharacter();
++    DrawTextEntry();
++    CopyBgTilemapBufferToVram(3);
++#else
+     index = GetPreviousTextCaretPosition();
+     sNamingScreen->textBuffer[index] = 0;
+     DrawTextEntry();
+     CopyBgTilemapBufferToVram(3);
+     sNamingScreen->textBuffer[index] = EOS;
++#endif
+     keyRole = GetKeyRoleAtCursorPos();
+ 
+     // The below flashes the Back key once on delete
+@@ -1842,6 +2181,26 @@ static bool8 AddTextCharacter(void)
+     s16 y;
+ 
+     GetCursorPos(&x, &y);
++#if KOREAN_INPUT
++    {
++        u8 ch = GetCharAtKeyboardPos(x, y);
++
++        if (CurrentPageToKeyboardId() == KEYBOARD_HANGUL && ch >= 1 && ch <= JAMO_COUNT)
++        {
++            InputJamo(ch);
++        }
++        else
++        {
++            sHangulAt = NO_COMPOSITION;
++            if (HangulTextSlots() < ENTRY_SLOTS)
++                sNamingScreen->textBuffer[HangulTextLength()] = ch;
++        }
++    }
++    DrawTextEntry();
++    CopyBgTilemapBufferToVram(3);
++    PlaySE(SE_SELECT);
++    return HangulTextSlots() == ENTRY_SLOTS;
++#else
+     BufferCharacter(GetCharAtKeyboardPos(x, y));
+     DrawTextEntry();
+     CopyBgTilemapBufferToVram(3);
+@@ -1851,13 +2210,16 @@ static bool8 AddTextCharacter(void)
+         return FALSE;
+     else
+         return TRUE;
++#endif
+ }
+ 
++#if !KOREAN_INPUT // the Korean build appends at the text's end (AddTextCharacter)
+ static void BufferCharacter(u8 ch)
+ {
+     u8 index = GetTextEntryPosition();
+     sNamingScreen->textBuffer[index] = ch;
+ }
++#endif
+ 
+ static void SaveInputText(void)
+ {
+@@ -1916,6 +2278,33 @@ static void DrawTextEntry(void)
+ 
+     FillWindowPixelBuffer(sNamingScreen->windows[WIN_TEXT_ENTRY], PIXEL_FILL(1));
+ 
++#if KOREAN_INPUT
++    {
++        u8 slot = 0;
++
++        for (i = 0; i < maxChars && sNamingScreen->textBuffer[i] != EOS; i++, slot++)
++        {
++            if (IsHangulLeadByte(sNamingScreen->textBuffer[i]) && i + 1 < maxChars)
++            {
++                u8 pair[3];
++
++                pair[0] = sNamingScreen->textBuffer[i];
++                pair[1] = sNamingScreen->textBuffer[i + 1];
++                pair[2] = EOS;
++                AddTextPrinterParameterized(sNamingScreen->windows[WIN_TEXT_ENTRY], FONT_NARROW, pair,
++                                            slot * 8 + x, 1, TEXT_SKIP_DRAW, NULL);
++                i++;
++                continue;
++            }
++            temp[0] = sNamingScreen->textBuffer[i];
++            temp[1] = gText_ExpandedPlaceholder_Empty[0];
++            extraWidth = (IsWideLetter(temp[0]) == TRUE) ? 2 : 0;
++            AddTextPrinterParameterized(sNamingScreen->windows[WIN_TEXT_ENTRY], FONT_NORMAL, temp,
++                                        slot * 8 + x + extraWidth, 1, TEXT_SKIP_DRAW, NULL);
++        }
++        maxChars = 0; // drawn
++    }
++#endif
+     for (i = 0; i < maxChars; i++)
+     {
+         temp[0] = sNamingScreen->textBuffer[i];
+diff --git a/include/hangul_ks.h b/include/hangul_ks.h
+new file mode 100644
+index 0000000..751abce
+--- /dev/null
++++ b/include/hangul_ks.h
+@@ -0,0 +1,227 @@
++#ifndef GUARD_HANGUL_KS_H
++#define GUARD_HANGUL_KS_H
++
++// The 2350 syllables of KS X 1001 as offsets from U+AC00 (가), in KS order,
++// which is also Unicode order. Index i is the Hangul code
++// ((0x37 + i / 239) << 8) | (i % 239 + 1). Derived from the character set.
++static const u16 sHangulKsSyllables[] = {
++    0, 1, 4, 7, 8, 9, 10, 16, 17, 18, 19, 20,
++    21, 22, 23, 25, 26, 27, 28, 29, 32, 36, 44, 45,
++    47, 48, 49, 56, 57, 60, 64, 75, 77, 84, 88, 92,
++    112, 113, 116, 119, 120, 122, 128, 129, 131, 132, 133, 134,
++    137, 138, 139, 140, 144, 148, 156, 157, 159, 160, 161, 168,
++    169, 170, 172, 175, 176, 184, 185, 187, 188, 189, 193, 196,
++    200, 204, 213, 215, 224, 225, 228, 231, 232, 234, 236, 239,
++    240, 241, 243, 245, 246, 252, 253, 256, 260, 262, 268, 269,
++    271, 273, 280, 284, 288, 297, 300, 301, 308, 309, 312, 316,
++    324, 325, 327, 329, 336, 340, 344, 353, 355, 364, 365, 368,
++    371, 372, 373, 374, 379, 380, 381, 383, 385, 386, 392, 393,
++    396, 400, 412, 413, 420, 439, 448, 449, 452, 456, 464, 465,
++    467, 476, 480, 484, 504, 505, 508, 511, 512, 513, 520, 521,
++    523, 525, 532, 560, 561, 564, 567, 568, 570, 576, 577, 579,
++    581, 582, 586, 588, 589, 590, 592, 596, 598, 604, 605, 607,
++    608, 609, 613, 616, 617, 620, 624, 632, 633, 635, 636, 637,
++    644, 645, 652, 700, 701, 702, 704, 708, 716, 717, 719, 720,
++    721, 728, 729, 732, 744, 747, 749, 756, 760, 764, 775, 776,
++    781, 784, 812, 813, 816, 818, 820, 828, 829, 831, 833, 834,
++    835, 840, 841, 848, 860, 861, 868, 869, 889, 896, 900, 904,
++    912, 913, 917, 924, 952, 953, 956, 960, 967, 968, 969, 971,
++    973, 974, 980, 988, 1000, 1001, 1008, 1009, 1012, 1016, 1024, 1025,
++    1028, 1036, 1040, 1044, 1052, 1053, 1064, 1092, 1093, 1096, 1098, 1100,
++    1102, 1107, 1108, 1109, 1111, 1113, 1117, 1148, 1149, 1152, 1156, 1164,
++    1165, 1167, 1169, 1176, 1177, 1178, 1180, 1183, 1184, 1185, 1186, 1192,
++    1193, 1195, 1196, 1197, 1198, 1199, 1201, 1203, 1204, 1205, 1208, 1212,
++    1220, 1221, 1223, 1224, 1225, 1232, 1233, 1236, 1240, 1248, 1253, 1288,
++    1289, 1291, 1292, 1296, 1298, 1299, 1304, 1305, 1307, 1308, 1309, 1315,
++    1316, 1317, 1320, 1324, 1332, 1333, 1335, 1336, 1337, 1344, 1345, 1348,
++    1352, 1360, 1361, 1364, 1365, 1368, 1372, 1376, 1400, 1401, 1404, 1408,
++    1410, 1416, 1417, 1419, 1421, 1426, 1427, 1428, 1432, 1436, 1448, 1484,
++    1488, 1492, 1500, 1501, 1503, 1512, 1513, 1516, 1520, 1529, 1531, 1533,
++    1540, 1541, 1544, 1547, 1548, 1556, 1557, 1559, 1561, 1568, 1588, 1596,
++    1624, 1628, 1632, 1640, 1641, 1652, 1653, 1660, 1668, 1669, 1673, 1680,
++    1681, 1684, 1688, 1689, 1690, 1696, 1697, 1699, 1701, 1702, 1706, 1708,
++    1712, 1716, 1736, 1737, 1740, 1744, 1746, 1752, 1753, 1755, 1757, 1762,
++    1764, 1765, 1766, 1768, 1771, 1772, 1773, 1774, 1775, 1779, 1780, 1781,
++    1783, 1784, 1785, 1786, 1787, 1791, 1792, 1793, 1796, 1800, 1808, 1809,
++    1811, 1812, 1813, 1820, 1876, 1877, 1878, 1880, 1883, 1884, 1886, 1887,
++    1892, 1893, 1895, 1897, 1899, 1902, 1904, 1905, 1908, 1912, 1920, 1921,
++    1923, 1924, 1925, 1932, 1936, 1940, 1952, 1953, 1960, 1964, 1988, 1989,
++    1992, 1995, 1996, 1998, 2000, 2004, 2005, 2007, 2009, 2011, 2013, 2016,
++    2020, 2024, 2044, 2064, 2072, 2076, 2080, 2088, 2089, 2091, 2100, 2128,
++    2129, 2132, 2136, 2144, 2145, 2147, 2149, 2156, 2176, 2184, 2205, 2212,
++    2216, 2220, 2229, 2231, 2233, 2240, 2244, 2248, 2256, 2261, 2268, 2269,
++    2272, 2275, 2276, 2278, 2284, 2285, 2287, 2289, 2296, 2324, 2325, 2328,
++    2331, 2332, 2340, 2341, 2343, 2344, 2345, 2346, 2352, 2353, 2356, 2360,
++    2368, 2369, 2371, 2372, 2373, 2379, 2380, 2381, 2384, 2388, 2396, 2397,
++    2399, 2400, 2401, 2464, 2465, 2468, 2472, 2474, 2475, 2480, 2481, 2483,
++    2484, 2485, 2491, 2492, 2493, 2496, 2500, 2508, 2509, 2511, 2512, 2513,
++    2520, 2540, 2576, 2577, 2580, 2584, 2597, 2604, 2612, 2632, 2660, 2664,
++    2716, 2717, 2720, 2724, 2731, 2732, 2737, 2772, 2800, 2804, 2808, 2816,
++    2817, 2821, 2856, 2857, 2860, 2863, 2864, 2872, 2873, 2875, 2884, 2888,
++    2892, 2900, 2901, 2912, 2916, 2920, 2928, 2929, 2931, 2933, 2940, 2941,
++    2944, 2948, 2956, 2957, 2959, 2960, 2961, 2962, 2966, 2967, 2968, 2969,
++    2972, 2976, 2984, 2985, 2987, 2988, 2989, 2996, 2997, 3000, 3015, 3017,
++    3052, 3053, 3056, 3060, 3068, 3069, 3071, 3072, 3073, 3079, 3080, 3081,
++    3084, 3088, 3096, 3097, 3099, 3101, 3108, 3109, 3112, 3116, 3124, 3125,
++    3127, 3128, 3129, 3136, 3140, 3153, 3155, 3164, 3165, 3168, 3172, 3180,
++    3181, 3183, 3185, 3192, 3196, 3213, 3240, 3248, 3252, 3256, 3264, 3265,
++    3267, 3269, 3276, 3280, 3284, 3293, 3295, 3297, 3304, 3305, 3308, 3312,
++    3320, 3321, 3323, 3325, 3332, 3352, 3360, 3388, 3389, 3392, 3396, 3404,
++    3407, 3409, 3416, 3417, 3420, 3424, 3432, 3433, 3435, 3437, 3444, 3445,
++    3448, 3452, 3460, 3461, 3463, 3465, 3466, 3469, 3470, 3500, 3501, 3504,
++    3508, 3516, 3517, 3519, 3521, 3528, 3529, 3532, 3534, 3535, 3536, 3537,
++    3538, 3544, 3545, 3547, 3549, 3550, 3553, 3555, 3556, 3557, 3560, 3564,
++    3572, 3573, 3575, 3576, 3577, 3578, 3584, 3585, 3592, 3605, 3640, 3641,
++    3644, 3648, 3650, 3656, 3657, 3659, 3661, 3662, 3667, 3668, 3669, 3672,
++    3676, 3684, 3685, 3687, 3688, 3689, 3696, 3697, 3700, 3704, 3715, 3716,
++    3717, 3719, 3724, 3752, 3753, 3755, 3756, 3760, 3762, 3768, 3769, 3771,
++    3773, 3780, 3784, 3800, 3801, 3836, 3840, 3844, 3853, 3855, 3857, 3864,
++    3868, 3872, 3881, 3883, 3892, 3893, 3894, 3896, 3899, 3900, 3901, 3902,
++    3908, 3909, 3911, 3913, 3917, 3919, 3920, 3924, 3928, 3937, 3939, 3948,
++    3976, 3980, 3984, 4004, 4008, 4012, 4020, 4023, 4032, 4036, 4040, 4048,
++    4051, 4088, 4089, 4092, 4095, 4096, 4098, 4104, 4105, 4107, 4108, 4109,
++    4111, 4113, 4116, 4117, 4118, 4119, 4120, 4123, 4124, 4125, 4126, 4127,
++    4132, 4133, 4135, 4137, 4141, 4144, 4145, 4148, 4152, 4160, 4161, 4163,
++    4164, 4165, 4169, 4172, 4173, 4176, 4189, 4228, 4229, 4232, 4235, 4236,
++    4238, 4244, 4245, 4247, 4249, 4250, 4256, 4257, 4260, 4263, 4264, 4272,
++    4273, 4275, 4276, 4277, 4284, 4285, 4288, 4292, 4301, 4303, 4304, 4305,
++    4309, 4312, 4316, 4340, 4341, 4342, 4344, 4348, 4356, 4357, 4359, 4361,
++    4368, 4372, 4388, 4396, 4416, 4424, 4425, 4428, 4432, 4440, 4441, 4452,
++    4456, 4480, 4481, 4484, 4487, 4488, 4489, 4490, 4496, 4497, 4499, 4501,
++    4505, 4506, 4508, 4516, 4528, 4536, 4564, 4565, 4568, 4572, 4585, 4592,
++    4596, 4600, 4608, 4611, 4613, 4620, 4621, 4624, 4628, 4636, 4637, 4639,
++    4676, 4677, 4680, 4684, 4686, 4692, 4693, 4695, 4697, 4698, 4699, 4704,
++    4705, 4708, 4712, 4714, 4720, 4721, 4723, 4724, 4725, 4731, 4732, 4733,
++    4736, 4740, 4748, 4749, 4751, 4752, 4753, 4760, 4761, 4776, 4816, 4817,
++    4820, 4823, 4824, 4832, 4835, 4836, 4837, 4844, 4865, 4872, 4873, 4888,
++    4889, 4891, 4892, 4893, 4928, 4929, 4932, 4936, 4944, 4945, 4949, 5012,
++    5040, 5061, 5068, 5069, 5072, 5076, 5084, 5087, 5089, 5180, 5201, 5208,
++    5212, 5216, 5224, 5225, 5264, 5265, 5268, 5272, 5280, 5281, 5283, 5285,
++    5292, 5293, 5295, 5296, 5299, 5300, 5301, 5302, 5308, 5309, 5311, 5312,
++    5313, 5317, 5320, 5321, 5324, 5328, 5336, 5337, 5339, 5340, 5341, 5348,
++    5349, 5352, 5356, 5364, 5365, 5367, 5369, 5376, 5380, 5384, 5392, 5397,
++    5404, 5405, 5406, 5407, 5408, 5411, 5412, 5414, 5415, 5420, 5421, 5423,
++    5424, 5425, 5430, 5432, 5433, 5436, 5440, 5448, 5449, 5451, 5452, 5453,
++    5460, 5461, 5464, 5468, 5476, 5477, 5479, 5480, 5481, 5488, 5492, 5496,
++    5509, 5516, 5517, 5518, 5520, 5524, 5526, 5532, 5533, 5535, 5537, 5541,
++    5544, 5545, 5548, 5552, 5565, 5572, 5576, 5580, 5588, 5591, 5592, 5600,
++    5604, 5608, 5616, 5617, 5619, 5628, 5629, 5632, 5636, 5644, 5645, 5647,
++    5649, 5656, 5657, 5660, 5663, 5664, 5672, 5673, 5675, 5677, 5679, 5681,
++    5682, 5684, 5704, 5712, 5713, 5716, 5720, 5728, 5733, 5740, 5741, 5744,
++    5748, 5756, 5757, 5759, 5761, 5768, 5769, 5776, 5784, 5787, 5789, 5796,
++    5797, 5800, 5804, 5805, 5812, 5813, 5815, 5817, 5852, 5853, 5856, 5859,
++    5860, 5867, 5868, 5869, 5871, 5873, 5878, 5880, 5881, 5883, 5884, 5888,
++    5896, 5897, 5900, 5901, 5907, 5908, 5909, 5912, 5916, 5924, 5925, 5928,
++    5929, 5957, 5992, 5993, 5996, 6000, 6002, 6008, 6009, 6012, 6013, 6020,
++    6024, 6028, 6080, 6104, 6105, 6108, 6111, 6112, 6114, 6120, 6121, 6125,
++    6132, 6133, 6136, 6152, 6160, 6180, 6188, 6192, 6196, 6204, 6205, 6216,
++    6244, 6245, 6248, 6252, 6260, 6261, 6265, 6272, 6292, 6300, 6328, 6332,
++    6377, 6384, 6385, 6388, 6392, 6394, 6399, 6400, 6401, 6412, 6416, 6420,
++    6428, 6440, 6441, 6444, 6448, 6456, 6457, 6459, 6461, 6468, 6469, 6472,
++    6473, 6474, 6476, 6477, 6478, 6483, 6484, 6485, 6487, 6488, 6489, 6493,
++    6494, 6496, 6497, 6500, 6504, 6512, 6513, 6515, 6516, 6517, 6524, 6525,
++    6528, 6532, 6535, 6540, 6541, 6543, 6545, 6549, 6551, 6552, 6556, 6560,
++    6569, 6580, 6581, 6584, 6585, 6587, 6588, 6589, 6590, 6596, 6597, 6598,
++    6599, 6600, 6601, 6602, 6604, 6606, 6608, 6609, 6612, 6616, 6624, 6625,
++    6627, 6629, 6636, 6637, 6638, 6640, 6644, 6646, 6647, 6652, 6653, 6654,
++    6655, 6656, 6657, 6661, 6662, 6663, 6664, 6668, 6672, 6680, 6681, 6683,
++    6684, 6692, 6693, 6696, 6700, 6701, 6702, 6704, 6707, 6708, 6709, 6711,
++    6713, 6715, 6720, 6721, 6724, 6728, 6736, 6737, 6739, 6740, 6741, 6748,
++    6749, 6752, 6764, 6767, 6769, 6776, 6777, 6780, 6784, 6792, 6793, 6795,
++    6797, 6804, 6805, 6808, 6812, 6820, 6821, 6823, 6825, 6832, 6833, 6836,
++    6840, 6841, 6842, 6848, 6849, 6851, 6853, 6860, 6861, 6864, 6868, 6876,
++    6877, 6880, 6881, 6888, 6889, 6892, 6896, 6904, 6905, 6909, 6916, 6917,
++    6920, 6924, 6932, 6933, 6935, 6937, 6944, 6945, 6948, 6952, 6960, 6961,
++    6963, 6965, 6967, 6972, 6973, 6976, 6980, 6986, 6988, 6989, 6991, 6993,
++    6994, 6995, 6996, 6997, 6998, 6999, 7000, 7004, 7008, 7016, 7019, 7028,
++    7029, 7032, 7036, 7037, 7038, 7043, 7044, 7045, 7047, 7048, 7049, 7050,
++    7054, 7056, 7057, 7060, 7062, 7063, 7064, 7066, 7072, 7073, 7075, 7076,
++    7077, 7078, 7084, 7085, 7088, 7092, 7100, 7101, 7103, 7104, 7105, 7112,
++    7113, 7116, 7118, 7120, 7128, 7133, 7140, 7144, 7148, 7168, 7169, 7172,
++    7176, 7178, 7184, 7185, 7187, 7189, 7190, 7196, 7197, 7200, 7204, 7212,
++    7213, 7215, 7217, 7224, 7228, 7232, 7240, 7241, 7244, 7245, 7252, 7280,
++    7281, 7284, 7288, 7290, 7296, 7297, 7299, 7301, 7302, 7303, 7307, 7308,
++    7309, 7316, 7325, 7327, 7329, 7336, 7356, 7357, 7364, 7368, 7372, 7380,
++    7381, 7383, 7385, 7392, 7393, 7396, 7413, 7420, 7421, 7424, 7428, 7429,
++    7430, 7436, 7437, 7439, 7441, 7448, 7468, 7476, 7504, 7505, 7508, 7512,
++    7520, 7521, 7523, 7532, 7536, 7540, 7548, 7560, 7561, 7564, 7568, 7576,
++    7577, 7579, 7581, 7616, 7617, 7620, 7623, 7624, 7626, 7632, 7633, 7635,
++    7637, 7638, 7641, 7642, 7644, 7645, 7648, 7650, 7652, 7655, 7660, 7661,
++    7663, 7664, 7665, 7672, 7673, 7676, 7680, 7688, 7689, 7691, 7692, 7693,
++    7700, 7704, 7721, 7756, 7757, 7760, 7764, 7772, 7773, 7775, 7776, 7777,
++    7784, 7805, 7812, 7832, 7868, 7869, 7872, 7876, 7884, 7885, 7887, 7889,
++    7891, 7896, 7897, 7904, 7916, 7924, 7944, 7952, 7956, 7960, 7968, 7969,
++    8001, 8008, 8009, 8012, 8016, 8024, 8025, 8029, 8036, 8056, 8057, 8092,
++    8120, 8148, 8164, 8167, 8169, 8204, 8205, 8208, 8212, 8220, 8221, 8225,
++    8226, 8231, 8232, 8233, 8236, 8238, 8240, 8248, 8249, 8251, 8252, 8253,
++    8254, 8260, 8261, 8264, 8268, 8276, 8277, 8279, 8280, 8281, 8288, 8292,
++    8294, 8296, 8304, 8309, 8344, 8345, 8348, 8352, 8360, 8361, 8363, 8364,
++    8365, 8372, 8373, 8376, 8380, 8388, 8389, 8391, 8393, 8400, 8404, 8420,
++    8428, 8432, 8449, 8456, 8457, 8460, 8464, 8472, 8473, 8475, 8477, 8484,
++    8488, 8492, 8505, 8540, 8544, 8548, 8556, 8557, 8559, 8561, 8568, 8584,
++    8596, 8597, 8600, 8604, 8612, 8613, 8615, 8617, 8624, 8644, 8652, 8656,
++    8680, 8684, 8688, 8696, 8697, 8699, 8701, 8708, 8712, 8716, 8724, 8729,
++    8736, 8737, 8740, 8744, 8752, 8753, 8755, 8757, 8792, 8793, 8796, 8799,
++    8800, 8801, 8808, 8809, 8811, 8813, 8820, 8821, 8824, 8828, 8836, 8837,
++    8839, 8841, 8848, 8849, 8852, 8856, 8864, 8865, 8867, 8868, 8869, 8876,
++    8877, 8897, 8932, 8933, 8936, 8939, 8940, 8948, 8949, 8951, 8952, 8953,
++    8960, 8961, 8964, 8968, 8976, 8977, 8979, 8981, 8988, 8992, 8996, 9004,
++    9005, 9007, 9008, 9009, 9016, 9044, 9045, 9048, 9052, 9060, 9061, 9063,
++    9065, 9072, 9073, 9076, 9080, 9088, 9093, 9100, 9121, 9128, 9136, 9156,
++    9184, 9185, 9188, 9192, 9200, 9201, 9203, 9205, 9212, 9216, 9220, 9233,
++    9240, 9261, 9268, 9269, 9272, 9276, 9284, 9285, 9287, 9289, 9296, 9300,
++    9304, 9312, 9324, 9325, 9328, 9332, 9340, 9341, 9345, 9380, 9381, 9384,
++    9388, 9396, 9397, 9399, 9401, 9408, 9409, 9412, 9416, 9417, 9424, 9425,
++    9427, 9428, 9429, 9436, 9437, 9440, 9444, 9452, 9453, 9455, 9456, 9457,
++    9464, 9485, 9520, 9521, 9524, 9528, 9530, 9536, 9537, 9539, 9540, 9541,
++    9548, 9549, 9552, 9556, 9564, 9565, 9567, 9569, 9576, 9580, 9596, 9604,
++    9608, 9632, 9633, 9636, 9640, 9648, 9649, 9651, 9653, 9658, 9660, 9664,
++    9688, 9716, 9720, 9735, 9737, 9744, 9772, 9773, 9776, 9780, 9788, 9789,
++    9791, 9793, 9800, 9820, 9828, 9856, 9857, 9860, 9864, 9872, 9873, 9877,
++    9884, 9888, 9892, 9900, 9905, 9912, 9913, 9916, 9919, 9920, 9922, 9928,
++    9929, 9931, 9940, 9944, 9948, 9956, 9957, 9968, 9969, 9972, 9976, 9984,
++    9985, 9987, 9989, 9996, 9997, 9998, 10000, 10004, 10006, 10012, 10013, 10015,
++    10016, 10017, 10021, 10024, 10025, 10028, 10032, 10040, 10041, 10043, 10044, 10045,
++    10052, 10053, 10108, 10109, 10112, 10116, 10124, 10125, 10127, 10128, 10129, 10136,
++    10137, 10140, 10144, 10152, 10153, 10155, 10157, 10164, 10168, 10172, 10180, 10181,
++    10184, 10185, 10192, 10200, 10209, 10211, 10220, 10221, 10224, 10228, 10236, 10237,
++    10239, 10241, 10248, 10269, 10304, 10308, 10332, 10336, 10340, 10349, 10351, 10360,
++    10361, 10364, 10367, 10368, 10370, 10376, 10377, 10379, 10381, 10388, 10409, 10444,
++    10448, 10452, 10460, 10463, 10472, 10476, 10480, 10488, 10491, 10493, 10500, 10504,
++    10508, 10516, 10517, 10519, 10556, 10557, 10560, 10564, 10572, 10573, 10575, 10577,
++    10584, 10585, 10588, 10592, 10597, 10600, 10601, 10603, 10605, 10612, 10613, 10616,
++    10620, 10628, 10629, 10631, 10632, 10633, 10640, 10661, 10696, 10697, 10700, 10704,
++    10706, 10712, 10713, 10715, 10717, 10724, 10725, 10728, 10732, 10740, 10741, 10743,
++    10745, 10752, 10753, 10756, 10760, 10768, 10769, 10771, 10772, 10773, 10780, 10784,
++    10788, 10797, 10808, 10809, 10812, 10816, 10821, 10824, 10825, 10827, 10829, 10833,
++    10836, 10837, 10840, 10844, 10855, 10857, 10864, 10865, 10868, 10883, 10885, 10892,
++    10893, 10896, 10900, 10909, 10911, 10913, 10920, 10924, 10928, 10937, 10939, 10948,
++    10949, 10952, 10956, 10961, 10964, 10967, 10969, 10976, 10980, 10984, 10992, 10997,
++    11004, 11005, 11008, 11012, 11025, 11032, 11033, 11036, 11040, 11048, 11049, 11051,
++    11053, 11060, 11061, 11064, 11068, 11076, 11079, 11081, 11088, 11089, 11092, 11094,
++    11095, 11096, 11097, 11104, 11105, 11107, 11109, 11113, 11116, 11120, 11124, 11132,
++    11133, 11137, 11144, 11145, 11148, 11152, 11160, 11161, 11163, 11165,
++};
++
++// The KS index of the syllable (cho, jung, jong) of the Unicode composition
++// (indices 0-18, 0-20, 0-27), or -1 when KS X 1001 does not have it.
++static inline s16 HangulKsIndex(u8 cho, u8 jung, u8 jong)
++{
++    u16 target = (cho * 21 + jung) * 28 + jong;
++    s16 low = 0, high = ARRAY_COUNT(sHangulKsSyllables) - 1;
++
++    while (low <= high)
++    {
++        s16 mid = (low + high) / 2;
++
++        if (sHangulKsSyllables[mid] == target)
++            return mid;
++        if (sHangulKsSyllables[mid] < target)
++            low = mid + 1;
++        else
++            high = mid - 1;
++    }
++    return -1;
++}
++
++#endif // GUARD_HANGUL_KS_H

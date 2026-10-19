@@ -74,6 +74,29 @@ static inline uint8_t CtrLocale_Glyph(uint32_t c)
     }
 }
 
+#if defined(LANGUAGE_KOREAN) && GAME_LANGUAGE == LANGUAGE_KOREAN
+#include "hangul_ks.h"
+
+/* A Hangul syllable's index in KS X 1001 (the Korean font's order), or -1. */
+static inline int CtrLocale_HangulIndex(uint32_t c)
+{
+    int low = 0, high = (int)ARRAY_COUNT(sHangulKsSyllables) - 1;
+
+    while (low <= high)
+    {
+        int mid = (low + high) / 2;
+
+        if (sHangulKsSyllables[mid] == c - 0xAC00)
+            return mid;
+        if (sHangulKsSyllables[mid] < c - 0xAC00)
+            low = mid + 1;
+        else
+            high = mid - 1;
+    }
+    return -1;
+}
+#endif
+
 static inline size_t CtrLocale_ToGame(uint8_t *out, size_t capacity, const char *text)
 {
     size_t n = 0;
@@ -98,6 +121,19 @@ static inline size_t CtrLocale_ToGame(uint8_t *out, size_t capacity, const char 
             }
             else c = 0xfffd;
         }
+#if defined(LANGUAGE_KOREAN) && GAME_LANGUAGE == LANGUAGE_KOREAN
+        /* Hangul: two bytes, a lead 0x37-0x40 and a trail. */
+        if (c >= 0xAC00 && c <= 0xD7A3 && CtrLocale_HangulIndex(c) >= 0)
+        {
+            int index = CtrLocale_HangulIndex(c);
+
+            if (n + 2 >= capacity)
+                break;
+            out[n++] = (uint8_t)(0x37 + index / 239);
+            out[n++] = (uint8_t)(index % 239 + 1);
+            continue;
+        }
+#endif
         out[n++] = CtrLocale_Glyph(c);
     }
     out[n] = 0xff;

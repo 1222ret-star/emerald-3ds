@@ -1,0 +1,200 @@
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Korean text (Hangul two-byte codes)
+Applies after 0056-follower-pokemon.patch; apply with tools/bootstrap.py.
+
+Korean build only (GAME_LANGUAGE == LANGUAGE_KOREAN): RenderText reads a Hangul
+lead byte (0x37-0x41) with its trail byte, GetStringWidth measures the pair, and
+the glyph functions draw Hangul from the port's Hangul font tables.
+
+diff --git a/src/text.c b/src/text.c
+index b91830b..79a4398 100644
+--- a/src/text.c
++++ b/src/text.c
+@@ -41,6 +41,26 @@ static u32 GetGlyphWidth_SmallNarrow(u16, bool32);
+ static const u8 *ResolveTextString(const u8 *str);
+ #endif
+ 
++#if defined(PORT_BRIDGE) && GAME_LANGUAGE == LANGUAGE_KOREAN
++// Hangul is two bytes: a lead byte 0x37-0x41, then a trail byte 0x01-0xEF
++// (KS X 1001 order). A glyph id from 0x3700 up is a whole Hangul code.
++#define IS_HANGUL_LEAD(c) ((u8)((c) - 0x37) <= 0x41 - 0x37)
++#define IS_HANGUL_GLYPH(id) ((id) >= 0x3700 && (id) < 0x4200)
++static void DecompressGlyph_Hangul(u16 glyphId, u8 face, u8 width, u8 height);
++#define HANGUL_GLYPH(face, width, height)                         \
++    if (IS_HANGUL_GLYPH(glyphId))                                 \
++    {                                                             \
++        DecompressGlyph_Hangul(glyphId, face, width, height);     \
++        return;                                                   \
++    }
++#define HANGUL_GLYPH_WIDTH(width) if (IS_HANGUL_GLYPH(glyphId)) return width;
++#define HANGUL_TEXT 1
++#else
++#define HANGUL_GLYPH(face, width, height)
++#define HANGUL_GLYPH_WIDTH(width)
++#define HANGUL_TEXT 0
++#endif
++
+ static EWRAM_DATA struct TextPrinter sTempTextPrinter = {0};
+ static EWRAM_DATA struct TextPrinter sTextPrinters[WINDOWS_MAX] = {0};
+ 
+@@ -550,6 +570,45 @@ static const u8 *ResolveTextString(const u8 *str)
+ }
+ #endif
+ 
++#if HANGUL_TEXT
++static void DecompressGlyph_Hangul(u16 glyphId, u8 face, u8 width, u8 height)
++{
++    const u16 *glyphs = Port_HangulGlyphs(face);
++
++    gCurGlyph.width = width;
++    gCurGlyph.height = height;
++    if (glyphs == NULL)
++    {
++        CpuFill32(0, gCurGlyph.gfxBufferTop, sizeof(gCurGlyph.gfxBufferTop));
++        CpuFill32(0, gCurGlyph.gfxBufferBottom, sizeof(gCurGlyph.gfxBufferBottom));
++        return;
++    }
++    glyphs += 0x20 * (glyphId - 0x3700);
++    if (width <= 8)
++    {
++        DecompressGlyphTile(glyphs, gCurGlyph.gfxBufferTop);
++        DecompressGlyphTile(glyphs + 0x10, gCurGlyph.gfxBufferBottom);
++    }
++    else
++    {
++        DecompressGlyphTile(glyphs, gCurGlyph.gfxBufferTop);
++        DecompressGlyphTile(glyphs + 0x8, gCurGlyph.gfxBufferTop + 8);
++        DecompressGlyphTile(glyphs + 0x10, gCurGlyph.gfxBufferBottom);
++        DecompressGlyphTile(glyphs + 0x18, gCurGlyph.gfxBufferBottom + 8);
++    }
++}
++
++// The glyph id of the character at *str, stepping over a Hangul trail byte.
++static u16 NextGlyphId(const u8 **str)
++{
++    u16 glyphId = **str;
++
++    if (IS_HANGUL_LEAD(glyphId) && (*str)[1] != EOS)
++        glyphId = (glyphId << 8) | *++*str;
++    return glyphId;
++}
++#endif
++
+ void DecompressGlyphTile(const void *src_, void *dest_)
+ {
+     const u16 *src = src_;
+@@ -1170,6 +1229,10 @@ static u16 RenderText(struct TextPrinter *textPrinter)
+             return RENDER_FINISH;
+         }
+ 
++#if HANGUL_TEXT
++        if (IS_HANGUL_LEAD(currChar) && *textPrinter->printerTemplate.currentChar != EOS)
++            currChar = (currChar << 8) | *textPrinter->printerTemplate.currentChar++;
++#endif
+         switch (subStruct->fontId)
+         {
+         case FONT_SMALL:
+@@ -1442,7 +1505,12 @@ s32 GetStringWidth(u8 fontId, const u8 *str, s16 letterSpacing)
+ #endif
+             while (*bufferPointer != EOS)
+             {
++#if HANGUL_TEXT
++                glyphWidth = func(NextGlyphId(&bufferPointer), isJapanese);
++                bufferPointer++;
++#else
+                 glyphWidth = func(*bufferPointer++, isJapanese);
++#endif
+                 if (minGlyphWidth > 0)
+                 {
+                     if (glyphWidth < minGlyphWidth)
+@@ -1535,7 +1603,11 @@ s32 GetStringWidth(u8 fontId, const u8 *str, s16 letterSpacing)
+         case CHAR_PROMPT_CLEAR:
+             break;
+         default:
++#if HANGUL_TEXT
++            glyphWidth = func(NextGlyphId(&str), isJapanese);
++#else
+             glyphWidth = func(*str, isJapanese);
++#endif
+             if (minGlyphWidth > 0)
+             {
+                 if (glyphWidth < minGlyphWidth)
+@@ -1749,6 +1821,7 @@ static void DecompressGlyph_Small(u16 glyphId, bool32 isJapanese)
+ {
+     const u16 *glyphs;
+ 
++    HANGUL_GLYPH(HANGUL_FACE_SMALL, 8, 13)
+     if (isJapanese == 1)
+     {
+ #ifdef PORT_BRIDGE
+@@ -1791,6 +1864,7 @@ static void DecompressGlyph_Small(u16 glyphId, bool32 isJapanese)
+ 
+ static u32 GetGlyphWidth_Small(u16 glyphId, bool32 isJapanese)
+ {
++    HANGUL_GLYPH_WIDTH(8)
+     if (isJapanese == TRUE)
+         return 8;
+     else
+@@ -1801,6 +1875,7 @@ static void DecompressGlyph_Narrow(u16 glyphId, bool32 isJapanese)
+ {
+     const u16 *glyphs;
+ 
++    HANGUL_GLYPH(HANGUL_FACE_NARROW, 8, 15)
+     if (isJapanese == TRUE)
+     {
+ #ifdef PORT_BRIDGE
+@@ -1843,6 +1918,7 @@ static void DecompressGlyph_Narrow(u16 glyphId, bool32 isJapanese)
+ 
+ static u32 GetGlyphWidth_Narrow(u16 glyphId, bool32 isJapanese)
+ {
++    HANGUL_GLYPH_WIDTH(8)
+     if (isJapanese == TRUE)
+         return 8;
+     else
+@@ -1853,6 +1929,7 @@ static void DecompressGlyph_SmallNarrow(u16 glyphId, bool32 isJapanese)
+ {
+     const u16 *glyphs;
+ 
++    HANGUL_GLYPH(HANGUL_FACE_SMALL, 8, 13)
+     if (isJapanese == TRUE)
+     {
+ #ifdef PORT_BRIDGE
+@@ -1895,6 +1972,7 @@ static void DecompressGlyph_SmallNarrow(u16 glyphId, bool32 isJapanese)
+ 
+ static u32 GetGlyphWidth_SmallNarrow(u16 glyphId, bool32 isJapanese)
+ {
++    HANGUL_GLYPH_WIDTH(8)
+     if (isJapanese == TRUE)
+         return 8;
+     else
+@@ -1905,6 +1983,7 @@ static void DecompressGlyph_Short(u16 glyphId, bool32 isJapanese)
+ {
+     const u16 *glyphs;
+ 
++    HANGUL_GLYPH(HANGUL_FACE_NORMAL, 11, 14)
+     if (isJapanese == TRUE)
+     {
+ #ifdef PORT_BRIDGE
+@@ -1949,6 +2028,7 @@ static void DecompressGlyph_Short(u16 glyphId, bool32 isJapanese)
+ 
+ static u32 GetGlyphWidth_Short(u16 glyphId, bool32 isJapanese)
+ {
++    HANGUL_GLYPH_WIDTH(11)
+     if (isJapanese == TRUE)
+         return gFontShortJapaneseGlyphWidths[glyphId];
+     else
+@@ -1959,6 +2039,7 @@ static void DecompressGlyph_Normal(u16 glyphId, bool32 isJapanese)
+ {
+     const u16 *glyphs;
+ 
++    HANGUL_GLYPH(HANGUL_FACE_NORMAL, 11, 15)
+     if (isJapanese == TRUE)
+     {
+ #ifdef PORT_BRIDGE
+@@ -2001,6 +2082,7 @@ static void DecompressGlyph_Normal(u16 glyphId, bool32 isJapanese)
+ 
+ static u32 GetGlyphWidth_Normal(u16 glyphId, bool32 isJapanese)
+ {
++    HANGUL_GLYPH_WIDTH(11)
+     if (isJapanese == TRUE)
+         return 8;
+     else

@@ -263,6 +263,57 @@ void Port_PreloadLatinFonts(void)
         LoadLatinFont(i);
 }
 
+/* ── Hangul fonts (Korean build) ────────────────────────────────────────── */
+
+/*
+ * Glyphs for the two-byte Hangul codes 0x3700-0x412F, 64 bytes each, in the
+ * Latin glyph layout. The builder extracts them from the player's Korean ROM;
+ * a missing file only blanks the Hangul text.
+ */
+#define HANGUL_FONT_SIZE ((0x4130 - 0x3700) * 0x40)
+
+static struct
+{
+    const char *path;
+    u8 *raw;
+    bool8 failed;
+} sHangulFonts[HANGUL_FACE_COUNT] = {
+    [HANGUL_FACE_SMALL]  = { "graphics/fonts/hangul_small.hanfont",  NULL, FALSE },
+    [HANGUL_FACE_NORMAL] = { "graphics/fonts/hangul_normal.hanfont", NULL, FALSE },
+    [HANGUL_FACE_NARROW] = { "graphics/fonts/hangul_narrow.hanfont", NULL, FALSE },
+};
+
+const u16 *Port_HangulGlyphs(u8 face)
+{
+    FILE *file;
+
+    if (face >= HANGUL_FACE_COUNT)
+        return NULL;
+    if (sHangulFonts[face].raw != NULL || sHangulFonts[face].failed)
+        return (const u16 *)sHangulFonts[face].raw;
+    sHangulFonts[face].failed = TRUE;
+    file = CtrData_Open(sHangulFonts[face].path);
+    if (file == NULL)
+    {
+        PORT_LOG("[ERROR] font missing: %s\n", sHangulFonts[face].path);
+        return NULL;
+    }
+    sHangulFonts[face].raw = malloc(HANGUL_FONT_SIZE);
+    if (sHangulFonts[face].raw == NULL
+     || fread(sHangulFonts[face].raw, 1, HANGUL_FONT_SIZE, file) != HANGUL_FONT_SIZE)
+    {
+        free(sHangulFonts[face].raw);
+        sHangulFonts[face].raw = NULL;
+        PORT_LOG("[ERROR] font unreadable: %s\n", sHangulFonts[face].path);
+    }
+    else
+    {
+        sHangulFonts[face].failed = FALSE;
+    }
+    fclose(file);
+    return (const u16 *)sHangulFonts[face].raw;
+}
+
 void Port_TextPreload(void)
 {
     Port_PreloadLatinFonts();
