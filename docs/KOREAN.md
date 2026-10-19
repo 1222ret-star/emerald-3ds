@@ -19,6 +19,20 @@
 python tools/bootstrap.py --make --korean-rom EmeraldKOR.gba -j8
 ```
 
+## 배포판 (빌더로 pak 만들기)
+
+배포판은 다른 언어처럼 실행 파일과 recipe만 담고, 사용자가 빌더에 자기 한글패치 롬을 넣어
+`emerald3ds.pak`을 만들어요. 빌더는 롬의 SHA-1로 한국어판(프로필 `BPEE-KO`)을 알아보고
+`payload/ko/`의 실행 파일과 recipe를 골라요. 엔진도 pak의 롬 SHA-1이 한국어판인지 확인해요.
+
+```sh
+python tools/build_release.py --korean-rom EmeraldKOR.gba ...   # payload/ko/ 추가
+python -m emerald3ds_builder build --rom EmeraldKOR.gba --output out  # 사용자 쪽
+```
+
+recipe는 `tools/gen_recipe.py`가 만들고, 한국어판 심볼 주소(`tools/locales/korean-symbols.s.gz`,
+이름과 주소만)를 힌트로 써요.
+
 ## 한글 코드
 
 - 2바이트: 리드 0x37~0x41 + 트레일 0x01~0xEF, KS X 1001 순서
@@ -54,14 +68,18 @@ python tools/bootstrap.py --make --korean-rom EmeraldKOR.gba -j8
 - `3ds_port/include/3ds_locale.h`: `CTR_TEXT`에 한국어 인자(5번째)를 더했어요. 포트 자체 메뉴
   문구 68개(설정·추가 기능·치트 등)의 한국어 번역이 `3ds_extras.c`, `3ds_bottom_ui.c`에 있고,
   `3ds_locale_text.h`가 UTF-8 한글을 게임의 2바이트 코드로 바꿔요.
-- `tools/localize_korean.py`: 롬 확인, 글꼴 추출, 매니페스트 적용, 포켓몬 이름, `GAME_LANGUAGE`
+- `patches/pokeemerald/0062-korean-title-version-banner.patch`: 한글판 타이틀의 "에메랄드" 배너는
+  16색이 아니라 144색 팔레트를 써요.
+- `tools/localize_korean.py`: 롬 확인, 글꼴 추출, 매니페스트 적용(문자열과 그래픽), 포켓몬 이름, `GAME_LANGUAGE`
 - `tools/locales/korean.json.gz`: 문자열 정의 위치(소스 파일·오프셋)와 롬 오프셋·크기.
   텍스트는 들어 있지 않아요. 원본 영문판과 한글판을 심볼 단위로 대응시켜 만들어요.
+  `graphics`에는 한글판이 바꾼 그림(타이틀 로고와 팔레트, 메뉴 타일 등 45개)의 롬 위치가 들어 있어요.
 
 ## 아직 안 된 것
 
 - 위치를 찾지 못한 문자열 약 900개 (주로 한글판에서 수정된 스크립트가 참조하는 문자열)
 - 나무열매 이름, 배틀 프런티어 트레이너 이름 (한글판 롬에서도 영어)
-- 간이회화, 도감 가나다 정렬, 글자가 그림으로 들어간 그래픽(요약 화면 PROFILE 등), 빌더/recipe 연동
+- 간이회화, 도감 가나다 정렬, 한글판 롬에서 위치를 못 찾은 그래픽 일부
+- recipe에 영문판 원문이 약 25 KB 남아 있어요(주로 위치를 못 찾은 스크립트 문자열). 공개 배포 전에 줄여야 해요.
 - 한글패치(E-K 20210221) 자체가 번역하지 않은 문자열 약 1,800개는 영어로 나와요
   (배틀타워 제자, 보라시티, 포켓내비 통화, 비밀기지, 콘테스트 등).

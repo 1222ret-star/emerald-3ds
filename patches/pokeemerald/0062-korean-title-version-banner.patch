@@ -1,0 +1,22 @@
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Korean title version banner
+Applies after 0061-korean-battle-yesno.patch; apply with tools/bootstrap.py.
+
+Korean build only (GAME_LANGUAGE == LANGUAGE_KOREAN): the version banner of the
+Korean title screen (staged from the player's ROM) uses 144 colors instead of 16.
+
+diff --git a/src/title_screen.c b/src/title_screen.c
+--- a/src/title_screen.c
++++ b/src/title_screen.c
+@@ -667,7 +667,12 @@
+         LoadCompressedSpriteSheet(&sSpriteSheet_EmeraldVersion[0]);
+         LoadCompressedSpriteSheet(&sSpriteSheet_PressStart[0]);
+         LoadCompressedSpriteSheet(&sPokemonLogoShineSpriteSheet[0]);
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++        // The Korean version banner has 144 colors.
++        LoadPalette(gTitleScreenEmeraldVersionPal, OBJ_PLTT_ID(0), 144 * sizeof(u16));
++#else
+         LoadPalette(gTitleScreenEmeraldVersionPal, OBJ_PLTT_ID(0), PLTT_SIZE_4BPP);
++#endif
+         LoadSpritePalette(&sSpritePalette_PressStart[0]);
+         gMain.state = 2;
+         break;

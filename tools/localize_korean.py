@@ -25,6 +25,7 @@ import gzip
 import hashlib
 import json
 import re
+import sys
 from pathlib import Path
 
 KOREAN_SHA1 = "81b13f7931a85c18f08c6de3c0202ab47d6c8f37"
@@ -37,6 +38,10 @@ HANGUL_FONTS = {
     "hangul_narrow.hanfont": 0x6D81D8,  # FONT_NARROW (8x15)
 }
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "tools"))
+from locale_lists import stage_id_lists  # noqa: E402
+sys.path.insert(0, str(ROOT / "builder"))
+from emerald3ds_builder.recipe import lz77_decompress  # noqa: E402
 
 
 def encoded(data: bytes) -> str:
@@ -91,6 +96,20 @@ def stage(tree: Path, rom_path: Path) -> None:
         raise SystemExit("global.h: GAME_LANGUAGE is not the English default")
     writes[path] = text.replace("#define GAME_LANGUAGE (LANGUAGE_ENGLISH)",
                                 "#define GAME_LANGUAGE (LANGUAGE_KOREAN)").encode()
+
+    # The Korean ROM's own graphics (title logo, menu tiles, ...).
+    for relative, offset, size in manifest.get("graphics", []):
+        if not 0 <= offset < offset + size <= len(rom):
+            raise SystemExit("Graphic outside ROM: " + relative)
+        writes[tree / relative] = rom[offset:offset + size]
+        if relative.endswith(".lz"):
+            writes[tree / relative[:-3]] = lz77_decompress(rom, offset)
+
+    # The Korean game's symbol names and addresses, for the recipe's hints.
+    symbols = ROOT / "tools/locales/korean-symbols.s.gz"
+    writes[tree / "build/korean-reference.s"] = gzip.decompress(symbols.read_bytes())
+    # Easy Chat's move and Pokemon lists in this ROM's order.
+    stage_id_lists(tree, rom, symbols, writes)
 
     # Every check passed: write.
     for path, data in writes.items():

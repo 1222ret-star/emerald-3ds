@@ -1,7 +1,9 @@
 """Recognise the player's ROM.
 
 Clean English (BPEE), Spanish (BPES), French (BPEF) and Italian (BPEI) Pokémon
-Emerald dumps are recognised (16 MiB, by SHA-1). Building still requires a recipe and
+Emerald dumps are recognised (16 MiB, by SHA-1), and the Korean fan translation
+(the English ROM with the "20210221 Pokemon Emerald Version (E-K)" patch), which
+keeps the English header: its profile key is BPEE-KO. Building still requires a recipe and
 executable made for the same ROM. A trimmed dump (trailing 0xFF removed) is padded back before it is checked; a .zip holding a single .gba is
 opened directly. The ROM is only ever read into memory: it is never copied,
 written or sent anywhere.
@@ -21,9 +23,10 @@ SUPPORTED_SHA1 = "f3ae088181bf583e55daf962a92bb46f4f1d07b7"
 SPANISH_SHA1 = "fe1558a3dcb0360ab558969e09b690888b846dd9"
 FRENCH_SHA1 = "ca666651374d89ca439007bed54d839eb7bd14d0"
 ITALIAN_SHA1 = "1692db322400c3141c5de2db38469913ceb1f4d4"
+KOREAN_SHA1 = "81b13f7931a85c18f08c6de3c0202ab47d6c8f37"
 # Fingerprints: libretro-database/metadat/no-intro/Nintendo - Game Boy Advance.dat
 ROM_PROFILES = {"BPEE": SUPPORTED_SHA1, "BPES": SPANISH_SHA1, "BPEF": FRENCH_SHA1,
-                "BPEI": ITALIAN_SHA1}
+                "BPEI": ITALIAN_SHA1, "BPEE-KO": KOREAN_SHA1}
 ROM_SIZE = 16 * 1024 * 1024
 KNOWN_CODES = {
     "BPEE": "Pokemon Emerald (USA, Europe)",
@@ -32,6 +35,7 @@ KNOWN_CODES = {
     "BPED": "Pokemon Emerald (Germany)",
     "BPEF": "Pokemon Emerald (France)",
     "BPEI": "Pokemon Emerald (Italy)",
+    "BPEE-KO": "Pokemon Emerald (Korean fan translation E-K 20210221)",
     "AXVE": "Pokemon Ruby",
     "AXPE": "Pokemon Sapphire",
     "BPRE": "Pokemon FireRed",

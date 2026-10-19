@@ -47,6 +47,14 @@ static const uint8_t sSupportedRomSha1[20] = {
 };
 #define SUPPORTED_ROM_DETAIL "Usa la ROM di Pokemon Smeraldo\n" \
                              "(Italia, BPEI) con questo client."
+#elif defined(LANGUAGE_KOREAN) && GAME_LANGUAGE == LANGUAGE_KOREAN
+/* The English ROM with the "20210221 Pokemon Emerald Version (E-K)" patch. */
+static const uint8_t sSupportedRomSha1[20] = {
+    0x81, 0xb1, 0x3f, 0x79, 0x31, 0xa8, 0x5c, 0x18, 0xf0, 0x8c,
+    0x6d, 0xe3, 0xc0, 0x20, 0x2a, 0xb4, 0x7d, 0x6c, 0x8f, 0x37,
+};
+#define SUPPORTED_ROM_DETAIL "Build the data with the Korean ROM\n" \
+                             "(E-K 20210221 patch) for this client."
 #else
 static const uint8_t sSupportedRomSha1[20] = {
     0xf3, 0xae, 0x08, 0x81, 0x81, 0xbf, 0x58, 0x3e, 0x55, 0xda,

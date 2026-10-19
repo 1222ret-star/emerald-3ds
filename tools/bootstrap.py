@@ -124,14 +124,14 @@ def main() -> int:
             shutil.rmtree(tree / "3ds_port/build", ignore_errors=True)
             shutil.rmtree(tree / "3ds_port/romfs", ignore_errors=True)
             (tree / "src/data/region_map/region_map_entries.h").unlink(missing_ok=True)
-        if previous_locale and not previous_name.startswith("KOR"):
+        if previous_locale:
             import gzip
             import json
             manifest_name = {"BPEF": "french.json.gz", "BPES": "spanish.json.gz",
-                             "BPEI": "italian.json.gz"}.get(previous_name.split()[0]
+                             "BPEI": "italian.json.gz", "KOR": "korean.json.gz"}.get(previous_name.split()[0]
                                                            if previous_name else "", "spanish.json.gz")
             manifest = json.loads(gzip.decompress((ROOT / "tools/locales" / manifest_name).read_bytes()))
-            for relative, _, _ in manifest["graphics"]:
+            for relative, _, _ in manifest.get("graphics", []):
                 for name in (relative, relative[:-3]) if relative.endswith(".lz") else (relative,):
                     # Tracked art was restored by the reset; generated locale
                     # art must be regenerated from the pinned source PNGs.
