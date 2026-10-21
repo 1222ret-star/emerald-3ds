@@ -7,7 +7,7 @@
     python tools/bootstrap.py --make --spanish-rom esmeralda.gba   # Spanish (BPES) build
     python tools/bootstrap.py --make --french-rom emeraude.gba     # French (BPEF) build
     python tools/bootstrap.py --make --italian-rom smeraldo.gba    # Italian (BPEI) build
-    python tools/bootstrap.py --make --korean-rom EmeraldKOR.gba   # Korean proof of concept
+    python tools/bootstrap.py --make --korean-rom EmeraldJK.gba    # Korean (Japanese ROM + J-K patch)
 
 1. Reads upstream.lock and fetches exactly that commit of pret/pokeemerald into
    build/upstream (a shallow fetch of one commit).
@@ -84,7 +84,7 @@ def main() -> int:
     ap.add_argument("--french-rom", type=Path, help="stage the French data from a clean BPEF ROM")
     ap.add_argument("--italian-rom", type=Path, help="stage the Italian data from a clean BPEI ROM")
     ap.add_argument("--korean-rom", type=Path,
-                    help="stage the Korean proof of concept from the BPEE + E-K 20210221 ROM")
+                    help="stage the Korean data from the Japanese ROM with the J-K 20260613 patch")
     ap.add_argument("--make", action="store_true", help="build the tools and the 3DSX afterwards")
     ap.add_argument("-j", "--jobs", type=int, default=4)
     ap.add_argument("--python", default=sys.executable, help="Python the build calls (PYTHON=)")

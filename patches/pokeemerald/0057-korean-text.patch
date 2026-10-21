@@ -3,7 +3,9 @@ Applies after 0056-follower-pokemon.patch; apply with tools/bootstrap.py.
 
 Korean build only (GAME_LANGUAGE == LANGUAGE_KOREAN): RenderText reads a Hangul
 lead byte (0x37-0x41) with its trail byte, GetStringWidth measures the pair, and
-the glyph functions draw Hangul from the port's Hangul font tables.
+the glyph functions draw Hangul from the port's Hangul font tables, with the
+fonts of the final J-K translation: FONT_NORMAL and FONT_SHORT use the 8-wide
+narrow glyphs, FONT_SMALL_NARROW its own table.
 
 diff --git a/src/text.c b/src/text.c
 index b91830b..79a4398 100644
@@ -154,7 +156,7 @@ index b91830b..79a4398 100644
  {
      const u16 *glyphs;
  
-+    HANGUL_GLYPH(HANGUL_FACE_SMALL, 8, 13)
++    HANGUL_GLYPH(HANGUL_FACE_SMALL_NARROW, 8, 13)
      if (isJapanese == TRUE)
      {
  #ifdef PORT_BRIDGE
@@ -170,7 +172,7 @@ index b91830b..79a4398 100644
  {
      const u16 *glyphs;
  
-+    HANGUL_GLYPH(HANGUL_FACE_NORMAL, 11, 14)
++    HANGUL_GLYPH(HANGUL_FACE_NARROW, 8, 14)
      if (isJapanese == TRUE)
      {
  #ifdef PORT_BRIDGE
@@ -178,7 +180,7 @@ index b91830b..79a4398 100644
  
  static u32 GetGlyphWidth_Short(u16 glyphId, bool32 isJapanese)
  {
-+    HANGUL_GLYPH_WIDTH(11)
++    HANGUL_GLYPH_WIDTH(8)
      if (isJapanese == TRUE)
          return gFontShortJapaneseGlyphWidths[glyphId];
      else
@@ -186,7 +188,7 @@ index b91830b..79a4398 100644
  {
      const u16 *glyphs;
  
-+    HANGUL_GLYPH(HANGUL_FACE_NORMAL, 11, 15)
++    HANGUL_GLYPH(HANGUL_FACE_NARROW, 8, 15)
      if (isJapanese == TRUE)
      {
  #ifdef PORT_BRIDGE
@@ -194,7 +196,7 @@ index b91830b..79a4398 100644
  
  static u32 GetGlyphWidth_Normal(u16 glyphId, bool32 isJapanese)
  {
-+    HANGUL_GLYPH_WIDTH(11)
++    HANGUL_GLYPH_WIDTH(8)
      if (isJapanese == TRUE)
          return 8;
      else

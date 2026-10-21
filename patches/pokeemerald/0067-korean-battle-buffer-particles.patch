@@ -1,0 +1,113 @@
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Korean particles in battle buffers
+Applies after 0066-korean-wide-dialogue-font.patch; apply with tools/bootstrap.py.
+
+Korean build only (GAME_LANGUAGE == LANGUAGE_KOREAN): the Korean ROM's texts put
+particle placeholders into the battle text buffers ("X used Y": sText_SpaceIs is
+{은/는}, the move name is followed by "{을/를} 썼다!"). Such a particle takes the
+form that fits the text before it, and ExpandBattleTextBuffPlaceholders steps over
+an id it does not know instead of looping forever on it (the freeze in the second
+rival battle).
+
+diff --git a/src/battle_message.c b/src/battle_message.c
+--- a/src/battle_message.c
++++ b/src/battle_message.c
+@@ -59,6 +59,9 @@
+ static void ChooseMoveUsedParticle(u8 *textPtr);
+ static void ChooseTypeOfMoveUsedString(u8 *dst);
+ static void ExpandBattleTextBuffPlaceholders(const u8 *src, u8 *dst);
++#if KOREAN_PARTICLES
++static bool8 IsBufferedParticle(const u8 *buffer);
++#endif
+ 
+ static EWRAM_DATA u8 sBattlerAbilities[MAX_BATTLERS_COUNT] = {0};
+ EWRAM_DATA struct BattleMsgData *gBattleMsgDataPtr = NULL;
+@@ -2411,6 +2414,12 @@
+             switch (*src)
+             {
+             case B_TXT_BUFF1:
++#if KOREAN_PARTICLES
++                if (IsBufferedParticle(gBattleTextBuff1))
++                    toCpy = HangulParticle(gBattleTextBuff1[1] - B_TXT_PARTICLE_FIRST,
++                                           dstID >= 2 ? HangulFinalBefore(&dst[dstID]) : HANGUL_FINAL_NONE);
++                else
++#endif
+                 if (gBattleTextBuff1[0] == B_BUFF_PLACEHOLDER_BEGIN)
+                 {
+                     ExpandBattleTextBuffPlaceholders(gBattleTextBuff1, gStringVar1);
+@@ -2424,6 +2433,12 @@
+                 }
+                 break;
+             case B_TXT_BUFF2:
++#if KOREAN_PARTICLES
++                if (IsBufferedParticle(gBattleTextBuff2))
++                    toCpy = HangulParticle(gBattleTextBuff2[1] - B_TXT_PARTICLE_FIRST,
++                                           dstID >= 2 ? HangulFinalBefore(&dst[dstID]) : HANGUL_FINAL_NONE);
++                else
++#endif
+                 if (gBattleTextBuff2[0] == B_BUFF_PLACEHOLDER_BEGIN)
+                 {
+                     ExpandBattleTextBuffPlaceholders(gBattleTextBuff2, gStringVar2);
+@@ -2435,6 +2450,12 @@
+                 }
+                 break;
+             case B_TXT_BUFF3:
++#if KOREAN_PARTICLES
++                if (IsBufferedParticle(gBattleTextBuff3))
++                    toCpy = HangulParticle(gBattleTextBuff3[1] - B_TXT_PARTICLE_FIRST,
++                                           dstID >= 2 ? HangulFinalBefore(&dst[dstID]) : HANGUL_FINAL_NONE);
++                else
++#endif
+                 if (gBattleTextBuff3[0] == B_BUFF_PLACEHOLDER_BEGIN)
+                 {
+                     ExpandBattleTextBuffPlaceholders(gBattleTextBuff3, gStringVar3);
+@@ -2814,6 +2835,20 @@
+             // missing if (toCpy != NULL) check
+             while (*toCpy != EOS)
+             {
++#if KOREAN_PARTICLES
++                // A particle inside a buffer ("{을/를} 썼다!" after the move name).
++                if (toCpy[0] == PLACEHOLDER_BEGIN && toCpy[1] >= B_TXT_PARTICLE_FIRST
++                    && toCpy[1] < B_TXT_PARTICLE_FIRST + HANGUL_PARTICLE_COUNT)
++                {
++                    const u8 *particle = HangulParticle(toCpy[1] - B_TXT_PARTICLE_FIRST,
++                                                        dstID >= 2 ? HangulFinalBefore(&dst[dstID]) : HANGUL_FINAL_NONE);
++
++                    while (*particle != EOS)
++                        dst[dstID++] = *particle++;
++                    toCpy += 2;
++                    continue;
++                }
++#endif
+                 dst[dstID] = *toCpy;
+                 dstID++;
+                 toCpy++;
+@@ -2840,6 +2875,16 @@
+ 
+     return dstID;
+ }
++
++#if KOREAN_PARTICLES
++// The Korean texts put a particle into a buffer (ChooseMoveUsedParticle's
++// sText_SpaceIs is {은/는}); the particle follows the text before the buffer.
++static bool8 IsBufferedParticle(const u8 *buffer)
++{
++    return buffer[0] == B_BUFF_PLACEHOLDER_BEGIN
++        && buffer[1] >= B_TXT_PARTICLE_FIRST && buffer[1] < B_TXT_PARTICLE_FIRST + HANGUL_PARTICLE_COUNT;
++}
++#endif
+ 
+ static void ExpandBattleTextBuffPlaceholders(const u8 *src, u8 *dst)
+ {
+@@ -2951,6 +2996,12 @@
+             }
+             srcID += 3;
+             break;
++#if KOREAN_PARTICLES
++        default:
++            // An id this function does not know: step over it, never loop on it.
++            srcID++;
++            break;
++#endif
+         }
+     }
+ }

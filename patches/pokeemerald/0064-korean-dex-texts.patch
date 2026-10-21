@@ -1,0 +1,59 @@
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Korean Pokedex texts
+Applies after 0063-korean-port-texts.patch; apply with tools/bootstrap.py.
+
+Korean build only (GAME_LANGUAGE == LANGUAGE_KOREAN), as the Korean ROM does: the
+size screen's caption is the Pokemon's name followed by the Korean text (its
+particle and player name expand after it); the description uses the small
+narrow font, left-aligned, lower; heights and weights are metric.
+
+diff --git a/src/pokedex.c b/src/pokedex.c
+--- a/src/pokedex.c
++++ b/src/pokedex.c
+@@ -3845,8 +3845,15 @@
+         {
+             u8 string[64];
+ 
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++            // The Korean text follows the Pokemon's name: "[Pokemon]{과/와} {PLAYER}의 크기 비교".
++            StringCopyN(string, gSpeciesNames[NationalPokedexNumToSpecies(sPokedexListItem->dexNum)], POKEMON_NAME_LENGTH);
++            string[POKEMON_NAME_LENGTH] = EOS;
++            StringExpandPlaceholders(string + StringLength(string), gText_SizeComparedTo);
++#else
+             StringCopy(string, gText_SizeComparedTo);
+             StringAppend(string, gSaveBlock2Ptr->playerName);
++#endif
+             PrintInfoScreenText(string, GetStringCenterAlignXOffset(FONT_NORMAL, string, DISPLAY_WIDTH), 121);
+             gMain.state++;
+         }
+@@ -4277,12 +4284,21 @@
+         description = gPokedexEntries[num].description;
+     else
+         description = sExpandedPlaceholder_PokedexDescription;
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++    // As the Korean ROM: the small narrow font, left-aligned, in its lower box.
++    {
++        u8 color[3] = {TEXT_COLOR_TRANSPARENT, TEXT_DYNAMIC_COLOR_6, TEXT_COLOR_LIGHT_GRAY};
++
++        AddTextPrinterParameterized4(0, FONT_SMALL_NARROW, 24, 105, 0, 0, color, TEXT_SKIP_DRAW, description);
++    }
++#else
+     PrintInfoScreenText(description, GetStringCenterAlignXOffset(FONT_NORMAL, description, DISPLAY_WIDTH), 95);
++#endif
+ }
+ 
+ static void PrintMonHeight(u16 height, u8 left, u8 top)
+ {
+-#if defined(PORT_BRIDGE) && (GAME_LANGUAGE == LANGUAGE_SPANISH || GAME_LANGUAGE == LANGUAGE_FRENCH || GAME_LANGUAGE == LANGUAGE_ITALIAN)
++#if defined(PORT_BRIDGE) && (GAME_LANGUAGE == LANGUAGE_SPANISH || GAME_LANGUAGE == LANGUAGE_FRENCH || GAME_LANGUAGE == LANGUAGE_ITALIAN || GAME_LANGUAGE == LANGUAGE_KOREAN)
+     u8 buffer[16];
+     u8 *end = ConvertIntToDecimalStringN(buffer, height / 10, STR_CONV_MODE_LEFT_ALIGN, 4);
+ 
+@@ -4331,7 +4347,7 @@
+ 
+ static void PrintMonWeight(u16 weight, u8 left, u8 top)
+ {
+-#if defined(PORT_BRIDGE) && (GAME_LANGUAGE == LANGUAGE_SPANISH || GAME_LANGUAGE == LANGUAGE_FRENCH || GAME_LANGUAGE == LANGUAGE_ITALIAN)
++#if defined(PORT_BRIDGE) && (GAME_LANGUAGE == LANGUAGE_SPANISH || GAME_LANGUAGE == LANGUAGE_FRENCH || GAME_LANGUAGE == LANGUAGE_ITALIAN || GAME_LANGUAGE == LANGUAGE_KOREAN)
+     u8 buffer[16];
+     u8 *end = ConvertIntToDecimalStringN(buffer, weight / 10, STR_CONV_MODE_LEFT_ALIGN, 4);
+ 

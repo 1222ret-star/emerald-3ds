@@ -1,0 +1,38 @@
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Korean summary PP
+Applies after 0069-korean-easy-chat-keyboard.patch; apply with tools/bootstrap.py.
+
+Korean build only (GAME_LANGUAGE == LANGUAGE_KOREAN): the moves' PP is aligned in
+40 pixels, not 44, so that it stays inside the Korean ROM's PP box.
+
+diff --git a/src/pokemon_summary_screen.c b/src/pokemon_summary_screen.c
+--- a/src/pokemon_summary_screen.c
++++ b/src/pokemon_summary_screen.c
+@@ -111,6 +111,11 @@
+ #define PSS_DATA_WINDOW_MOVE_NAMES 0
+ #define PSS_DATA_WINDOW_MOVE_PP 1
+ #define PSS_DATA_WINDOW_MOVE_DESCRIPTION 2
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++#define PP_ALIGN_WIDTH 40 // the Korean PP box is narrower: "PP35/35" stays inside it
++#else
++#define PP_ALIGN_WIDTH 44
++#endif
+ #if GAME_LANGUAGE == LANGUAGE_KOREAN
+ #define MOVE_LABEL_X 8 // Hangul has no left bearing: the Effect labels sit well inside their box
+ #else
+@@ -4228,14 +4233,14 @@
+         DynamicPlaceholderTextUtil_ExpandPlaceholders(gStringVar4, sMovesPPLayout);
+         text = gStringVar4;
+         ppState = GetCurrentPpToMaxPpState(summary->pp[moveIndex], pp) + 9;
+-        x = GetStringRightAlignXOffset(FONT_NORMAL, text, 44);
++        x = GetStringRightAlignXOffset(FONT_NORMAL, text, PP_ALIGN_WIDTH);
+     }
+     else
+     {
+         PrintTextOnWindow(moveNameWindowId, gText_OneDash, 0, moveIndex * 16 + 1, 0, 1);
+         text = gText_TwoDashes;
+         ppState = 12;
+-        x = GetStringCenterAlignXOffset(FONT_NORMAL, text, 44);
++        x = GetStringCenterAlignXOffset(FONT_NORMAL, text, PP_ALIGN_WIDTH);
+     }
+ 
+     PrintTextOnWindow(ppValueWindowId, text, x, moveIndex * 16 + 1, 0, ppState);

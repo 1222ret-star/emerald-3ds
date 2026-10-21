@@ -1,0 +1,76 @@
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Korean Easy Chat keyboard
+Applies after 0068-korean-ui-layout.patch; apply with tools/bootstrap.py.
+
+Korean build only (GAME_LANGUAGE == LANGUAGE_KOREAN), as the Korean ROM: the
+alphabet keyboard lists the initial consonants (ㄱ to ㅎ) and Others on three rows,
+with its column positions and cursor offsets. tools/localize_korean.py writes the
+word lists of these 20 groups (easy_chat_words_by_letter.h) from the player's ROM.
+
+diff --git a/src/easy_chat.c b/src/easy_chat.c
+--- a/src/easy_chat.c
++++ b/src/easy_chat.c
+@@ -332,7 +332,12 @@
+     TEXT_WORD_SELECT,
+ };
+ 
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++// The Korean keyboard (initial consonants and Others) has three rows.
++#define NUM_ALPHABET_ROWS    3
++#else
+ #define NUM_ALPHABET_ROWS    4
++#endif
+ #define NUM_GROUP_NAME_ROWS  4
+ #define NUM_WORD_SELECT_ROWS 4
+ #define NUM_BUTTON_ROWS      3
+@@ -687,7 +692,9 @@
+     { 1,  2,  3,  4,  5,  6,  0},
+     { 7,  8,  9, 10, 11, 12,  0},
+     {13, 14, 15, 16, 17, 18, 19},
++#if GAME_LANGUAGE != LANGUAGE_KOREAN
+     {20, 21, 22, 23, 24, 25, 26},
++#endif
+ };
+ 
+ static const u16 sMysteryGiftPhrase[NUM_QUESTIONNAIRE_WORDS] = {
+@@ -873,7 +880,9 @@
+     gText_EasyChatKeyboard_ABCDEFothers,
+     gText_EasyChatKeyboard_GHIJKL,
+     gText_EasyChatKeyboard_MNOPQRS,
++#if GAME_LANGUAGE != LANGUAGE_KOREAN
+     gText_EasyChatKeyboard_TUVWXYZ,
++#endif
+ };
+ 
+ static const struct SpriteSheet sSpriteSheets[] = {
+@@ -938,7 +947,11 @@
+     },
+ };
+ 
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++static const u8 sAlphabetKeyboardColumnOffsets[NUM_ALPHABET_COLUMNS] = {0, 17, 34, 77, 94, 111, 128};
++#else
+ static const u8 sAlphabetKeyboardColumnOffsets[NUM_ALPHABET_COLUMNS] = {0, 12, 24, 56, 68, 80, 92};
++#endif
+ 
+ static const struct OamData sOamData_TriangleCursor = {
+     .y = 0,
+@@ -4752,11 +4765,19 @@
+     if (column != -1)
+     {
+         y = row * 16 + 96;
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++        x = 28;
++#else
+         x = 32;
++#endif
+         if (column == NUM_ALPHABET_COLUMNS - 1 && row == 0)
+         {
+             // Cursor is on 'Others'
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++            x = 162;
++#else
+             x = 158;
++#endif
+             anim = RECTCURSOR_ANIM_ON_OTHERS;
+         }
+         else

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Stage the Korean proof of concept from the player's Korean ROM.
+"""Stage the Korean build from the player's Korean ROM.
 
-The Korean ROM is the clean BPEE ROM with the fan translation
-"20210221 Pokemon Emerald Version (E-K)" applied. Nothing from it is stored
+The Korean ROM is the Japanese ROM (BPEJ) with the final fan translation
+"20260613 J-K" applied; the result is built from pret's English sources, so
+its symbols map to ours. Nothing from it is stored
 in the repository: this script reads the player's ROM and writes into the
 generated tree only.
 
@@ -28,14 +29,15 @@ import re
 import sys
 from pathlib import Path
 
-KOREAN_SHA1 = "81b13f7931a85c18f08c6de3c0202ab47d6c8f37"
+KOREAN_SHA1 = "17cd49e1af1184cd29355c674bedee7f5b72b055"
 ROM_SIZE = 16 * 1024 * 1024
 # Glyph tables in the Korean ROM: codes 0x3700-0x412F, 64 bytes each.
 HANGUL_FONT_SIZE = (0x4130 - 0x3700) * 0x40
 HANGUL_FONTS = {
-    "hangul_small.hanfont": 0x65DDD8,   # FONT_SMALL, FONT_SMALL_NARROW (8x13)
-    "hangul_normal.hanfont": 0x6AF5D8,  # FONT_SHORT, FONT_NORMAL (11 wide)
-    "hangul_narrow.hanfont": 0x6D81D8,  # FONT_NARROW (8x15)
+    "hangul_small.hanfont": 0x659DDC,   # FONT_SMALL (8x13)
+    "hangul_normal.hanfont": 0x6AB5DC,  # 11 wide: the port's bottom screen and HD battle HUD
+    "hangul_narrow.hanfont": 0x6D41DC,  # FONT_NARROW, FONT_NORMAL (8x15), FONT_SHORT (8x14)
+    "hangul_small_narrow.hanfont": 0x6FCDDC,  # FONT_SMALL_NARROW (8x13)
 }
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tools"))
@@ -53,9 +55,42 @@ def load_rom(path: Path) -> bytes:
     if len(data) < ROM_SIZE:
         data += b"\xff" * (ROM_SIZE - len(data))
     if hashlib.sha1(data).hexdigest() != KOREAN_SHA1:
-        raise SystemExit("This localization requires the Korean ROM (BPEE + E-K 20210221), SHA-1 "
+        raise SystemExit("This localization requires the Korean ROM (Japanese ROM + J-K 20260613 patch), SHA-1 "
                          + KOREAN_SHA1)
     return data
+
+
+def stage_easy_chat_letters(tree: Path, rom: bytes, symbols_path: Path, writes: dict) -> None:
+    """Easy Chat's word lists by first letter, as the Korean ROM groups them: Others
+    and the 19 initial consonants (patch 0069 lays out the keyboard). Read from the
+    player's ROM at the table the Korean symbols give; word IDs only."""
+    import struct
+    text = gzip.decompress(symbols_path.read_bytes()).decode()
+    m = re.search(r"^\.equ gEasyChatWordsByLetterPointers, (\d+)$", text, re.M)
+    if not m:
+        raise SystemExit("Korean symbols lack gEasyChatWordsByLetterPointers")
+    table = int(m.group(1)) - 0x08000000
+    groups = []
+    while len(groups) < 27:
+        pointer, count = struct.unpack_from("<II", rom, table + 8 * len(groups))
+        if not 0x08000000 <= pointer < 0x08000000 + len(rom) or not 0 < count < 1000:
+            break
+        words = struct.unpack_from("<%dH" % count, rom, pointer - 0x08000000)
+        if any(w != 0xFFFF and (w >> 9) >= 22 and w > 64 for w in words):
+            raise SystemExit("Easy Chat letter group %d holds no word IDs" % len(groups))
+        groups.append(words)
+    if len(groups) != 20:
+        raise SystemExit("Expected 20 Easy Chat letter groups in the Korean ROM, found %d" % len(groups))
+    out = ['#include "easy_chat.h"', "", "// Written by tools/localize_korean.py from the player's Korean ROM:",
+           "// Others, then the 19 initial consonants.", ""]
+    for i, words in enumerate(groups):
+        out.append("static const u16 sKoreanWordsByLetter%d[] = {" % i)
+        out += ["    0x%04X," % w for w in words]
+        out += ["};", ""]
+    out.append("const struct EasyChatWordsByLetter gEasyChatWordsByLetterPointers[EC_NUM_ALPHABET_GROUPS + 18] = {")
+    out += ["    {sKoreanWordsByLetter%d, ARRAY_COUNT(sKoreanWordsByLetter%d)}," % (i, i) for i in range(len(groups))]
+    out += ["};", ""]
+    writes[tree / "src/data/easy_chat/easy_chat_words_by_letter.h"] = "\n".join(out).encode()
 
 
 def stage(tree: Path, rom_path: Path) -> None:
@@ -85,6 +120,10 @@ def stage(tree: Path, rom_path: Path) -> None:
                 replacement = "{" + encoded(data) + "}"
             elif kind == "asm":
                 replacement = "\t.byte " + encoded(data)
+            elif kind == "u8":
+                replacement = "%d" % data[0]
+            elif kind == "u16":
+                replacement = "0x%04X" % int.from_bytes(data, "little")
             else:
                 raise SystemExit("Unknown edit kind: " + kind)
             text = text[:start] + replacement + text[end:]
@@ -110,6 +149,8 @@ def stage(tree: Path, rom_path: Path) -> None:
     writes[tree / "build/korean-reference.s"] = gzip.decompress(symbols.read_bytes())
     # Easy Chat's move and Pokemon lists in this ROM's order.
     stage_id_lists(tree, rom, symbols, writes)
+    # Easy Chat's keyboard groups: Others and the initial consonants.
+    stage_easy_chat_letters(tree, rom, symbols, writes)
 
     # Every check passed: write.
     for path, data in writes.items():

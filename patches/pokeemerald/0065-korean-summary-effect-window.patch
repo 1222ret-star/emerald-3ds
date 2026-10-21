@@ -1,0 +1,53 @@
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Korean summary Effect window
+Applies after 0064-korean-dex-texts.patch; apply with tools/bootstrap.py.
+
+Korean build only (GAME_LANGUAGE == LANGUAGE_KOREAN): with the physical/special
+split on, the battle moves' Effect window (with its Category row) is built from
+the Korean ROM's own effect_battle.bin rows, not the English tile layout.
+
+diff --git a/src/pokemon_summary_screen.c b/src/pokemon_summary_screen.c
+--- a/src/pokemon_summary_screen.c
++++ b/src/pokemon_summary_screen.c
+@@ -411,10 +411,32 @@
+     0x3823, 0x3824, 0x3824, 0x3824, 0x3824, 0x3824, 0x3c6c, 0x3037, 0x3037, 0x3037,
+     0x304d, 0x302f, 0x302f, 0x302f, 0x302f, 0x302f, 0x302f, 0x302f, 0x302f, 0x302f,
+ };
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++// The Korean ROM redraws the Effect window (effect_battle.bin: a frame column
++// on the left, its own header). The Category version is made from its rows,
++// the label rows taken twice for the extra row, once the summary opens.
++static u16 sMoveEffectBattleTilemapKorean[9 * 10];
++
++static void BuildKoreanMoveEffectTilemap(void)
++{
++    static const u8 rows[] = {0, 1, 2, 3, 3, 4, 4, 5, 6};
++    u32 i;
++
++    for (i = 0; i < ARRAY_COUNT(rows); i++)
++        CpuCopy16(&gSummaryScreen_MoveEffect_Battle_Tilemap[rows[i] * 10],
++                  &sMoveEffectBattleTilemapKorean[i * 10], 10 * sizeof(u16));
++}
++
+ static const struct TilemapCtrl sBattleMoveCategoryTilemapCtrl =
+ {
++    sMoveEffectBattleTilemapKorean, 0, 10, 9, 0, 43
++};
++#else
++static const struct TilemapCtrl sBattleMoveCategoryTilemapCtrl =
++{
+     sMoveEffectBattleTilemap, 0, 10, 9, 0, 43
+ };
++#endif
+ static bool8 sShowCategory;
+ // The Effect window of this summary, everywhere below (a macro does not
+ // expand inside itself).
+@@ -1190,6 +1212,9 @@
+ #ifdef PLATFORM_3DS
+     // Off, the summary is the game's own.
+     sShowCategory = MoveSplitEnabled();
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++    BuildKoreanMoveEffectTilemap();
++#endif
+     sNicknameHidden = FALSE;
+     sEffectTopRowsStashed = FALSE;
+ #endif

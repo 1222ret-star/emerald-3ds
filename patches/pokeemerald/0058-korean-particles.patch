@@ -145,7 +145,7 @@ index ecf0f57..57502e8 100644
  const u8 *GetExpandedPlaceholder(u32 id)
  {
      typedef const u8 *(*ExpandPlaceholderFunc)(void);
-@@ -560,6 +626,17 @@ const u8 *GetExpandedPlaceholder(u32 id)
+@@ -560,6 +626,25 @@ const u8 *GetExpandedPlaceholder(u32 id)
          [PLACEHOLDER_ID_MAXIE]        = ExpandPlaceholder_Maxie,
          [PLACEHOLDER_ID_KYOGRE]       = ExpandPlaceholder_Kyogre,
          [PLACEHOLDER_ID_GROUDON]      = ExpandPlaceholder_Groudon,
@@ -159,6 +159,14 @@ index ecf0f57..57502e8 100644
 +        [0x14] = ExpandPlaceholder_ParticleCopula,
 +        [0x15] = ExpandPlaceholder_ParticleAnd,
 +        [0x16] = ExpandPlaceholder_ParticleVocative,
++        // Field texts of the Korean ROM also use the battle particle ids.
++        [0x35] = ExpandPlaceholder_ParticleTopic,
++        [0x36] = ExpandPlaceholder_ParticleSubject,
++        [0x37] = ExpandPlaceholder_ParticleObject,
++        [0x38] = ExpandPlaceholder_ParticleDirection,
++        [0x39] = ExpandPlaceholder_ParticleCopula,
++        [0x3A] = ExpandPlaceholder_ParticleAnd,
++        [0x3B] = ExpandPlaceholder_ParticleVocative,
 +#endif
      };
  

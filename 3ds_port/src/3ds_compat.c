@@ -281,6 +281,7 @@ static struct
     [HANGUL_FACE_SMALL]  = { "graphics/fonts/hangul_small.hanfont",  NULL, FALSE },
     [HANGUL_FACE_NORMAL] = { "graphics/fonts/hangul_normal.hanfont", NULL, FALSE },
     [HANGUL_FACE_NARROW] = { "graphics/fonts/hangul_narrow.hanfont", NULL, FALSE },
+    [HANGUL_FACE_SMALL_NARROW] = { "graphics/fonts/hangul_small_narrow.hanfont", NULL, FALSE },
 };
 
 const u16 *Port_HangulGlyphs(u8 face)

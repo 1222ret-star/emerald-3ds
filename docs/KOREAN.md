@@ -1,22 +1,28 @@
-# 한국어판 (개념 검증)
+# 한국어판
 
-영문판 기반 팬 한글패치 롬에서 한글 폰트와 텍스트를 읽어 오는 한국어 빌드예요.
-대사·메뉴 문자열 약 9,200개와 이름 표(포켓몬·기술·도구·특성·타입·트레이너·트레이너 분류·도감 분류·장식품)가
-한국어로 바뀌고, 필드와 배틀 문장의 조사(이/가, 을/를 등)도 처리해요.
+팬 한글패치 최종판(J-K) 롬에서 한글 폰트, 텍스트, 그림을 읽어 오는 한국어 빌드예요.
+대사·메뉴·간이회화 문자열 약 12,600개(게임 텍스트의 약 97%)와 이름 표(포켓몬·기술·도구·특성·타입·
+트레이너·트레이너 분류·도감 분류·장식품·나무열매)가 한국어로 바뀌고, 필드와 배틀 문장의 조사
+(이/가, 을/를 등)도 처리해요.
+
+이 패치는 일본판 롬에 적용하지만, 결과 롬은 pret의 영문판 소스로 빌드되어 있어서(헤더도 BPEE)
+영문판 심볼을 그대로 대응시킬 수 있어요. 같은 팀의 1차 배포(영문판 기반 E-K 20210221)는
+번역이 약 72%뿐이라 최종판으로 바꿨어요. 한글 코드·글꼴·조사 코드는 두 판이 같아요.
 
 ## 필요한 롬
 
 | 롬 | SHA-1 |
 |---|---|
-| 한글패치 롬 (깨끗한 BPEE + `20210221 Pokemon Emerald Version (E-K).xdelta`) | `81b13f7931a85c18f08c6de3c0202ab47d6c8f37` |
+| 일본판 원본 (Pocket Monsters - Emerald (Japan), BPEJ) | `d7cf8f156ba9c455d164e1ea780a6bf1945465c2` |
+| 한글패치 롬 (일본판 + `20260613 포켓몬스터 에메랄드(J-K).xdelta`) | `17cd49e1af1184cd29355c674bedee7f5b72b055` |
 
 롬, 패치, 번역문, 폰트는 저장소에 들어 있지 않아요. `tools/localize_korean.py`가
-사용자의 롬에서 읽어 생성 트리에만 써요.
+사용자의 롬에서 읽어 생성 트리에만 써요. 빌드와 빌더에는 패치를 적용한 롬을 넣어요.
 
 ## 빌드
 
 ```sh
-python tools/bootstrap.py --make --korean-rom EmeraldKOR.gba -j8
+python tools/bootstrap.py --make --korean-rom EmeraldJK.gba -j8
 ```
 
 ## 배포판 (빌더로 pak 만들기)
@@ -26,8 +32,8 @@ python tools/bootstrap.py --make --korean-rom EmeraldKOR.gba -j8
 `payload/ko/`의 실행 파일과 recipe를 골라요. 엔진도 pak의 롬 SHA-1이 한국어판인지 확인해요.
 
 ```sh
-python tools/build_release.py --korean-rom EmeraldKOR.gba ...   # payload/ko/ 추가
-python -m emerald3ds_builder build --rom EmeraldKOR.gba --output out  # 사용자 쪽
+python tools/build_release.py --korean-rom EmeraldJK.gba ...   # payload/ko/ 추가
+python -m emerald3ds_builder build --rom EmeraldJK.gba --output out  # 사용자 쪽
 ```
 
 recipe는 `tools/gen_recipe.py`가 만들고, 한국어판 심볼 주소(`tools/locales/korean-symbols.s.gz`,
@@ -39,14 +45,17 @@ recipe는 `tools/gen_recipe.py`가 만들고, 한국어판 심볼 주소(`tools/
   (`index = (리드-0x37)*239 + 트레일-1`, 음절 2,350자). 리드 0x41은 호환 자모예요.
 - 트레일이 0xF0 이상이 되지 않아서 제어 코드(0xF7~0xFF)와 겹치지 않아요.
 - 글리프는 코드당 64바이트(2bpp 8×8 타일 4개, Latin 글꼴과 같은 배치)이고,
-  `graphics/fonts/hangul_{small,normal,narrow}.hanfont` 세 파일에 코드 0x3700~0x412F가 들어 있어요.
+  `graphics/fonts/hangul_{small,small_narrow,normal,narrow}.hanfont` 네 파일에 코드 0x3700~0x412F가 들어 있어요.
 
 | 글꼴 | 한글 글꼴 파일 | 칸 |
 |---|---|---|
-| FONT_SMALL, FONT_SMALL_NARROW | hangul_small | 8×13 |
-| FONT_SHORT | hangul_normal | 11×14 |
-| FONT_NORMAL | hangul_normal | 11×15 |
+| FONT_SMALL | hangul_small | 8×13 |
+| FONT_SMALL_NARROW | hangul_small_narrow | 8×13 |
+| FONT_SHORT (복사본 포함) | hangul_narrow | 8×14 |
+| FONT_NORMAL | hangul_narrow | 8×15 |
 | FONT_NARROW | hangul_narrow | 8×15 |
+
+최종판(J-K)과 같은 배치예요. `hangul_normal`(11칸)은 3DS 아래 화면과 HD 배틀 HUD가 써요.
 
 ## 구현 위치
 
@@ -72,14 +81,12 @@ recipe는 `tools/gen_recipe.py`가 만들고, 한국어판 심볼 주소(`tools/
   16색이 아니라 144색 팔레트를 써요.
 - `tools/localize_korean.py`: 롬 확인, 글꼴 추출, 매니페스트 적용(문자열과 그래픽), 포켓몬 이름, `GAME_LANGUAGE`
 - `tools/locales/korean.json.gz`: 문자열 정의 위치(소스 파일·오프셋)와 롬 오프셋·크기.
-  텍스트는 들어 있지 않아요. 원본 영문판과 한글판을 심볼 단위로 대응시켜 만들어요.
-  `graphics`에는 한글판이 바꾼 그림(타이틀 로고와 팔레트, 메뉴 타일 등 45개)의 롬 위치가 들어 있어요.
+  텍스트는 들어 있지 않아요. 원본 영문판과 한글판을 심볼 단위로 대응시켜 만들어요
+  (개발용 도구: 두 롬의 복사 지도, 포인터·표·이벤트 스크립트 구조 맞추기).
+  `graphics`에는 한글판이 바꾼 그림(타이틀 로고와 팔레트, 메뉴·요약 화면·박스 타일 등 68개)의 롬 위치가 들어 있어요.
 
 ## 아직 안 된 것
 
-- 위치를 찾지 못한 문자열 약 900개 (주로 한글판에서 수정된 스크립트가 참조하는 문자열)
-- 나무열매 이름, 배틀 프런티어 트레이너 이름 (한글판 롬에서도 영어)
-- 간이회화, 도감 가나다 정렬, 한글판 롬에서 위치를 못 찾은 그래픽 일부
-- recipe에 영문판 원문이 약 25 KB 남아 있어요(주로 위치를 못 찾은 스크립트 문자열). 공개 배포 전에 줄여야 해요.
-- 한글패치(E-K 20210221) 자체가 번역하지 않은 문자열 약 1,800개는 영어로 나와요
-  (배틀타워 제자, 보라시티, 포켓내비 통화, 비밀기지, 콘테스트 등).
+- 위치를 찾지 못한 문자열 약 440개(약 2.4%, 주로 C 코드의 문자열과 일부 맵 대사)는 영어로 나와요.
+- 간이회화 가나다 정렬과 입력 화면, 도감 가나다 정렬
+- recipe에 남은 영문판 원문 줄이기(공개 배포 전)

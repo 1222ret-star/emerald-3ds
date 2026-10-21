@@ -1,0 +1,156 @@
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Korean UI layout
+Applies after 0067-korean-battle-buffer-particles.patch; apply with tools/bootstrap.py.
+
+Korean build only (GAME_LANGUAGE == LANGUAGE_KOREAN), as the Korean ROM lays it out:
+FONT_SMALL_NARROW lines are 16 apart; the Bag's and the shop's item descriptions
+start 8 pixels into their window; the party menu's action list is narrower,
+against the right edge.
+
+diff --git a/src/text.c b/src/text.c
+--- a/src/text.c
++++ b/src/text.c
+@@ -227,7 +227,12 @@
+     [FONT_SMALL_NARROW] = {
+         .fontFunction = FontFunc_SmallNarrow,
+         .maxLetterWidth = 5,
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++        // As the Korean ROM: its 8x13 Hangul lines are 16 apart (Pokedex descriptions).
++        .maxLetterHeight = 16,
++#else
+         .maxLetterHeight = 8,
++#endif
+         .letterSpacing = 0,
+         .lineSpacing = 0,
+         .fgColor = 2,
+diff --git a/src/item_menu.c b/src/item_menu.c
+--- a/src/item_menu.c
++++ b/src/item_menu.c
+@@ -2531,6 +2531,12 @@
+ 
+ static void BagMenu_Print(u8 windowId, u8 fontId, const u8 *str, u8 left, u8 top, u8 letterSpacing, u8 lineSpacing, u8 speed, u8 colorIndex)
+ {
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++    // Hangul glyphs have no left bearing: the description starts inside its box,
++    // where the Korean ROM's shop puts it (x 8).
++    if (windowId == WIN_DESCRIPTION && left == 3)
++        left = 8;
++#endif
+     AddTextPrinterParameterized4(windowId, fontId, left, top, letterSpacing, lineSpacing, sFontColorTable[colorIndex], speed, str);
+ }
+ 
+diff --git a/src/shop.c b/src/shop.c
+--- a/src/shop.c
++++ b/src/shop.c
+@@ -663,7 +663,11 @@
+     }
+ 
+     FillWindowPixelBuffer(WIN_ITEM_DESCRIPTION, PIXEL_FILL(0));
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++    BuyMenuPrint(WIN_ITEM_DESCRIPTION, description, 8, 1, 0, COLORID_NORMAL); // as the Korean ROM
++#else
+     BuyMenuPrint(WIN_ITEM_DESCRIPTION, description, 3, 1, 0, COLORID_NORMAL);
++#endif
+ }
+ 
+ static void BuyMenuPrintPriceInList(u8 windowId, u32 itemId, u8 y)
+diff --git a/src/party_menu.c b/src/party_menu.c
+--- a/src/party_menu.c
++++ b/src/party_menu.c
+@@ -2694,7 +2694,12 @@
+     switch (windowType)
+     {
+     case SELECTWINDOW_ACTIONS:
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++        // As the Korean ROM: narrower, against the right edge.
++        SetWindowTemplateFields(&window, 2, 21, 19 - (sPartyMenuInternal->numActions * 2), 8, sPartyMenuInternal->numActions * 2, 14, 0x2E9);
++#else
+         SetWindowTemplateFields(&window, 2, 19, 19 - (sPartyMenuInternal->numActions * 2), 10, sPartyMenuInternal->numActions * 2, 14, 0x2E9);
++#endif
+         break;
+     case SELECTWINDOW_ITEM:
+         window = sItemGiveTakeWindowTemplate;
+diff --git a/src/money.c b/src/money.c
+--- a/src/money.c
++++ b/src/money.c
+@@ -142,7 +142,11 @@
+ 
+ void PrintMoneyAmountInMoneyBox(u8 windowId, int amount, u8 speed)
+ {
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++    PrintMoneyAmount(windowId, 33, 1, amount, speed); // as the Korean ROM: room for 원
++#else
+     PrintMoneyAmount(windowId, 38, 1, amount, speed);
++#endif
+ }
+ 
+ void PrintMoneyAmount(u8 windowId, u8 x, u8 y, int amount, u8 speed)
+diff --git a/src/pokemon_summary_screen.c b/src/pokemon_summary_screen.c
+--- a/src/pokemon_summary_screen.c
++++ b/src/pokemon_summary_screen.c
+@@ -111,6 +111,11 @@
+ #define PSS_DATA_WINDOW_MOVE_NAMES 0
+ #define PSS_DATA_WINDOW_MOVE_PP 1
+ #define PSS_DATA_WINDOW_MOVE_DESCRIPTION 2
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++#define MOVE_LABEL_X 8 // Hangul has no left bearing: the Effect labels sit well inside their box
++#else
++#define MOVE_LABEL_X 0
++#endif
+ 
+ #define MOVE_SELECTOR_SPRITES_COUNT 10
+ #define TYPE_ICON_SPRITE_COUNT (MAX_MON_MOVES + 1)
+@@ -3472,21 +3477,21 @@
+     if (sShowCategory)
+     {
+         // Narrow, to leave the value column room for the category icon.
+-        AddTextPrinterParameterized4(PSS_LABEL_WINDOW_MOVES_POWER_ACC, FONT_NARROW, 0, 1, 0, 0, sTextColors[1], 0, sText_Category);
+-        AddTextPrinterParameterized4(PSS_LABEL_WINDOW_MOVES_POWER_ACC, FONT_NARROW, 0, 17, 0, 0, sTextColors[1], 0, gText_Power);
+-        AddTextPrinterParameterized4(PSS_LABEL_WINDOW_MOVES_POWER_ACC, FONT_NARROW, 0, 33, 0, 0, sTextColors[1], 0, gText_Accuracy2);
++        AddTextPrinterParameterized4(PSS_LABEL_WINDOW_MOVES_POWER_ACC, FONT_NARROW, MOVE_LABEL_X, 1, 0, 0, sTextColors[1], 0, sText_Category);
++        AddTextPrinterParameterized4(PSS_LABEL_WINDOW_MOVES_POWER_ACC, FONT_NARROW, MOVE_LABEL_X, 17, 0, 0, sTextColors[1], 0, gText_Power);
++        AddTextPrinterParameterized4(PSS_LABEL_WINDOW_MOVES_POWER_ACC, FONT_NARROW, MOVE_LABEL_X, 33, 0, 0, sTextColors[1], 0, gText_Accuracy2);
+     }
+     else
+     {
+-        PrintTextOnWindow(PSS_LABEL_WINDOW_MOVES_POWER_ACC, gText_Power, 0, 1, 0, 1);
+-        PrintTextOnWindow(PSS_LABEL_WINDOW_MOVES_POWER_ACC, gText_Accuracy2, 0, 17, 0, 1);
++        PrintTextOnWindow(PSS_LABEL_WINDOW_MOVES_POWER_ACC, gText_Power, MOVE_LABEL_X, 1, 0, 1);
++        PrintTextOnWindow(PSS_LABEL_WINDOW_MOVES_POWER_ACC, gText_Accuracy2, MOVE_LABEL_X, 17, 0, 1);
+     }
+ #else
+-    PrintTextOnWindow(PSS_LABEL_WINDOW_MOVES_POWER_ACC, gText_Power, 0, 1, 0, 1);
+-    PrintTextOnWindow(PSS_LABEL_WINDOW_MOVES_POWER_ACC, gText_Accuracy2, 0, 17, 0, 1);
++    PrintTextOnWindow(PSS_LABEL_WINDOW_MOVES_POWER_ACC, gText_Power, MOVE_LABEL_X, 1, 0, 1);
++    PrintTextOnWindow(PSS_LABEL_WINDOW_MOVES_POWER_ACC, gText_Accuracy2, MOVE_LABEL_X, 17, 0, 1);
+ #endif
+-    PrintTextOnWindow(PSS_LABEL_WINDOW_MOVES_APPEAL_JAM, gText_Appeal, 0, 1, 0, 1);
+-    PrintTextOnWindow(PSS_LABEL_WINDOW_MOVES_APPEAL_JAM, gText_Jam, 0, 17, 0, 1);
++    PrintTextOnWindow(PSS_LABEL_WINDOW_MOVES_APPEAL_JAM, gText_Appeal, MOVE_LABEL_X, 1, 0, 1);
++    PrintTextOnWindow(PSS_LABEL_WINDOW_MOVES_APPEAL_JAM, gText_Jam, MOVE_LABEL_X, 17, 0, 1);
+ }
+ 
+ static void PutPageWindowTilemaps(u8 page)
+@@ -4113,7 +4118,11 @@
+     u32 expToNextLevel;
+ 
+     ConvertIntToDecimalStringN(gStringVar1, sum->exp, STR_CONV_MODE_RIGHT_ALIGN, 7);
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++    x = GetStringRightAlignXOffset(FONT_NORMAL, gStringVar1, 72) + 2; // the Korean ROM's wider Exp. box
++#else
+     x = GetStringRightAlignXOffset(FONT_NORMAL, gStringVar1, 42) + 2;
++#endif
+     PrintTextOnWindow(windowId, gStringVar1, x, 1, 0, 0);
+ 
+     if (sum->level < MAX_LEVEL)
+@@ -4122,7 +4131,11 @@
+         expToNextLevel = 0;
+ 
+     ConvertIntToDecimalStringN(gStringVar1, expToNextLevel, STR_CONV_MODE_RIGHT_ALIGN, 6);
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++    x = GetStringRightAlignXOffset(FONT_NORMAL, gStringVar1, 72) + 2; // the Korean ROM's wider Exp. box
++#else
+     x = GetStringRightAlignXOffset(FONT_NORMAL, gStringVar1, 42) + 2;
++#endif
+     PrintTextOnWindow(windowId, gStringVar1, x, 17, 0, 0);
+ }
+ 

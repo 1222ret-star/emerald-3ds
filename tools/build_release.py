@@ -149,7 +149,7 @@ def main() -> None:
     ap.add_argument("--italian-rom", type=Path, default=None,
                     help="clean Italian (BPEI) ROM: also build the Italian variant (payload/it/)")
     ap.add_argument("--korean-rom", type=Path, default=None,
-                    help="the Korean fan translation (BPEE + E-K 20210221): also build payload/ko/")
+                    help="the Korean fan translation (Japanese ROM + J-K 20260613): also build payload/ko/")
     ap.add_argument("--nm", default=os.environ.get("NM", "arm-none-eabi-nm"))
     ap.add_argument("--make", default=None, help="command that runs make in 3ds_port (default: make)")
     ap.add_argument("--skip-make", action="store_true")

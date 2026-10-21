@@ -1,0 +1,54 @@
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Korean wide dialogue font
+Applies after 0065-korean-summary-effect-window.patch; apply with tools/bootstrap.py.
+
+Korean build only (GAME_LANGUAGE == LANGUAGE_KOREAN): FONT_NORMAL draws Hangul 11
+wide (the hangul_normal glyphs) in the dialogue boxes along the bottom of the
+screen, 8 wide (hangul_narrow, as the final translation) everywhere else.
+
+diff --git a/src/text.c b/src/text.c
+--- a/src/text.c
++++ b/src/text.c
+@@ -1037,6 +1037,20 @@
+     }
+ }
+ 
++#if HANGUL_TEXT
++// The dialogue boxes (field and battle messages: the 4-row boxes along the
++// bottom of the screen) draw FONT_NORMAL's Hangul 11 wide, as the first Korean
++// translation did; menus keep the final translation's 8-wide glyphs.
++static bool8 sHangulWideNormal;
++
++static bool8 IsDialogueBox(u8 windowId)
++{
++    const struct WindowTemplate *window = &gWindows[windowId].window;
++
++    return window->height == 4 && window->width >= 26 && window->tilemapTop >= 14;
++}
++#endif
++
+ static u16 RenderText(struct TextPrinter *textPrinter)
+ {
+     struct TextPrinterSubStruct *subStruct = (struct TextPrinterSubStruct *)(&textPrinter->subStructFields);
+@@ -1239,7 +1253,13 @@
+             DecompressGlyph_Small(currChar, textPrinter->japanese);
+             break;
+         case FONT_NORMAL:
++#if HANGUL_TEXT
++            sHangulWideNormal = IsDialogueBox(textPrinter->printerTemplate.windowId);
+             DecompressGlyph_Normal(currChar, textPrinter->japanese);
++            sHangulWideNormal = FALSE;
++#else
++            DecompressGlyph_Normal(currChar, textPrinter->japanese);
++#endif
+             break;
+         case FONT_SHORT:
+         case FONT_SHORT_COPY_1:
+@@ -2039,7 +2059,7 @@
+ {
+     const u16 *glyphs;
+ 
+-    HANGUL_GLYPH(HANGUL_FACE_NARROW, 8, 15)
++    HANGUL_GLYPH(sHangulWideNormal ? HANGUL_FACE_NORMAL : HANGUL_FACE_NARROW, sHangulWideNormal ? 11 : 8, 15)
+     if (isJapanese == TRUE)
+     {
+ #ifdef PORT_BRIDGE
