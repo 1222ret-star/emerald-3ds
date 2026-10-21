@@ -1,0 +1,23 @@
+{
+ "gPokedexEntries": "0x085483F4",
+ "sMenuActions_Gender": "0x082E0304",
+ "sFloors_Normal": "0x0860ACB8",
+ "sFloors_Variety": "0x0860BBA0",
+ "sFloors_Unique": "0x0860CA88",
+ "sFloors_Expert": "0x0860D970",
+ "gText_YourName": "0x085D3438",
+ "gText_BoxName": "0x085D3447",
+ "gText_None": "0x085CD909",
+ "gText_Berry": "0x085D45E7",
+ "gText_Berries": "0x085D45EC",
+ "gText_SizeComparedTo": "0x085CD3A1",
+ "gPokenavLeftHeaderCondition_Gfx": "0x08DC84A8",
+ "gSummaryScreen_MoveEffect_Battle_Tilemap": "0x08DC3C5C",
+ "gSummaryScreen_MoveEffect_Contest_Tilemap": "0x08DC3CFC",
+ "gPokedexSizeScreen_Tilemap": "0x08DC2F8C",
+ "gPokedexCryScreen_Tilemap": "0x08DC32C8",
+ "gPokedexInfoScreen_Tilemap": "0x08DC31A4",
+ "gText_PkmnsNickname": "0x085D3456",
+ "gText_TellHimTheWords": "0x085D3463",
+ "gEasyChatWordsByLetterPointers": "0x0857B218"
+}
