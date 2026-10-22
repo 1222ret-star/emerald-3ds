@@ -216,11 +216,9 @@ bool CtrPlatform_BeginFrame(void)
  * at 1.5x two in three. Only
  * a presented frame ticks the sound engine (CtrPlatform_SoundTick), so music
  * and effects keep their speed while the game runs faster; a frame hidden by
- * real-time pacing (below) ticks it too, as it stands for real time. A frame is also
- * presented as soon as one more hidden frame and the present would no longer
- * fit in the display's frame: the game then runs as fast as the console
- * allows (an Old 3DS less than a New 3DS at 804 MHz) and the picture and the
- * sound stay at 60 Hz.
+ * real-time pacing (below) ticks it too, as it stands for real time. A scene
+ * too costly for its hidden frames to fit in the display's frame shows fewer
+ * than 60 pictures a second, still at the chosen speed.
  */
 #define FRAME_MS (1000.0f / 60)
 static bool sSoundTick = true;
@@ -295,7 +293,6 @@ static bool FrameShown(uint64_t now)
     /* In a local wireless session everyone plays at the same speed: the link
      * code times out on a partner that runs slower. */
     unsigned speed = LocalLink_InSession() ? 2 : CtrSettings_SpeedHalves();
-    float since = sShownTick ? (now - sShownTick) * 1000.0f / SYSCLOCK_ARM11 : FRAME_MS;
 
     sPacedFrame = sPace && speed <= 2;
     if (sPacedFrame)
@@ -311,7 +308,11 @@ static bool FrameShown(uint64_t now)
         return true;
     }
     sEarned += 2;
-    if (speed <= 2 || since + sTiming.gameMs + sPresentMs > FRAME_MS)
+    /* Every speed hides its share of frames, however long they take: when a
+     * presented frame also had to fit hidden ones in the display's frame,
+     * a costly scene (the 3D world, the map on the bottom screen) presented
+     * every frame and fast-forward did nothing outside the light menus. */
+    if (speed <= 2)
     {
         sEarned = 0;
         return true;

@@ -80,20 +80,11 @@ static inline uint8_t CtrLocale_Glyph(uint32_t c)
 /* A Hangul syllable's index in KS X 1001 (the Korean font's order), or -1. */
 static inline int CtrLocale_HangulIndex(uint32_t c)
 {
-    int low = 0, high = (int)ARRAY_COUNT(sHangulKsSyllables) - 1;
+    uint32_t offset = c - 0xAC00;
 
-    while (low <= high)
-    {
-        int mid = (low + high) / 2;
-
-        if (sHangulKsSyllables[mid] == c - 0xAC00)
-            return mid;
-        if (sHangulKsSyllables[mid] < c - 0xAC00)
-            low = mid + 1;
-        else
-            high = mid - 1;
-    }
-    return -1;
+    if (c < 0xAC00 || offset >= 19 * 21 * 28)
+        return -1;
+    return HangulKsIndex(offset / (21 * 28), offset / 28 % 21, offset % 28);
 }
 #endif
 
