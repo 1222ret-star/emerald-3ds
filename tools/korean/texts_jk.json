@@ -1,0 +1,422 @@
+{
+ "LandmarkName_AbandonedShip": [
+  "0x085B8CD1",
+  "0x085955E7"
+ ],
+ "LandmarkName_AlteringCave": [
+  "0x085B8EE1",
+  "0x0859578E"
+ ],
+ "LandmarkName_AncientTomb": [
+  "0x085B8E85",
+  "0x08595741"
+ ],
+ "LandmarkName_BerryMastersHouse": [
+  "0x085B8E49",
+  "0x0859570C"
+ ],
+ "LandmarkName_CableCar": [
+  "0x085B8D56",
+  "0x08595647"
+ ],
+ "LandmarkName_CyclingRoad": [
+  "0x085B8CFF",
+  "0x0859560B"
+ ],
+ "LandmarkName_Desert": [
+  "0x085B8D3A",
+  "0x08595639"
+ ],
+ "LandmarkName_DesertRuins": [
+  "0x085B8E6A",
+  "0x0859572C"
+ ],
+ "LandmarkName_DesertUnderpass": [
+  "0x085B8EEF",
+  "0x08595797"
+ ],
+ "LandmarkName_FieryPath": [
+  "0x085B8E27",
+  "0x085956EC"
+ ],
+ "LandmarkName_FlowerShop": [
+  "0x085B8CA0",
+  "0x085955C4"
+ ],
+ "LandmarkName_FossilManiacsHouse": [
+  "0x085B8EA1",
+  "0x08595759"
+ ],
+ "LandmarkName_GlassWorkshop": [
+  "0x085B8D60",
+  "0x08595657"
+ ],
+ "LandmarkName_GraniteCave": [
+  "0x085B8DFC",
+  "0x085956D3"
+ ],
+ "LandmarkName_HuntersHouse": [
+  "0x085B8EB7",
+  "0x08595769"
+ ],
+ "LandmarkName_IslandCave": [
+  "0x085B8E5E",
+  "0x0859571F"
+ ],
+ "LandmarkName_JaggedPass": [
+  "0x085B8E32",
+  "0x085956F5"
+ ],
+ "LandmarkName_LanettesHouse": [
+  "0x085B8E17",
+  "0x085956E2"
+ ],
+ "LandmarkName_MeteorFalls": [
+  "0x085B8D81",
+  "0x08595672"
+ ],
+ "LandmarkName_MirageTower": [
+  "0x085B8ED4",
+  "0x08595787"
+ ],
+ "LandmarkName_MrBrineysCottage": [
+  "0x085B8CBC",
+  "0x085955D4"
+ ],
+ "LandmarkName_MtPyre": [
+  "0x085B8DD8",
+  "0x085956B7"
+ ],
+ "LandmarkName_NewMauville": [
+  "0x085B8D0C",
+  "0x08595619"
+ ],
+ "LandmarkName_OceanCurrent": [
+  "0x085B8E09",
+  "0x085956DD"
+ ],
+ "LandmarkName_OldLadysRestShop": [
+  "0x085B8D25",
+  "0x0859562E"
+ ],
+ "LandmarkName_PetalburgWoods": [
+  "0x085B8CAC",
+  "0x085955CD"
+ ],
+ "LandmarkName_PokemonDayCare": [
+  "0x085B8DB2",
+  "0x08595699"
+ ],
+ "LandmarkName_RusturfTunnel": [
+  "0x085B8DA3",
+  "0x08595690"
+ ],
+ "LandmarkName_SafariZoneEntrance": [
+  "0x085B8DC3",
+  "0x085956A9"
+ ],
+ "LandmarkName_ScorchedSlab": [
+  "0x085B8E77",
+  "0x08595735"
+ ],
+ "LandmarkName_SeafloorCavern": [
+  "0x085B8DEC",
+  "0x085956CA"
+ ],
+ "LandmarkName_SealedChamber": [
+  "0x085B8E92",
+  "0x0859574D"
+ ],
+ "LandmarkName_SeashoreHouse": [
+  "0x085B8CE0",
+  "0x085955F1"
+ ],
+ "LandmarkName_ShoalCave": [
+  "0x085B8DE1",
+  "0x085956BE"
+ ],
+ "LandmarkName_SkyPillar": [
+  "0x085B8E3E",
+  "0x08595703"
+ ],
+ "LandmarkName_SlateportBeach": [
+  "0x085B8CEF",
+  "0x085955FB"
+ ],
+ "LandmarkName_TrainerHill": [
+  "0x085B8F00",
+  "0x085957A5"
+ ],
+ "LandmarkName_TrickHouse": [
+  "0x085B8D19",
+  "0x08595620"
+ ],
+ "LandmarkName_TunnelersRestHouse": [
+  "0x085B8D8E",
+  "0x0859567E"
+ ],
+ "LandmarkName_WeatherInstitute": [
+  "0x085B8D6F",
+  "0x08595666"
+ ],
+ "LandmarkName_WinstrateFamily": [
+  "0x085B8D41",
+  "0x0859563E"
+ ],
+ "LilycoveCity_Harbor_Text_NoTicket": [
+  "0x0821E792",
+  "0x0821DB2E"
+ ],
+ "LilycoveCity_PokemonCenter_1F_Text_IGetToKeepPrize": [
+  "0x082A90CD",
+  "0x082910E3"
+ ],
+ "LilycoveCity_PokemonCenter_1F_Text_WrongTheCorrectAnswerIs": [
+  "0x082A90A5",
+  "0x082910C1"
+ ],
+ "MatchCall_BattleFrontierRecordStreakText10": [
+  "0x082B0908",
+  "0x08296B61"
+ ],
+ "MatchCall_BattleFrontierRecordStreakText11": [
+  "0x082B0984",
+  "0x08296BA3"
+ ],
+ "MatchCall_BattleFrontierRecordStreakText9": [
+  "0x082B0894",
+  "0x08296B11"
+ ],
+ "MatchCall_DifferentRouteBattleRequestText4": [
+  "0x082AB808",
+  "0x08292D96"
+ ],
+ "MatchCall_PersonalizedText33": [
+  "0x082ADE08",
+  "0x08294B6D"
+ ],
+ "MatchCall_PersonalizedText63": [
+  "0x082AFA39",
+  "0x08296109"
+ ],
+ "MatchCall_Text_Brawly1": [
+  "0x082B2659",
+  "0x0829807C"
+ ],
+ "MatchCall_Text_Brawly2": [
+  "0x082B275D",
+  "0x08298148"
+ ],
+ "MatchCall_Text_Brawly3": [
+  "0x082B286F",
+  "0x08298222"
+ ],
+ "MatchCall_Text_Brawly4": [
+  "0x082B28D1",
+  "0x0829826A"
+ ],
+ "MatchCall_Text_Flannery1": [
+  "0x082B2B4D",
+  "0x08298486"
+ ],
+ "MatchCall_Text_Flannery2": [
+  "0x082B2C0E",
+  "0x08298527"
+ ],
+ "MatchCall_Text_Flannery3": [
+  "0x082B2CF1",
+  "0x082985E1"
+ ],
+ "MatchCall_Text_Flannery4": [
+  "0x082B2D54",
+  "0x08298631"
+ ],
+ "MatchCall_Text_Juan1": [
+  "0x082B3249",
+  "0x08298A65"
+ ],
+ "MatchCall_Text_Juan2": [
+  "0x082B32EC",
+  "0x08298B01"
+ ],
+ "MatchCall_Text_Juan3": [
+  "0x082B33AA",
+  "0x08298B80"
+ ],
+ "MatchCall_Text_Juan4": [
+  "0x082B341E",
+  "0x08298BE5"
+ ],
+ "MatchCall_Text_Norman2": [
+  "0x082B5795",
+  "0x0829A8B7"
+ ],
+ "MatchCall_Text_Norman4": [
+  "0x082B58E3",
+  "0x0829A9BA"
+ ],
+ "MatchCall_Text_Norman5": [
+  "0x082B5979",
+  "0x0829AA38"
+ ],
+ "MatchCall_Text_Norman6": [
+  "0x082B5A07",
+  "0x0829AAB1"
+ ],
+ "MatchCall_Text_Norman7": [
+  "0x082B5A69",
+  "0x0829AB08"
+ ],
+ "MatchCall_Text_Norman8": [
+  "0x082B5ACF",
+  "0x0829AB58"
+ ],
+ "MatchCall_Text_Norman9": [
+  "0x082B5B5E",
+  "0x0829ABE1"
+ ],
+ "MatchCall_Text_Roxanne1": [
+  "0x082B2456",
+  "0x08297ECF"
+ ],
+ "MatchCall_Text_Roxanne2": [
+  "0x082B250E",
+  "0x08297F71"
+ ],
+ "MatchCall_Text_Roxanne3": [
+  "0x082B25C1",
+  "0x08298003"
+ ],
+ "MatchCall_Text_Roxanne4": [
+  "0x082B2607",
+  "0x0829804C"
+ ],
+ "MatchCall_Text_TateLiza1": [
+  "0x082B2F97",
+  "0x08298823"
+ ],
+ "MatchCall_Text_TateLiza2": [
+  "0x082B306E",
+  "0x082988DF"
+ ],
+ "MatchCall_Text_TateLiza3": [
+  "0x082B3158",
+  "0x08298992"
+ ],
+ "MatchCall_Text_TateLiza4": [
+  "0x082B31CD",
+  "0x08298A00"
+ ],
+ "MatchCall_Text_Wattson1": [
+  "0x082B2912",
+  "0x08298296"
+ ],
+ "MatchCall_Text_Wattson2": [
+  "0x082B29CA",
+  "0x0829832F"
+ ],
+ "MatchCall_Text_Wattson3": [
+  "0x082B2AB6",
+  "0x082983F5"
+ ],
+ "MatchCall_Text_Wattson4": [
+  "0x082B2B01",
+  "0x0829844E"
+ ],
+ "MatchCall_Text_Winona1": [
+  "0x082B2DA4",
+  "0x08298670"
+ ],
+ "MatchCall_Text_Winona2": [
+  "0x082B2E2D",
+  "0x082986EB"
+ ],
+ "MatchCall_Text_Winona3": [
+  "0x082B2EC2",
+  "0x08298776"
+ ],
+ "MatchCall_Text_Winona4": [
+  "0x082B2F16",
+  "0x082987BC"
+ ],
+ "MtChimney_Text_MetoriteFittedOnMachine": [
+  "0x0822FEAA",
+  "0x0822C6EA"
+ ],
+ "Route117_Text_DayCarePokemonHadNewMove": [
+  "0x081F3C7C",
+  "0x081F9752"
+ ],
+ "SlateportCity_Harbor_Text_YouMustHaveTicket": [
+  "0x0820CEC1",
+  "0x0820F0C1"
+ ],
+ "gTVBravoTrainerText00": [
+  "0x0827F275",
+  "0x0826F90F"
+ ],
+ "gTVBravoTrainerText01": [
+  "0x0827F304",
+  "0x0826F962"
+ ],
+ "gTVBravoTrainerText02": [
+  "0x0827F361",
+  "0x0826F9A9"
+ ],
+ "gTVBravoTrainerText03": [
+  "0x0827F3E4",
+  "0x0826FA07"
+ ],
+ "gTVBravoTrainerText04": [
+  "0x0827F49F",
+  "0x0826FAAD"
+ ],
+ "gTVBravoTrainerText05": [
+  "0x0827F565",
+  "0x0826FB51"
+ ],
+ "gTVBravoTrainerText06": [
+  "0x0827F624",
+  "0x0826FBF5"
+ ],
+ "gTVBravoTrainerText07": [
+  "0x0827F65C",
+  "0x0826FC21"
+ ],
+ "gTVBravoTrainerText08": [
+  "0x0827F6E6",
+  "0x0826FC80"
+ ],
+ "gText_BoostPp": [
+  "0x085E9F2A",
+  "0x085CEB95"
+ ],
+ "sCalciumDesc": [
+  "0x0858085A",
+  "0x0855DACB"
+ ],
+ "sMapName_ROUTE_128": [
+  "0x085A0D09",
+  "0x0857D9E9"
+ ],
+ "sMapName_SILPH_CO_": [
+  "0x085A10B2",
+  "0x0857DD09"
+ ],
+ "sText_CommunicationStandby": [
+  "0x0832DB49",
+  "0x0830F4B4"
+ ],
+ "sText_FullParty": [
+  "0x08674E6A",
+  "0x08725CE8"
+ ],
+ "sText_MysteryGiftEgg": [
+  "0x08674DDE",
+  "0x08725C76"
+ ],
+ "sText_PleaseWaitAWhile": [
+  "0x082EE104",
+  "0x082CF918"
+ ]
+}

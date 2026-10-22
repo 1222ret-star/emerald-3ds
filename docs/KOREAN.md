@@ -118,7 +118,13 @@ pret `symbols` 브랜치의 `pokeemerald.sym`(영문판 롬의 심볼 주소).
    ```sh
    python tools/korean/gen_korean_symbols.py work/reloc/symbols_kor.tsv tools/locales/korean-symbols.s.gz
    ```
-4. 매니페스트: 패치만 적용한 트리(한국어 적용 전)에서 문자열·이름 표·창 배치·그림 위치를 롬과 맞춰요.
+4. 남은 문자열: 2단계가 못 찾은 문자열은 그것을 가리키는 포인터(스크립트의 `msgbox`, 표의 항목)를 따라가
+   한글판 주소를 찾아요. 구조체·목록을 여러 단계 거쳐도 돼요(포켓내비 지명). 결과는 `tools/korean/texts_jk.json`에
+   쌓이고, 표 구조가 바뀐 항목(칼슘 설명: `gItems` 한 칸이 44→48바이트)은 손으로 적어 두었어요.
+   ```sh
+   python tools/korean/follow_pointers.py build/upstream work/reloc/symbols_kor.tsv work/usa_to_jk_map.json USA.gba EmeraldJK.gba tools/korean/texts_jk.json 이름...
+   ```
+5. 매니페스트: 패치만 적용한 트리(한국어 적용 전)에서 문자열·이름 표·창 배치·그림 위치를 롬과 맞춰요.
    소스 위치를 담으므로 pret 소스를 바꾸는 패치가 달라지면 다시 만들어야 해요.
    ```sh
    python tools/bootstrap.py
@@ -126,7 +132,8 @@ pret `symbols` 브랜치의 `pokeemerald.sym`(영문판 롬의 심볼 주소).
    python tools/korean/gen_korean_manifest.py build/upstream work/reloc/symbols_kor.tsv USA.gba EmeraldJK.gba tools/locales/korean.json.gz work/manifest_report.tsv
    ```
    창 배치는 영문판 pret와 같은 항목만 한글판 것을 쓰고, `WINDOW_KEEP`에 적은 항목은 영문판 그대로 둬요.
-5. 빌드: `python tools/bootstrap.py --make --korean-rom EmeraldJK.gba -j8`
+   그래도 위치가 없고 아무 데서도 쓰지 않는 대사(루비·사파이어의 잔재)는 비워요. 영어 원문이 recipe에 들어가지 않게요.
+6. 빌드: `python tools/bootstrap.py --make --korean-rom EmeraldJK.gba -j8`
 
 그 밖의 도구: `hangul_encode.py`(한국어 문장을 게임 코드로, 패치 0063의 문구용), `kortext.py`(한글판 텍스트 읽기),
 `extract_hangul_font.py`(글꼴을 PNG로), `vcdiff.py`(xdelta 패치 적용·분석), `script_cmds.py`(이벤트 스크립트 해석).
@@ -135,20 +142,19 @@ pret `symbols` 브랜치의 `pokeemerald.sym`(영문판 롬의 심볼 주소).
 
 1. upstream을 병합하고 `python tools/bootstrap.py`로 패치가 모두 적용되는지 봐요.
    0057~0070이 실패하면 바뀐 소스에 맞춰 다시 만들어요(문맥 줄이 앞 패치에 걸려 있으면 앞 패치가 바뀔 때 같이 고쳐요).
-2. pret 기준 커밋이 바뀌었거나 문자열이 있는 소스가 바뀌었으면 4단계(매니페스트)를 다시 해요.
-   기준 롬이 그대로면 1~3단계는 다시 할 필요 없어요.
-3. `manifest_report.tsv`에서 새로 영어로 남는 문자열과 창 배치를 확인해요. 포트가 새로 만든 화면의 창은
+2. pret 기준 커밋이 바뀌었거나 문자열이 있는 소스가 바뀌었으면 5단계(매니페스트)를 다시 해요.
+   기준 롬이 그대로면 1~4단계는 다시 할 필요 없어요.
+3. `manifest_report.tsv`에서 새로 영어로 남는 문자열과 창 배치를 확인해요. 쓰는 문자열이면 4단계로 찾아요. 포트가 새로 만든 화면의 창은
    한글판에 없으니 상자를 벗어나면 0068처럼 좌표를 고쳐요.
 4. 포트 자체 문구: 새 `CTR_TEXT`의 5번째(한국어) 인자와, 패치로 더한 게임 문구(0063)를 채워요.
 5. upstream이 아래 화면 UI(도감·요약·파티)를 새로 만들면 0064·0065·0068·0070에서 해당 부분이 필요 없는지 봐요.
 6. 배포판을 만들어 `gen_recipe.py`가 통과하는지(게임 문자열 한도 4096바이트), `tools/release_audit.py --repo . --strict`가
-   깨끗한지 확인해요.
+   깨끗한지 확인해요. recipe의 literal에 영어 문장이 없어야 해요(`--report`의 파일별 크기로 찾아요).
 7. 에뮬레이터 확인: 타이틀, 이름 정하기, 오박사 대사, 가방·상점, 요약 화면(능력치·기술), 도감 설명·크기 비교,
    라이벌 2차전, 진화 문구 조사, 간이회화 가나다 자판, 포켓내비.
 
 ## 아직 안 된 것
 
-- 위치를 찾지 못한 문자열(약 1.4%, 주로 C 코드의 문자열과 일부 맵 대사)은 영어로 나와요.
+- 위치를 찾지 못한 문자열 일부(주로 C 코드의 짧은 문자열, 연결 기능의 일본어판 잔재)는 영어로 나와요.
 - 무로마을 체육관 대화창이 잘려요(포트의 와이드 화면 창 처리로 보여요).
 - 도감 가나다 정렬
-- recipe에 남은 영문판 원문 줄이기(약 44 KB, 공개 배포 전)

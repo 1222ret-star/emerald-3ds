@@ -26,9 +26,9 @@ CODES = {
 def charmap(tree: Path) -> dict[str, int]:
     chars = {}
     for line in (tree / "charmap.txt").read_text(encoding="utf-8").splitlines():
-        m = re.match(r"^'(.)'\s*=\s*([0-9A-Fa-f]{2})\s*$", line)
-        if m and m.group(1) not in chars:
-            chars[m.group(1)] = int(m.group(2), 16)
+        m = re.match(r"^'(\\?.)'\s*=\s*([0-9A-Fa-f]{2})\s*$", line)
+        if m and m.group(1)[-1] not in chars:
+            chars[m.group(1)[-1]] = int(m.group(2), 16)  # '\'' is the apostrophe
     return chars
 
 

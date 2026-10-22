@@ -4,7 +4,9 @@
 Matches every string definition of the patched pret tree to the Korean ROM:
   - C:   `u8 NAME[] = _("...");`                      -> kind "c"
   - asm: `NAME:` / `NAME::` followed by `.string` lines -> kind "asm"
-The Korean address of NAME comes from relocmap.py (symbols_kor.tsv). The
+The Korean address of NAME comes from relocmap.py (symbols_kor.tsv), or from
+texts_jk.json (follow_pointers.py) for strings relocmap.py could not place.
+An asm string still unplaced that nothing references is left empty. The
 manifest stores source positions, ROM offsets and sizes only: no text.
 
   python gen_korean_manifest.py TREE SYMBOLS_KOR.tsv USA.gba KOR.gba OUT.json.gz [REPORT.tsv]
@@ -486,6 +488,22 @@ def placeholders(rom: bytes, offset: int, end: int) -> collections.Counter:
     return found
 
 
+# Strings relocmap.py could not place, found through the pointers that
+# reference them (follow_pointers.py): name -> [English, Korean address].
+EXTRA_TEXTS = Path(__file__).resolve().parent / "texts_jk.json"
+# Event-distribution scripts the 3DS never receives; their text is left
+# empty rather than English (it would be English text in the recipe).
+BLANK_ALSO = {"sText_MysteryGiftAlteringCave"}
+
+
+def referenced(sources: list, texts: dict) -> collections.Counter:
+    """How often each identifier appears in the tree's sources."""
+    words = collections.Counter()
+    for path in sources:
+        words.update(re.findall(r"[A-Za-z_]\w*", texts[path]))
+    return words
+
+
 def main() -> None:
     tree, symbols_path, usa_path, kor_path, out = map(Path, sys.argv[1:6])
     report_path = Path(sys.argv[6]) if len(sys.argv) > 6 else None
@@ -499,14 +517,20 @@ def main() -> None:
         name, kind, size, usa_a, kor_a, status = line.split("\t")
         by_name[name].append((int(usa_a, 16) - ROM, int(kor_a, 16) - ROM if kor_a else None, status))
         sizes[name] = int(size)
+    if EXTRA_TEXTS.exists():
+        for name, (usa_a, kor_a) in json.loads(EXTRA_TEXTS.read_text(encoding="utf-8")).items():
+            by_name[name] = [(int(usa_a, 16) - ROM, int(kor_a, 16) - ROM, "paired")]
+    blank = kor.index(b"\xff")  # an empty string: just the terminator
 
     files: dict[str, dict] = {}
     report = []
     stats = collections.Counter()
     sources = sorted(list((tree / "src").rglob("*.c")) + list((tree / "src").rglob("*.h")) + list((tree / "data").rglob("*.inc"))
                      + list((tree / "data").rglob("*.s")))
+    texts = {path: path.read_text(encoding="utf-8") for path in sources}
+    uses = referenced(sources, texts)
     for path in sources:
-        text = path.read_text(encoding="utf-8")
+        text = texts[path]
         relative = path.relative_to(tree).as_posix()
         kind = "c" if path.suffix in (".c", ".h") else "asm"
         pattern = C_STRING if kind == "c" else ASM_LABEL
@@ -515,14 +539,19 @@ def main() -> None:
             name = match.group(1)
             stats["definitions"] += 1
             entries = by_name.get(name, [])
-            if len(entries) != 1:
-                stats["ambiguous" if entries else "no symbol"] += 1
-                report.append((relative, name, "ambiguous" if entries else "no symbol", ""))
-                continue
-            usa_off, kor_off, status = entries[0]
-            if kor_off is None or status not in USABLE:
-                stats["not located"] += 1
-                report.append((relative, name, "not located", status))
+            usa_off, kor_off, status = entries[0] if len(entries) == 1 else (None, None, "")
+            if len(entries) != 1 or kor_off is None or status not in USABLE:
+                problem = "not located" if len(entries) == 1 else "ambiguous" if entries else "no symbol"
+                # A string nothing uses (a leftover of Ruby/Sapphire) is
+                # left empty rather than English.
+                if kind == "asm" and (uses[name] == 1 or name in BLANK_ALSO):
+                    start, end = match.span(2)
+                    edits.append([start, end - 1, blank, 1, kind])
+                    stats["blank (unused)"] += 1
+                    report.append((relative, name, problem + ", left empty", status))
+                    continue
+                stats[problem] += 1
+                report.append((relative, name, problem, status))
                 continue
             usa_end, kor_end = string_end(usa, usa_off), string_end(kor, kor_off)
             if usa_end < 0 or kor_end < 0:
