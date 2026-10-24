@@ -145,9 +145,12 @@ void CtrSettings_SetInt(const char *key, int value);
  * 3 being 1.5x (OPTIONS, ZR/ZL). */
 int CtrSettings_SpeedHalves(void);
 void CtrSettings_StepSpeed(int direction, bool wrap);
-/* False on a fast-forwarded frame that is not shown: the sound engine skips
- * it, so music and effects keep their own speed (3ds_sound.c). */
+/* False on a fast-forwarded frame that falls between two display frames of
+ * real time: the sound engine skips it, so music and effects keep their own
+ * speed (3ds_sound.c). */
 bool CtrPlatform_SoundTick(void);
+/* Whether fast-forward (a speed above 1x) is on, as of the last frame. */
+bool CtrPlatform_FastForward(void);
 
 void CtrGame_Init(void);
 /* The game's variables back to how AgbMain first saw them, AgbMain again:

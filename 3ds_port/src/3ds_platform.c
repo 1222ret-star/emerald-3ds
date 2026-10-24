@@ -213,16 +213,21 @@ bool CtrPlatform_BeginFrame(void)
  * Fast-forward (CtrSettings_SpeedHalves). Each game frame earns two halves;
  * a frame is presented and waits for the display once `speed` halves have
  * been earned, the others run back to back: at 2x one frame in two is shown,
- * at 1.5x two in three. Only
- * a presented frame ticks the sound engine (CtrPlatform_SoundTick), so music
- * and effects keep their speed while the game runs faster; a frame hidden by
- * real-time pacing (below) ticks it too, as it stands for real time. A scene
- * too costly for its hidden frames to fit in the display's frame shows fewer
- * than 60 pictures a second, still at the chosen speed.
+ * at 1.5x two in three. The sound engine (CtrPlatform_SoundTick) ticks once
+ * per display frame of real time, so music and effects keep their speed while
+ * the game runs faster; a frame hidden by real-time pacing (below) ticks it
+ * too, as it stands for real time. A scene too costly for its hidden frames
+ * to fit in the display's frame shows fewer than 60 pictures a second, still
+ * at the chosen speed: ticking on presented frames only, the sound then
+ * starved and crackled.
  */
 #define FRAME_MS (1000.0f / 60)
 static bool sSoundTick = true;
 static unsigned sEarned;
+/* Fast-forward this frame (FrameShown), and the real time the sound engine
+ * has been ticked up to (SoundDue). */
+static bool sFastForward;
+static uint64_t sSoundClock;
 /* Real-time pacing's hidden frame (PaceBehind): never two in a row. */
 static unsigned sHidden;
 static uint64_t sShownTick;
@@ -295,6 +300,7 @@ static bool FrameShown(uint64_t now)
     unsigned speed = LocalLink_InSession() ? 2 : CtrSettings_SpeedHalves();
 
     sPacedFrame = sPace && speed <= 2;
+    sFastForward = speed > 2;
     if (sPacedFrame)
     {
         bool behind = PaceBehind(now);
@@ -323,6 +329,29 @@ static bool FrameShown(uint64_t now)
         return true;
     }
     return false;
+}
+
+/* Fast-forward: whether a display frame of real time has passed since the
+ * sound engine's last tick. A long gap (a slow scene, the HOME menu) is let
+ * go rather than caught up. */
+static bool SoundDue(uint64_t now)
+{
+    const uint64_t frame = SYSCLOCK_ARM11 / 60;
+
+    if (sSoundClock == 0 || now - sSoundClock > 4 * frame)
+    {
+        sSoundClock = now;
+        return true;
+    }
+    if (now - sSoundClock < frame)
+        return false;
+    sSoundClock += frame;
+    return true;
+}
+
+bool CtrPlatform_FastForward(void)
+{
+    return sFastForward;
 }
 
 bool CtrPlatform_SoundTick(void)
@@ -359,7 +388,15 @@ void CtrPlatform_EndFrame(void)
     sTiming.gameMs = (endStart - sWorkStart) * 1000.0f / SYSCLOCK_ARM11;
     PaceUpdate();
     bool shown = FrameShown(endStart);
-    sSoundTick = shown || sPacedFrame;
+    if (sFastForward)
+    {
+        sSoundTick = SoundDue(endStart);
+    }
+    else
+    {
+        sSoundTick = shown || sPacedFrame;
+        sSoundClock = 0;
+    }
     if (sHooks.audioFrame)
         sHooks.audioFrame();
     /* Latch the logical frame BEFORE GPU reads its registers/OAM/palette.

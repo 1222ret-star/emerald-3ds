@@ -1,0 +1,93 @@
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Korean summary move types
+Applies after 0070-korean-summary-pp.patch; apply with tools/bootstrap.py.
+
+Korean build only (GAME_LANGUAGE == LANGUAGE_KOREAN): the moves' type and
+contest category icons and the move names are drawn 2 pixels right, inside the
+move selector.
+
+diff --git a/src/pokemon_summary_screen.c b/src/pokemon_summary_screen.c
+--- a/src/pokemon_summary_screen.c
++++ b/src/pokemon_summary_screen.c
+@@ -115,6 +115,14 @@
+ #define PP_ALIGN_WIDTH 40 // the Korean PP box is narrower: "PP35/35" stays inside it
+ #else
+ #define PP_ALIGN_WIDTH 44
++#endif
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++// Inside the Korean ROM's move selector, which starts 2 pixels right.
++#define MOVE_TYPE_X 87
++#define MOVE_NAME_X 2
++#else
++#define MOVE_TYPE_X 85
++#define MOVE_NAME_X 0
+ #endif
+ #if GAME_LANGUAGE == LANGUAGE_KOREAN
+ #define MOVE_LABEL_X 8 // Hangul has no left bearing: the Effect labels sit well inside their box
+@@ -4224,7 +4232,7 @@
+     if (move != 0)
+     {
+         pp = CalculatePPWithBonus(move, summary->ppBonuses, moveIndex);
+-        PrintTextOnWindow(moveNameWindowId, gMoveNames[move], 0, moveIndex * 16 + 1, 0, 1);
++        PrintTextOnWindow(moveNameWindowId, gMoveNames[move], MOVE_NAME_X, moveIndex * 16 + 1, 0, 1);
+         ConvertIntToDecimalStringN(gStringVar1, summary->pp[moveIndex], STR_CONV_MODE_RIGHT_ALIGN, 2);
+         ConvertIntToDecimalStringN(gStringVar2, pp, STR_CONV_MODE_RIGHT_ALIGN, 2);
+         DynamicPlaceholderTextUtil_Reset();
+@@ -4237,7 +4245,7 @@
+     }
+     else
+     {
+-        PrintTextOnWindow(moveNameWindowId, gText_OneDash, 0, moveIndex * 16 + 1, 0, 1);
++        PrintTextOnWindow(moveNameWindowId, gText_OneDash, MOVE_NAME_X, moveIndex * 16 + 1, 0, 1);
+         text = gText_TwoDashes;
+         ppState = 12;
+         x = GetStringCenterAlignXOffset(FONT_NORMAL, text, PP_ALIGN_WIDTH);
+@@ -4385,16 +4393,16 @@
+ 
+     if (sMonSummaryScreen->newMove == MOVE_NONE)
+     {
+-        PrintTextOnWindow(windowId1, gText_Cancel, 0, 65, 0, 1);
++        PrintTextOnWindow(windowId1, gText_Cancel, MOVE_NAME_X, 65, 0, 1);
+     }
+     else
+     {
+         u16 move = sMonSummaryScreen->newMove;
+ 
+         if (sMonSummaryScreen->currPageIndex == PSS_PAGE_BATTLE_MOVES)
+-            PrintTextOnWindow(windowId1, gMoveNames[move], 0, 65, 0, 6);
++            PrintTextOnWindow(windowId1, gMoveNames[move], MOVE_NAME_X, 65, 0, 6);
+         else
+-            PrintTextOnWindow(windowId1, gMoveNames[move], 0, 65, 0, 5);
++            PrintTextOnWindow(windowId1, gMoveNames[move], MOVE_NAME_X, 65, 0, 5);
+ 
+         ConvertIntToDecimalStringN(gStringVar1, gBattleMoves[move].pp, STR_CONV_MODE_RIGHT_ALIGN, 2);
+         DynamicPlaceholderTextUtil_Reset();
+@@ -4539,7 +4547,7 @@
+     for (i = 0; i < MAX_MON_MOVES; i++)
+     {
+         if (summary->moves[i] != MOVE_NONE)
+-            SetTypeSpritePosAndPal(gBattleMoves[summary->moves[i]].type, 85, 32 + (i * 16), i + SPRITE_ARR_ID_TYPE);
++            SetTypeSpritePosAndPal(gBattleMoves[summary->moves[i]].type, MOVE_TYPE_X, 32 + (i * 16), i + SPRITE_ARR_ID_TYPE);
+         else
+             SetSpriteInvisibility(i + SPRITE_ARR_ID_TYPE, TRUE);
+     }
+@@ -4552,7 +4560,7 @@
+     for (i = 0; i < MAX_MON_MOVES; i++)
+     {
+         if (summary->moves[i] != MOVE_NONE)
+-            SetTypeSpritePosAndPal(NUMBER_OF_MON_TYPES + gContestMoves[summary->moves[i]].contestCategory, 85, 32 + (i * 16), i + SPRITE_ARR_ID_TYPE);
++            SetTypeSpritePosAndPal(NUMBER_OF_MON_TYPES + gContestMoves[summary->moves[i]].contestCategory, MOVE_TYPE_X, 32 + (i * 16), i + SPRITE_ARR_ID_TYPE);
+         else
+             SetSpriteInvisibility(i + SPRITE_ARR_ID_TYPE, TRUE);
+     }
+@@ -4567,9 +4575,9 @@
+     else
+     {
+         if (sMonSummaryScreen->currPageIndex == PSS_PAGE_BATTLE_MOVES)
+-            SetTypeSpritePosAndPal(gBattleMoves[sMonSummaryScreen->newMove].type, 85, 96, SPRITE_ARR_ID_TYPE + 4);
++            SetTypeSpritePosAndPal(gBattleMoves[sMonSummaryScreen->newMove].type, MOVE_TYPE_X, 96, SPRITE_ARR_ID_TYPE + 4);
+         else
+-            SetTypeSpritePosAndPal(NUMBER_OF_MON_TYPES + gContestMoves[sMonSummaryScreen->newMove].contestCategory, 85, 96, SPRITE_ARR_ID_TYPE + 4);
++            SetTypeSpritePosAndPal(NUMBER_OF_MON_TYPES + gContestMoves[sMonSummaryScreen->newMove].contestCategory, MOVE_TYPE_X, 96, SPRITE_ARR_ID_TYPE + 4);
+     }
+ }
+ 

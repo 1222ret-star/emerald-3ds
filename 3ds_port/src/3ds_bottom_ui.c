@@ -7155,9 +7155,14 @@ static u8 ProcessTouch(u8 mode)
         if (mode == MODE_PARTY_MENU && (sShown.bagView == BAG_VIEW_WHOLE || sTouch.startX < CW))
         {
             int ox = sShown.bagView == BAG_VIEW_WHOLE ? (W - 240) / 2 : 0, oy = (H - 160) / 2;
+            int dx = sTouch.lastX - sTouch.startX, dy = sTouch.lastY - sTouch.startY;
 
-            if (!sTouch.dragged)
-                CtrMenu_PostTap(sTouch.lastX - ox, sTouch.lastY - oy);
+            /* Where the finger came down, and a little slide allowed: on the
+             * console the panel's last points before a lift wander, and the
+             * entry under them (one row down, or none past 8 pixels) was
+             * chosen instead of the one pressed. Nothing here scrolls. */
+            if (dx >= -16 && dx <= 16 && dy >= -16 && dy <= 16)
+                CtrMenu_PostTap(sTouch.startX - ox, sTouch.startY - oy);
             return HIT_NONE;
         }
         /* The boxes have the whole screen, their picture in the middle of it,
@@ -7910,7 +7915,13 @@ void CtrBottom_Frame(void)
         BottomProfile(frames, mode, ticks, 2);
         return;
     }
-    if (mode == MODE_BATTLE_INFO)
+    /* Made ahead on idle frames - but at a speed above 1x every game frame,
+     * shown or not, came here: the field with the map up spent its time
+     * making the card and the OPTIONS cells again and again, four times a
+     * picture at 4x, and the picture rate fell. */
+    if (CtrPlatform_FastForward())
+        ;
+    else if (mode == MODE_BATTLE_INFO)
         WarmBattleMenus();
     else if (mode == MODE_BATTLE_ACTION)
         WarmQuickBalls(&sShown);
