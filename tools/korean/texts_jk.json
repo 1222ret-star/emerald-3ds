@@ -339,17 +339,65 @@
   "0x082B2F16",
   "0x082987BC"
  ],
+ "MossdeepCity_Gym_Text_RegisteredTateAndLiza": [
+  "0x08221AEA",
+  "0x08220838"
+ ],
+ "MossdeepCity_Gym_Text_TateAndLizaPostBattle": [
+  "0x08221B1D",
+  "0x08220861"
+ ],
  "MtChimney_Text_MetoriteFittedOnMachine": [
   "0x0822FEAA",
   "0x0822C6EA"
+ ],
+ "Route109_SeashoreHouse_Text_DwayneIntro": [
+  "0x08269803",
+  "0x0825C608"
  ],
  "Route117_Text_DayCarePokemonHadNewMove": [
   "0x081F3C7C",
   "0x081F9752"
  ],
+ "Route124_DivingTreasureHuntersHouse_Text_ShardTradeBoard": [
+  "0x08271217",
+  "0x0826325A"
+ ],
+ "Route131_Text_SusieIntro": [
+  "0x082A367B",
+  "0x0828C608"
+ ],
+ "SeafloorCavern_Room4_Text_Grunt3Defeat": [
+  "0x08234CF3",
+  "0x0823082C"
+ ],
+ "SeafloorCavern_Room4_Text_Grunt3Intro": [
+  "0x08234CCA",
+  "0x0823080B"
+ ],
+ "SeafloorCavern_Room4_Text_Grunt3PostBattle": [
+  "0x08234CFC",
+  "0x08230835"
+ ],
+ "SeafloorCavern_Room4_Text_Grunt4Defeat": [
+  "0x08234D68",
+  "0x08230886"
+ ],
+ "SeafloorCavern_Room4_Text_Grunt4PostBattle": [
+  "0x08234D79",
+  "0x08230899"
+ ],
  "SlateportCity_Harbor_Text_YouMustHaveTicket": [
   "0x0820CEC1",
   "0x0820F0C1"
+ ],
+ "SlateportCity_PokemonFanClub_Text_TellMeAnythingAboutYourMon": [
+  "0x0828073B",
+  "0x0827081A"
+ ],
+ "SlateportCity_PokemonFanClub_Text_ThatsAllForInterview2": [
+  "0x08280789",
+  "0x08270855"
  ],
  "gTVBravoTrainerText00": [
   "0x0827F275",
@@ -390,6 +438,10 @@
  "gText_BoostPp": [
   "0x085E9F2A",
   "0x085CEB95"
+ ],
+ "gText_HMMovesCantBeForgotten2": [
+  "0x085EA4CB",
+  "0x085CF182"
  ],
  "sCalciumDesc": [
   "0x0858085A",

@@ -24,6 +24,7 @@ from pathlib import Path
 ROM = 0x08000000
 KOREAN_SHA1 = "17cd49e1af1184cd29355c674bedee7f5b72b055"
 USABLE = ("same", "moved", "paired", "modified")
+TEXT_START = 0x100000  # the Korean ROM's code ends past 1 MB: no string before it
 
 C_STRING = re.compile(
     r'\bu8\s+(\w+)\s*\[\s*\]\s*=\s*(_\(\s*(?:"(?:[^"\\\n]|\\.)*"\s*)+\))\s*;')
@@ -472,6 +473,29 @@ def string_end(rom: bytes, offset: int) -> int:
     return -1 if end < 0 else end + 1
 
 
+def looks_like_text(rom: bytes, offset: int, end: int) -> bool:
+    """Whether a string reads as game text: Hangul pairs, Latin, punctuation
+    and control codes with their arguments. A pairing that landed in
+    graphics or code (it happened: a gym's PokeNav line two kilobytes of
+    tiles, which froze the game) has bytes nothing in a text uses."""
+    odd, i = 0, offset
+    if offset < TEXT_START:
+        return False  # code, the header: a trainer's intro once read "VÔ"
+    while i < end - 1:
+        b = rom[i]
+        if 0x37 <= b <= 0x41 and 1 <= rom[i + 1] <= 0xEF:
+            i += 2
+        elif b in (0xF7, 0xF8, 0xF9, 0xFD):
+            i += 2
+        elif b == 0xFC:
+            i += 3
+        else:
+            odd += 0x01 <= b <= 0x36 or 0x42 <= b <= 0xA0
+            i += 1
+    # A few such bytes are symbols (arrows, brackets, &): a twentieth at most.
+    return odd <= max(3, (end - offset) // 20) and end - offset <= 1200
+
+
 def placeholders(rom: bytes, offset: int, end: int) -> collections.Counter:
     """Placeholder ids ({FD xx}) of a string: a cheap sanity check across languages."""
     found, i = collections.Counter(), offset
@@ -560,6 +584,10 @@ def main() -> None:
                 continue
             if usa[usa_off:usa_end] == kor[kor_off:kor_end]:
                 stats["unchanged"] += 1
+                continue
+            if not looks_like_text(kor, kor_off, kor_end):
+                stats["not text"] += 1
+                report.append((relative, name, "not text", status))
                 continue
             if placeholders(usa, usa_off, usa_end) != placeholders(kor, kor_off, kor_end):
                 stats["placeholder mismatch (%s)" % status] += 1

@@ -13,7 +13,7 @@ from pathlib import Path
 from . import followers, pak
 from .errors import BuilderError
 from .recipe import Recipe, RecipeError, build_entry, recipe_rom_sha1
-from .rom import Rom, load_rom
+from .rom import KOREAN_SHA1, Rom, load_rom
 from .voxel import run_generators
 from .vtree import build_tree
 
@@ -169,7 +169,8 @@ def build_pack(rom_path: Path, payload: Payload, out_pak: Path, progress=None,
         start = time.perf_counter()
         optional, follower_info = followers.build_section(
             follower_fetcher, report.span(0.9, 0.92, "Fetching the follower sprites"),
-            languages=[followers.ROM_LANGUAGES.get(rom.code[3:4], "en")])
+            # The Korean ROM's header is BPEE's; HGSS's bank has no Korean.
+            languages=["ko" if rom.sha1 == KOREAN_SHA1 else followers.ROM_LANGUAGES.get(rom.code[3:4], "en")])
         timings.append(("followers", time.perf_counter() - start))
     report(0.92, "Writing the data pack")
     info = pak.write_pak(out_pak, sorted({**files, **optional}.items()), abi, bytes.fromhex(rom.sha1))

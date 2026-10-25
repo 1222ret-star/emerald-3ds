@@ -8,7 +8,7 @@ the Korean ROM's own effect_battle.bin rows, not the English tile layout.
 diff --git a/src/pokemon_summary_screen.c b/src/pokemon_summary_screen.c
 --- a/src/pokemon_summary_screen.c
 +++ b/src/pokemon_summary_screen.c
-@@ -411,10 +411,32 @@
+@@ -411,10 +411,34 @@
      0x3823, 0x3824, 0x3824, 0x3824, 0x3824, 0x3824, 0x3c6c, 0x3037, 0x3037, 0x3037,
      0x304d, 0x302f, 0x302f, 0x302f, 0x302f, 0x302f, 0x302f, 0x302f, 0x302f, 0x302f,
  };
@@ -21,11 +21,13 @@ diff --git a/src/pokemon_summary_screen.c b/src/pokemon_summary_screen.c
 +static void BuildKoreanMoveEffectTilemap(void)
 +{
 +    static const u8 rows[] = {0, 1, 2, 3, 3, 4, 4, 5, 6};
++    // In the data pack: only the tilemap's start resolves to it, not a row
++    // inside it (the rows past the first were copied from other memory).
++    const u16 *tilemap = Port_ResolveAssetPointer(gSummaryScreen_MoveEffect_Battle_Tilemap);
 +    u32 i;
 +
 +    for (i = 0; i < ARRAY_COUNT(rows); i++)
-+        CpuCopy16(&gSummaryScreen_MoveEffect_Battle_Tilemap[rows[i] * 10],
-+                  &sMoveEffectBattleTilemapKorean[i * 10], 10 * sizeof(u16));
++        CpuCopy16(&tilemap[rows[i] * 10], &sMoveEffectBattleTilemapKorean[i * 10], 10 * sizeof(u16));
 +}
 +
  static const struct TilemapCtrl sBattleMoveCategoryTilemapCtrl =
@@ -41,7 +43,7 @@ diff --git a/src/pokemon_summary_screen.c b/src/pokemon_summary_screen.c
  static bool8 sShowCategory;
  // The Effect window of this summary, everywhere below (a macro does not
  // expand inside itself).
-@@ -1190,6 +1212,9 @@
+@@ -1190,6 +1214,9 @@
  #ifdef PLATFORM_3DS
      // Off, the summary is the game's own.
      sShowCategory = MoveSplitEnabled();

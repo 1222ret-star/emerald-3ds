@@ -1,0 +1,19 @@
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Korean follower texts
+Applies after 0071-korean-summary-move-types.patch; apply with tools/bootstrap.py.
+
+Korean build only (GAME_LANGUAGE == LANGUAGE_KOREAN): the follower's messages
+are read from followers/text/ko.bin. The builder fetches none for the Korean
+ROM, so the follower cries instead of speaking HGSS's English lines.
+
+diff --git a/src/follower_mon.c b/src/follower_mon.c
+--- a/src/follower_mon.c
++++ b/src/follower_mon.c
+@@ -1074,6 +1074,8 @@
+     return "fr";
+ #elif GAME_LANGUAGE == LANGUAGE_ITALIAN
+     return "it";
++#elif GAME_LANGUAGE == LANGUAGE_KOREAN
++    return "ko"; // no Korean bank yet: the follower only cries, it does not speak English
+ #else
+     return "en";
+ #endif
