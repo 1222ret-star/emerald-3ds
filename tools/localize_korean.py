@@ -93,6 +93,39 @@ def stage_easy_chat_letters(tree: Path, rom: bytes, symbols_path: Path, writes: 
     writes[tree / "src/data/easy_chat/easy_chat_words_by_letter.h"] = "\n".join(out).encode()
 
 
+# The Korean ROM's own sentences for the facility trainers, three each (before
+# the battle, after winning it, after losing it), where the English game joins
+# six Easy Chat words in English order: pointer tables its added code reads,
+# by facility. (table, trainers)
+FRONTIER_SPEECH = {
+    "sKoreanFrontierSpeech": (0x5C18E4, 300),
+    "sKoreanSlateportTentSpeech": (0x5C2FB8, 30),
+    "sKoreanVerdanturfTentSpeech": (0x5C39F8, 30),
+    "sKoreanFallarborTentSpeech": (0x5C4430, 30),
+}
+
+
+def stage_frontier_speech(tree: Path, rom: bytes, writes: dict) -> None:
+    """The facility trainers' Korean sentences (patch 0074 reads them), copied
+    from the player's ROM into a header of the generated tree."""
+    import struct
+    out = ["// Written by tools/localize_korean.py from the player's Korean ROM: the",
+           "// facility trainers' sentences, before / won / lost for each trainer.", ""]
+    for name, (table, trainers) in FRONTIER_SPEECH.items():
+        entries = []
+        for i in range(trainers * 3):
+            pointer = struct.unpack_from("<I", rom, table + 4 * i)[0] - 0x08000000
+            end = rom.find(b"\xff", pointer, pointer + 256) if 0 <= pointer < len(rom) else -1
+            if end < 0:
+                raise SystemExit("%s: entry %d is no string" % (name, i))
+            out.append("static const u8 %s_%d[] = {%s};" % (name, i, encoded(rom[pointer:end + 1])))
+            entries.append("%s_%d" % (name, i))
+        out.append("static const u8 *const %s[%d] = {" % (name, trainers * 3))
+        out += ["    %s," % entry for entry in entries]
+        out += ["};", ""]
+    writes[tree / "src/data/battle_frontier/korean_trainer_speech.h"] = "\n".join(out).encode()
+
+
 def stage(tree: Path, rom_path: Path) -> None:
     rom = load_rom(rom_path)
     writes: dict[Path, bytes] = {}
@@ -151,6 +184,8 @@ def stage(tree: Path, rom_path: Path) -> None:
     stage_id_lists(tree, rom, symbols, writes)
     # Easy Chat's keyboard groups: Others and the initial consonants.
     stage_easy_chat_letters(tree, rom, symbols, writes)
+    # The facility trainers' sentences.
+    stage_frontier_speech(tree, rom, writes)
 
     # Every check passed: write.
     for path, data in writes.items():

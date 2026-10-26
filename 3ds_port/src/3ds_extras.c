@@ -18,6 +18,7 @@
 #include "item.h"
 #include "constants/item.h"
 #include "constants/items.h"
+#include "constants/flags.h"
 #include "constants/songs.h"
 
 const char *const gCtrExtrasOffOn[2] = {CTR_TEXT("OFF", "NO", "NON", "NO", "끄기"), CTR_TEXT("ON", "SÍ", "OUI", "SÌ", "켜기")};
@@ -140,17 +141,46 @@ static const u8 *GiveItemText(void)
     return name;
 }
 
+/*
+ * An event ticket comes with the ship its distribution enabled: the harbours
+ * look for that flag before the ticket itself, so a ticket given alone was
+ * never recognised. 0 for any other item.
+ */
+static u16 TicketShipFlag(u16 item)
+{
+    switch (item)
+    {
+    case ITEM_EON_TICKET:    return FLAG_ENABLE_SHIP_SOUTHERN_ISLAND;
+    case ITEM_AURORA_TICKET: return FLAG_ENABLE_SHIP_BIRTH_ISLAND;
+    case ITEM_OLD_SEA_MAP:   return FLAG_ENABLE_SHIP_FARAWAY_ISLAND;
+    case ITEM_MYSTIC_TICKET: return FLAG_ENABLE_SHIP_NAVEL_ROCK;
+    default:                 return 0;
+    }
+}
+
 static void GiveItemsNow(void)
 {
     u16 item = GiveItem();
+    u16 ship = TicketShipFlag(item);
     int count = CtrSettings_GetInt("give_count", 0);
     u16 quantity = sGiveCountValues[count >= 0 && count < (int)ARRAY_COUNT(sGiveCountValues) ? count : 0];
 
     /* Key items come one at a time. */
     if (GetPocketByItemId(item) == POCKET_KEY_ITEMS)
         quantity = 1;
-    if (item != ITEM_NONE && CheckBagHasSpace(item, quantity) && AddBagItem(item, quantity))
+    /* A ticket in the bag already (given before the ship came with it): only
+     * the ship. */
+    if (ship != 0 && CheckBagHasItem(item, 1))
+    {
+        FlagSet(ship);
         PlaySE(SE_SUCCESS);
+    }
+    else if (item != ITEM_NONE && CheckBagHasSpace(item, quantity) && AddBagItem(item, quantity))
+    {
+        if (ship != 0)
+            FlagSet(ship);
+        PlaySE(SE_SUCCESS);
+    }
     else
         PlaySE(SE_FAILURE);
 }

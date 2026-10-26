@@ -1,0 +1,27 @@
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Korean Frontier banned list
+Applies after 0072-korean-follower-texts.patch; apply with tools/bootstrap.py.
+
+Korean build only (GAME_LANGUAGE == LANGUAGE_KOREAN): the list of banned
+Pokemon a facility names ("알과 레쿠자는 참가시킬 수 없습니다") ends in the
+Korean ROM's gText_Are2, the topic particle with its line break, right after
+the last name: the English line break before it put the particle alone in
+the next box.
+
+diff --git a/src/frontier_util.c b/src/frontier_util.c
+--- a/src/frontier_util.c
++++ b/src/frontier_util.c
+@@ -2088,10 +2088,14 @@
+         }
+         else
+         {
++#if GAME_LANGUAGE != LANGUAGE_KOREAN
+             if (count & 1)
+                 StringAppend(gStringVar1, gText_LineBreak);
+             else
+                 StringAppend(gStringVar1, gText_Space2);
++#endif
++            // Korean: gText_Are2 is the topic particle and its own line
++            // break, right after the last name ("알과 레쿠자는").
+             StringAppend(gStringVar1, gText_Are2);
+         }
+     }

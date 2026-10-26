@@ -5518,6 +5518,12 @@ static void DrawObjects(unsigned priority, bool effects)
         /* Below the PokeNav's picture is its background, not the space the
          * GBA parks its unused sprites in. */
         if (sCentredScreen == CTR_CENTRED_POKENAV && y >= 160) continue;
+        /* Nor beside a plain centred screen's picture: a contest parks its
+         * hearts and the applause meter past x=240, out of the GBA's
+         * screen, and they stood in the margin. */
+        if (sCentred && sCentredScreen == CTR_CENTRED_PLAIN
+         && (x >= 240 || y >= 160 || x + (int)boxW <= 0 || y + (int)boxH <= 0))
+            continue;
         bool nightObject = !sStage && !sCentred && !sBattle
                         && CtrDayNight_Get()->daylight != 1.0f
                         && (sScreenOam[i >> 5] & (1u << (i & 31))) == 0;

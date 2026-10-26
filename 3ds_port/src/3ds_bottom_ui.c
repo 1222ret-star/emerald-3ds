@@ -158,7 +158,7 @@ void SetPokemonCryStereo(u32 val);
 extern const struct PokedexEntry gPokedexEntries[];
 
 /* start_menu.c's MENU_ACTION_* (the enum is private to that file). */
-enum { START_POKEDEX, START_POKEMON, START_BAG, START_POKENAV, START_NONE = 0xFF };
+enum { START_POKEDEX, START_POKEMON, START_BAG, START_POKENAV, START_PLAYER, START_NONE = 0xFF };
 
 #define W CTR_BOTTOM_WIDTH
 #define H CTR_BOTTOM_HEIGHT
@@ -2550,6 +2550,7 @@ enum
     HIT_QUICK_BALL_PREV,
     HIT_QUICK_BALL_NEXT,
     HIT_MAP = 0x90,
+    HIT_FRONTIER_PASS = 0xA0, /* the trainer card, with the pass */
     HIT_OPTION = 0xC0,     /* + option row; +HIT_OPTION_BACK for the left arrow */
     HIT_PAGE = 0xE0,       /* + OPTIONS page tab */
 };
@@ -3913,6 +3914,18 @@ static void DrawTrainerCard(const ViewState *s)
             DrawTile(sRes.badgeTiles + (2 * i + 16) * 32, x, y + 8, sRes.badgePal.c, FALSE, FALSE);
             DrawTile(sRes.badgeTiles + (2 * i + 17) * 32, x + 8, y + 8, sRes.badgePal.c, FALSE, FALSE);
         }
+
+    /* With the Frontier Pass the game's start menu opens it instead of the
+     * card (start_menu.c, StartMenuPlayerNameCallback); this card replaces
+     * that entry, so a tap on it does. */
+    if (FlagGet(FLAG_SYS_FRONTIER_PASS))
+    {
+        DrawStr(&sSmall, Ascii(CTR_TEXT("TAP THE CARD: FRONTIER PASS", "TOCA: PASE DEL FRENTE",
+                                        "TOUCHER : PASSE FRONTIERE", "TOCCA: PASS LOTTA",
+                                        "카드를 터치하면 프런티어패스")),
+                CARD_X + 16, CARD_Y + 20 * 8 + 4, TXT_DARK, TXT_LIGHT);
+        AddHit(CARD_X, CARD_Y, 30 * 8, 20 * 8, HIT_FRONTIER_PASS);
+    }
 }
 
 /* ------------------------------------------------------------------------ */
@@ -7021,6 +7034,11 @@ static void Activate(u8 id, u8 mode)
     case SCR_MAP:
         if (id == HIT_MAP)
             PickMapCell(sTouch.lastX, sTouch.lastY);
+        break;
+    case SCR_CARD:
+        /* The start menu's PLAYER entry, which with the pass opens it. */
+        if (id == HIT_FRONTIER_PASS && FieldIdle() && CtrStartMenu_Available())
+            StartPlan(PLAN_START, START_PLAYER);
         break;
     case SCR_SAVE:
         if (id == HIT_YES && FieldIdle())

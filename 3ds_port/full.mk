@@ -179,7 +179,11 @@ $(CTR_GBA_STAGE_OBJS): compat/ctr_gba_stage.h $(ROOT)/include/gba/defines.h
 # (compat/ctr_gba_centred.h).
 CTR_GBA_CENTRED_SRCS := region_map field_region_map main_menu naming_screen wallclock \
 	pokemon_summary_screen starter_choose shop link berry_blender pokemon_jump dodrio_berry_picking \
-	contest contest_util option_menu slot_machine roulette easy_chat
+	contest contest_util option_menu slot_machine roulette easy_chat hall_of_fame battle_factory_screen \
+	battle_dome battle_pyramid_bag frontier_pass battle_records trainer_card move_relearner \
+	pokeblock pokeblock_feed use_pokeblock berry_tag_screen mail contest_painting diploma berry_crush \
+	union_room_chat union_room_battle wireless_communication_status_screen clear_save_data_screen \
+	reset_rtc_screen save_failed_screen
 CTR_GBA_CENTRED_OBJS := $(patsubst %,build/root/src/%.o,$(CTR_GBA_CENTRED_SRCS))
 $(CTR_GBA_CENTRED_OBJS): FULLCFLAGS += -DCTR_GBA_STAGE -include $(abspath compat/ctr_gba_centred.h)
 $(CTR_GBA_CENTRED_OBJS): compat/ctr_gba_centred.h $(ROOT)/include/gba/defines.h
@@ -195,6 +199,14 @@ $(CTR_GBA_CENTRED_OBJS): compat/ctr_gba_centred.h $(ROOT)/include/gba/defines.h
 # with its frame's rows below the GBA screen showing.
 # slot_machine.c, roulette.c: the Game Corner's machines, and easy_chat.c:
 # the Easy Chat screen (interviews, questionnaires), the same.
+# hall_of_fame.c, battle_factory_screen.c: the Hall of Fame and the Battle
+# Factory's rental and swap screens, the same. So were the rest of the game's
+# own screens the bottom screen does not show: the Battle Dome's tourney tree
+# (with two black columns), the Pyramid's bag, the Frontier Pass with its
+# records and the game's trainer card it opens, the Move Relearner, the
+# Pokeblock case and feeding, the berry tag, mail, the contest painting, the
+# diploma, Berry Crush, the Union Room's chat and battle, the wireless status
+# screen, and the save and clock screens before the title.
 # Which centred screen each of those is, for how its margins are filled.
 build/root/src/main_menu.o: FULLCFLAGS += -DCTR_CENTRED_MAIN_MENU
 build/root/src/naming_screen.o: FULLCFLAGS += -DCTR_CENTRED_NAMING

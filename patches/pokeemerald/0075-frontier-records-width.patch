@@ -1,0 +1,40 @@
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Frontier records width
+Applies after 0074-korean-frontier-speech.patch; apply with tools/bootstrap.py.
+
+The Battle Frontier's records windows and the Ranking Hall's are GBA windows
+over the wide field: their text is centred and right-aligned on the GBA's
+width, not DISPLAY_WIDTH (400 here), which put the title 80 pixels right and
+cut it at the window's edge.
+
+diff --git a/src/frontier_util.c b/src/frontier_util.c
+--- a/src/frontier_util.c
++++ b/src/frontier_util.c
+@@ -957,9 +957,18 @@
+         return FALSE;
+ }
+ 
++#ifdef PLATFORM_3DS
++// The records windows are GBA windows, the field around them is wide: their
++// text is laid out on the GBA's width, not the wide screen's (where the title
++// went 80 pixels right, out of the window).
++#define RECORDS_DISPLAY_WIDTH 240
++#else
++#define RECORDS_DISPLAY_WIDTH DISPLAY_WIDTH
++#endif
++
+ static void PrintAligned(const u8 *str, s32 y)
+ {
+-    s32 x = GetStringCenterAlignXOffset(FONT_NORMAL, str, DISPLAY_WIDTH - 16);
++    s32 x = GetStringCenterAlignXOffset(FONT_NORMAL, str, RECORDS_DISPLAY_WIDTH - 16);
+     y = (y * 8) + 1;
+     AddTextPrinterParameterized(gRecordsWindowId, FONT_NORMAL, str, x, y, TEXT_SKIP_DRAW, NULL);
+ }
+@@ -2349,7 +2358,7 @@
+     StringCopy(gStringVar1, sRecordsWindowChallengeTexts[hallFacilityId][0]);
+     StringExpandPlaceholders(gStringVar4, sRecordsWindowChallengeTexts[hallFacilityId][1]);
+     AddTextPrinterParameterized(gRecordsWindowId, FONT_NORMAL, gStringVar4, 0, 1, TEXT_SKIP_DRAW, NULL);
+-    x = GetStringRightAlignXOffset(FONT_NORMAL, sLevelModeText[lvlMode], DISPLAY_WIDTH - 32);
++    x = GetStringRightAlignXOffset(FONT_NORMAL, sLevelModeText[lvlMode], RECORDS_DISPLAY_WIDTH - 32);
+     AddTextPrinterParameterized(gRecordsWindowId, FONT_NORMAL, sLevelModeText[lvlMode], x, 1, TEXT_SKIP_DRAW, NULL);
+     if (hallFacilityId == RANKING_HALL_TOWER_LINK)
+     {

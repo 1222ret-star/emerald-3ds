@@ -1,0 +1,74 @@
+Emerald 3DS changes to pret/pokeemerald 76463dac15cad36aca5e2b3f6366abf9e53f814f: Korean facility trainer speech
+Applies after 0073-korean-frontier-banned-list.patch; apply with tools/bootstrap.py.
+
+Korean build only (GAME_LANGUAGE == LANGUAGE_KOREAN): the Battle Frontier's
+and the Battle Tents' trainers say the Korean ROM's own sentences, as that
+ROM's code has them, instead of six Easy Chat words joined in English order.
+tools/localize_korean.py writes them from the player's ROM to
+src/data/battle_frontier/korean_trainer_speech.h.
+
+diff --git a/src/battle_tower.c b/src/battle_tower.c
+--- a/src/battle_tower.c
++++ b/src/battle_tower.c
+@@ -1916,8 +1916,61 @@
+     }
+ }
+ 
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++// The Korean ROM's sentences for its facility trainers (before the battle,
++// after winning it, after losing it: three a trainer), which its own code
++// shows instead of the Easy Chat words. Read from the player's ROM by
++// tools/localize_korean.py.
++#include "data/battle_frontier/korean_trainer_speech.h"
++
++// The sentence for a speech of the facility's trainer table, or NULL (an
++// e-Reader trainer, a record-mixed one: their words are the player's).
++static const u8 *KoreanTrainerSpeech(const u16 *words)
++{
++    static const struct {
++        const struct BattleFrontierTrainer *trainers;
++        const u8 *const *speech;
++        u16 count;
++    } sTables[] = {
++        {gBattleFrontierTrainers, sKoreanFrontierSpeech, ARRAY_COUNT(sKoreanFrontierSpeech) / 3},
++        {gSlateportBattleTentTrainers, sKoreanSlateportTentSpeech, ARRAY_COUNT(sKoreanSlateportTentSpeech) / 3},
++        {gVerdanturfBattleTentTrainers, sKoreanVerdanturfTentSpeech, ARRAY_COUNT(sKoreanVerdanturfTentSpeech) / 3},
++        {gFallarborBattleTentTrainers, sKoreanFallarborTentSpeech, ARRAY_COUNT(sKoreanFallarborTentSpeech) / 3},
++    };
++    u32 i;
++
++    for (i = 0; i < ARRAY_COUNT(sTables); i++)
++    {
++        const u8 *base = (const u8 *)sTables[i].trainers;
++        u32 offset = (const u8 *)words - base, trainer, field;
++
++        if ((const u8 *)words < base || offset >= sTables[i].count * sizeof(struct BattleFrontierTrainer))
++            continue;
++        trainer = offset / sizeof(struct BattleFrontierTrainer);
++        field = offset % sizeof(struct BattleFrontierTrainer);
++        if (field == offsetof(struct BattleFrontierTrainer, speechBefore))
++            return sTables[i].speech[trainer * 3];
++        if (field == offsetof(struct BattleFrontierTrainer, speechWin))
++            return sTables[i].speech[trainer * 3 + 1];
++        if (field == offsetof(struct BattleFrontierTrainer, speechLose))
++            return sTables[i].speech[trainer * 3 + 2];
++        return NULL;
++    }
++    return NULL;
++}
++#endif
++
+ void FrontierSpeechToString(const u16 *words)
+ {
++#if GAME_LANGUAGE == LANGUAGE_KOREAN
++    const u8 *sentence = KoreanTrainerSpeech(words);
++
++    if (sentence != NULL)
++    {
++        StringCopy(gStringVar4, sentence);
++        return;
++    }
++#endif
+     ConvertEasyChatWordsToString(gStringVar4, words, 3, 2);
+     if (GetStringWidth(FONT_NORMAL, gStringVar4, -1) > 204u)
+     {
